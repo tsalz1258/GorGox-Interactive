@@ -1,0 +1,278 @@
+GORGOX INTERACTIVE - PROJECT STRUCTURE
+=====================================
+
+Gorgox_Interactive/
+│
+├── 📄 Configuration & Dependencies
+│   ├── Cargo.toml                          Rust project configuration & dependencies
+│   ├── Cargo.lock                          Locked dependency versions (auto-generated)
+│   └── .gitignore                          Git ignore rules
+│
+├── 📚 Documentation (Read These!)
+│   ├── README.md                           📖 Main documentation - START HERE
+│   ├── GETTING_STARTED.md                  🚀 Quick start guide (5 minutes)
+│   ├── USAGE_GUIDE.md                      📚 Detailed usage instructions
+│   ├── SETUP_WINDOWS.md                    🪟 Windows-specific setup
+│   ├── QUICK_REFERENCE.md                  ⚡ Handy reference card
+│   ├── PROJECT_SUMMARY.md                  📋 This project overview
+│   └── DIRECTORY_STRUCTURE.txt             📁 This file
+│
+├── 🦀 Rust Source Code (src/)
+│   ├── main.rs                             Entry point - starts server
+│   ├── server.rs                           WebSocket server & HTTP routes
+│   ├── models.rs                           Data structures & message types
+│   ├── db.rs                               SQLite database operations
+│   ├── combat.rs                           Combat system & initiative
+│   └── game_state.rs                       Game state management
+│
+├── 🌐 Web Frontend (static/)
+│   ├── index.html                          Main web interface
+│   ├── style.css                           Beautiful styling
+│   ├── app.js                              Game logic & WebSocket client
+│   └── maps/                               📂 Uploaded map images (auto-created)
+│       └── .gitkeep                        Keeps directory in git
+│
+├── 📊 Sample Data (examples/)
+│   ├── sample_characters.json              4 ready-to-use D&D characters
+│   │                                       - Thorin Ironshield (Fighter)
+│   │                                       - Elara Moonwhisper (Wizard)
+│   │                                       - Grimjaw the Fierce (Barbarian)
+│   │                                       - Seraphina Lightbringer (Cleric)
+│   │
+│   └── sample_enemies.json                 6 enemies from CR 0.25 to CR 10
+│                                           - Goblin, Orc, Skeleton
+│                                           - Ogre, Troll, Young Red Dragon
+│
+├── 🛠️ Helper Scripts
+│   ├── start.bat                           🎯 START HERE - Launches server (Windows)
+│   ├── install_rust.bat                    Helps install Rust
+│   └── populate_sample_data.py             Loads sample data into database
+│
+├── 📦 Build Output (target/) - Auto-generated
+│   ├── debug/                              Debug builds
+│   └── release/                            Optimized builds
+│       └── gorgox_interactive.exe          ⭐ Compiled executable (Windows)
+│
+└── 💾 Database (auto-created on first run)
+    └── gorgox.db                           SQLite database with:
+                                            - Characters table
+                                            - Enemies table
+                                            - Maps table
+
+
+FILE COUNT SUMMARY
+==================
+📄 Rust Source Files:         6 files (~2,500 lines)
+🌐 Web Frontend Files:        3 files (~1,650 lines)
+📚 Documentation Files:       7 files (~2,000 lines)
+📊 Sample Data Files:         2 files (10 entities)
+🛠️ Helper Scripts:            3 files
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 Total Project Files:       21+ files
+
+QUICK START PATHS
+=================
+1. First Time Setup:
+   → install_rust.bat                       Install Rust
+   → cargo build --release                   Build project
+   
+2. Run Server:
+   → start.bat                              Launch server
+   OR
+   → cargo run --release                     Build & run
+   
+3. Access Interface:
+   → Open: http://localhost:3000
+   
+4. Load Sample Data:
+   → python populate_sample_data.py
+
+
+KEY DIRECTORIES TO KNOW
+========================
+📁 src/           ← Rust backend code (don't need to modify)
+📁 static/        ← Web interface (HTML/CSS/JS)
+📁 examples/      ← Sample characters & enemies
+📁 static/maps/   ← Your uploaded battle maps go here
+💾 gorgox.db      ← Database file (created automatically)
+
+
+WHAT EACH FILE DOES
+====================
+
+DOCUMENTATION
+-------------
+README.md              Full project documentation, features, installation
+GETTING_STARTED.md     Step-by-step guide for first-time users
+USAGE_GUIDE.md         Detailed instructions for all features
+SETUP_WINDOWS.md       Windows-specific setup and troubleshooting
+QUICK_REFERENCE.md     Command and control reference card
+PROJECT_SUMMARY.md     Technical overview and architecture
+DIRECTORY_STRUCTURE    This file - project layout
+
+RUST BACKEND (src/)
+-------------------
+main.rs                Initializes database, game state, and server
+server.rs              Handles WebSocket connections, HTTP routes, messages
+models.rs              Defines Character, Enemy, Token, Combat, Messages
+db.rs                  SQLite operations (save/load characters, enemies, maps)
+combat.rs              Initiative tracking, turn management, damage/healing
+game_state.rs          Tracks players, tokens, combat state in memory
+
+WEB FRONTEND (static/)
+----------------------
+index.html             User interface with modals, panels, controls
+style.css              Modern styling with gradients and animations
+app.js                 WebSocket client, canvas rendering, UI logic
+
+SAMPLE DATA (examples/)
+-----------------------
+sample_characters.json     4 level-5 D&D characters (various classes)
+sample_enemies.json        6 monsters (CR 0.25 to CR 10)
+
+HELPER SCRIPTS
+--------------
+start.bat                  Launches server with nice formatting (Windows)
+install_rust.bat           Opens Rust installer page
+populate_sample_data.py    Imports sample data into database
+
+
+WORKFLOW DIAGRAM
+================
+
+1. START HERE
+   ↓
+   install_rust.bat (first time only)
+   ↓
+   start.bat
+   ↓
+   Server runs on http://localhost:3000
+   ↓
+   Open browser → Connect as DM
+   ↓
+   
+2. PREPARE GAME
+   ↓
+   Upload maps (static/maps/)
+   ↓
+   Add enemies (examples/sample_enemies.json)
+   ↓
+   Add characters (examples/sample_characters.json)
+   ↓
+   
+3. RUN SESSION
+   ↓
+   Place tokens on map
+   ↓
+   Start combat
+   ↓
+   Initiative rolls automatically
+   ↓
+   Manage turns, damage, healing
+   ↓
+   End combat
+
+
+NETWORK ARCHITECTURE
+====================
+
+    PLAYER BROWSER          PLAYER BROWSER          PLAYER BROWSER
+         ↓                       ↓                       ↓
+         └───────────────WebSocket───────────────────────┘
+                                 ↓
+                          RUST SERVER (main.rs)
+                                 ↓
+                    ┌────────────┴────────────┐
+                    ↓                         ↓
+              GAME STATE                  DATABASE
+            (game_state.rs)              (gorgox.db)
+                    ↓                         ↓
+         ┌──────────┼──────────┐      ┌──────┴──────┐
+         ↓          ↓          ↓      ↓      ↓      ↓
+      COMBAT     TOKENS     PLAYERS  CHARS ENEMIES MAPS
+    (combat.rs)
+
+
+SIZE BREAKDOWN
+==============
+Rust Code:          ~2,500 lines
+JavaScript:           ~600 lines
+HTML:                 ~550 lines
+CSS:                  ~500 lines
+Documentation:      ~2,000 lines
+─────────────────────────────────
+Total Lines:        ~6,150 lines
+
+Binary Size:        ~5-10 MB (release build)
+Memory Usage:       ~20-50 MB (runtime)
+Database Size:      ~100 KB (with sample data)
+
+
+IMPORTANT FILES FOR DAILY USE
+==============================
+✅ start.bat                    ← Double-click to start
+✅ GETTING_STARTED.md           ← Read first
+✅ QUICK_REFERENCE.md           ← Keep handy during games
+✅ examples/sample_*.json       ← Import these
+✅ http://localhost:3000        ← Open in browser
+
+
+CUSTOMIZATION POINTS
+====================
+🎨 static/style.css             Change colors, fonts, layout
+🗺️ static/maps/                 Add your battle map images
+📊 examples/*.json              Add your characters/enemies
+⚙️ src/server.rs (line ~90)    Change port from 3000
+
+
+BACKUP RECOMMENDATIONS
+======================
+Important files to backup:
+  • gorgox.db                   Your characters, enemies, maps
+  • static/maps/                Your uploaded map images
+  • examples/*.json             Your custom data (if added)
+
+
+VERSION CONTROL
+===============
+Tracked in Git:
+  ✅ All source code (src/)
+  ✅ All frontend (static/*.html, *.css, *.js)
+  ✅ Documentation
+  ✅ Sample data
+  ✅ Configuration files
+
+Not tracked (auto-generated):
+  ❌ target/                    Build output
+  ❌ Cargo.lock                 Dependency lock
+  ❌ gorgox.db                  Your database
+  ❌ static/maps/*              Your uploaded maps
+
+
+═══════════════════════════════════════════════════════════════
+                    READY TO START?
+═══════════════════════════════════════════════════════════════
+
+1. If Rust not installed:    install_rust.bat
+2. Build once:                cargo build --release
+3. Launch server:             start.bat
+4. Open browser:              http://localhost:3000
+5. Load sample data:          python populate_sample_data.py
+
+═══════════════════════════════════════════════════════════════
+
+For help, see: GETTING_STARTED.md
+For reference: QUICK_REFERENCE.md
+For details:   USAGE_GUIDE.md
+
+Happy adventuring! 🎲⚔️🐉
+
+
+
+
+
+
+
+
+
+
