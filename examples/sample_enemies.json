@@ -1,0 +1,114 @@
+[
+  {
+    "name": "Goblin",
+    "creature_type": "Humanoid (Goblinoid)",
+    "challenge_rating": 0.25,
+    "max_hp": 7,
+    "armor_class": 15,
+    "initiative_bonus": 2,
+    "strength": 8,
+    "dexterity": 14,
+    "constitution": 10,
+    "intelligence": 10,
+    "wisdom": 8,
+    "charisma": 8,
+    "speed": 30,
+    "actions": "{\"scimitar\": {\"attack_bonus\": 4, \"damage\": \"1d6+2 slashing\"}, \"shortbow\": {\"attack_bonus\": 4, \"damage\": \"1d6+2 piercing\", \"range\": \"80/320\"}}",
+    "description": "Small, green-skinned humanoids that are cowardly but dangerous in numbers."
+  },
+  {
+    "name": "Orc",
+    "creature_type": "Humanoid (Orc)",
+    "challenge_rating": 0.5,
+    "max_hp": 15,
+    "armor_class": 13,
+    "initiative_bonus": 1,
+    "strength": 16,
+    "dexterity": 12,
+    "constitution": 16,
+    "intelligence": 7,
+    "wisdom": 11,
+    "charisma": 10,
+    "speed": 30,
+    "actions": "{\"greataxe\": {\"attack_bonus\": 5, \"damage\": \"1d12+3 slashing\"}, \"javelin\": {\"attack_bonus\": 5, \"damage\": \"1d6+3 piercing\", \"range\": \"30/120\"}}",
+    "description": "Savage raiders and pillagers with barbaric culture and a lust for battle."
+  },
+  {
+    "name": "Skeleton",
+    "creature_type": "Undead",
+    "challenge_rating": 0.25,
+    "max_hp": 13,
+    "armor_class": 13,
+    "initiative_bonus": 2,
+    "strength": 10,
+    "dexterity": 14,
+    "constitution": 15,
+    "intelligence": 6,
+    "wisdom": 8,
+    "charisma": 5,
+    "speed": 30,
+    "actions": "{\"shortsword\": {\"attack_bonus\": 4, \"damage\": \"1d6+2 piercing\"}, \"shortbow\": {\"attack_bonus\": 4, \"damage\": \"1d6+2 piercing\", \"range\": \"80/320\"}}",
+    "description": "Undead warriors animated by dark magic, often found guarding ancient tombs."
+  },
+  {
+    "name": "Ogre",
+    "creature_type": "Giant",
+    "challenge_rating": 2.0,
+    "max_hp": 59,
+    "armor_class": 11,
+    "initiative_bonus": -1,
+    "strength": 19,
+    "dexterity": 8,
+    "constitution": 16,
+    "intelligence": 5,
+    "wisdom": 7,
+    "charisma": 7,
+    "speed": 40,
+    "actions": "{\"greatclub\": {\"attack_bonus\": 6, \"damage\": \"2d8+4 bludgeoning\"}, \"javelin\": {\"attack_bonus\": 6, \"damage\": \"2d6+4 piercing\", \"range\": \"30/120\"}}",
+    "description": "Large, brutish humanoids with insatiable appetites and limited intelligence."
+  },
+  {
+    "name": "Troll",
+    "creature_type": "Giant",
+    "challenge_rating": 5.0,
+    "max_hp": 84,
+    "armor_class": 15,
+    "initiative_bonus": 1,
+    "strength": 18,
+    "dexterity": 13,
+    "constitution": 20,
+    "intelligence": 7,
+    "wisdom": 9,
+    "charisma": 7,
+    "speed": 30,
+    "actions": "{\"multiattack\": \"3 attacks: bite and 2 claws\", \"bite\": {\"attack_bonus\": 7, \"damage\": \"1d6+4 piercing\"}, \"claw\": {\"attack_bonus\": 7, \"damage\": \"2d6+4 slashing\"}}",
+    "description": "Regenerating monstrosities with voracious appetites. Vulnerable to fire and acid."
+  },
+  {
+    "name": "Young Red Dragon",
+    "creature_type": "Dragon",
+    "challenge_rating": 10.0,
+    "max_hp": 178,
+    "armor_class": 18,
+    "initiative_bonus": 0,
+    "strength": 23,
+    "dexterity": 10,
+    "constitution": 21,
+    "intelligence": 14,
+    "wisdom": 11,
+    "charisma": 19,
+    "speed": 40,
+    "actions": "{\"multiattack\": \"3 attacks: bite and 2 claws\", \"bite\": {\"attack_bonus\": 10, \"damage\": \"2d10+6 piercing plus 1d6 fire\"}, \"claw\": {\"attack_bonus\": 10, \"damage\": \"2d6+6 slashing\"}, \"fire_breath\": {\"recharge\": \"5-6\", \"damage\": \"16d6 fire\", \"save\": \"DC 17 DEX\"}}",
+    "description": "A powerful young dragon with scales like rubies and breath of searing flame."
+  }
+]
+
+
+
+
+
+
+
+
+
+

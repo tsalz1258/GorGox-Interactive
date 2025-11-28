@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gorgox Interactive - D&D Battle Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Connection Modal -->
+        <div id="connectionModal" class="modal active">
+            <div class="modal-content">
+                <h2>🎲 Connect to Game</h2>
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; font-size: 16px; font-weight: bold; color: #fff;">⚔️ Campaign Style:</label>
+                    <select id="styleSelector" style="width: 100%; padding: 10px; font-size: 16px; border: 2px solid #4CAF50; border-radius: 5px; background: #2a2a2a; color: white; cursor: pointer;">
+                        <option value="dnd">🐉 Dungeons & Dragons</option>
+                        <option value="starwars">⭐ Star Wars</option>
+                    </select>
+                </div>
+                <input type="text" id="playerName" placeholder="Your Name">
+                <label>
+                    <input type="checkbox" id="isDM"> I am the Dungeon Master / Game Master
+                </label>
+                <button onclick="connect()">Connect</button>
+            </div>
+        </div>
+
+        <!-- Main Interface -->
+        <div id="mainInterface" class="hidden">
+            <!-- Header -->
+    <header>
+        <h1>🎲 Gorgox Interactive <span style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v13.2 DUAL DB</span></h1>
+        <button onclick="showSpellTooltip('Fireball', {clientX: 300, clientY: 300})" style="background: #aa88ff; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🧪 Test Tooltip</button>
+        <button onclick="populateCombatActionPanel()" style="background: #ff4444; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🔧 MANUAL POPULATE</button>
+        <button onclick="console.log('CHARACTERS:', characters); console.log('MY CHARACTER ID:', myCharacterId);" style="background: #00ff00; color: black; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🐛 DEBUG DATA</button>
+                <div id="currentTurnDisplay" style="font-size: 18px; font-weight: bold; color: #ffaa44; padding: 10px 20px; background: rgba(255,170,68,0.2); border-radius: 10px; display: none;">
+                    Current Turn: <span id="currentTurnName">-</span>
+                </div>
+                <div style="display: flex; gap: 15px; align-items: center;">
+                    <div id="playerInfo"></div>
+                    <div id="connectionStatus">Disconnected</div>
+                </div>
+            </header>
+
+            <!-- Main Content -->
+            <div class="main-container">
+                <!-- Left Sidebar - Controls -->
+                <aside class="sidebar left">
+                    <div class="panel">
+                        <h3>Controls</h3>
+                        <div id="dmControls" class="hidden">
+                            <button onclick="showMapUpload()">📍 Upload Map</button>
+                            <button onclick="showMapSettings()">⚙️ Map Settings</button>
+                            <button onclick="showEnemyManager()">👹 Enemy Database</button>
+                            <button onclick="showCharacterManager()">👤 Characters</button>
+                            <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
+                            <button onclick="showPlaceCharacter()">🎭 Place Character</button>
+                            <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
+                            <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
+                            <button onclick="toggleCombat()">⚔️ Toggle Combat</button>
+                        </div>
+                        <div id="playerControls">
+                            <button onclick="showCharacterSelect()">Select Character</button>
+                            <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
+                            <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
+                            <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
+                        </div>
+                    </div>
+
+                    <!-- Combat Tracker -->
+                    <div class="panel" id="combatPanel">
+                        <h3>⚔️ Combat Tracker</h3>
+                        <div id="combatStatus">No active combat</div>
+                        <div id="initiativeList"></div>
+                        <div id="dmCombatControls" class="hidden">
+                            <button onclick="nextTurn()">Next Turn</button>
+                            <button onclick="endCombat()">End Combat</button>
+                        </div>
+                        <div id="playerCombatControls" class="hidden">
+                            <button onclick="endMyTurn()" style="width: 100%; background: #44ff44; color: #000; font-weight: bold;">End My Turn</button>
+                        </div>
+                        
+                        <!-- Combat Action Panel - FORCE VISIBLE FOR TESTING -->
+                        <div id="combatActionPanel" style="margin-top: 20px; background: linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%); border: 2px solid #aa88ff; border-radius: 10px; padding: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); display: block !important;">
+                            <div style="text-align: center; font-size: 18px; font-weight: bold; color: #ffaa44; margin-bottom: 15px; border-bottom: 2px solid #aa88ff; padding-bottom: 10px;">
+                                ⚔️ COMBAT OPTIONS ⚔️
+                            </div>
+                            
+            <!-- Spell Slots -->
+            <div id="spellSlotsSection" class="hidden" style="margin-bottom: 15px;">
+                <div style="font-weight: bold; color: #aa88ff; margin-bottom: 8px; font-size: 14px;">🔮 Spell Slots:</div>
+                <div id="spellSlotsList" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 5px; margin-bottom: 10px;"></div>
+                <button onclick="restoreAllSpellSlots()" style="width: 100%; background: linear-gradient(135deg, #44ff44, #22aa22); color: white; border: none; padding: 6px; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">🌙 Long Rest</button>
+            </div>
+                            
+                            <!-- Quick Actions -->
+                            <div style="margin-bottom: 15px;">
+                                <div style="font-weight: bold; color: #44ff44; margin-bottom: 8px; font-size: 14px;">⚡ Actions:</div>
+                                <div id="quickActionsList" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;"></div>
+                            </div>
+                            
+                            <!-- Attacks -->
+                            <div id="attacksSection" class="hidden" style="margin-bottom: 15px;">
+                                <div style="font-weight: bold; color: #ff4444; margin-bottom: 8px; font-size: 14px;">⚔️ Attacks:</div>
+                                <div id="attacksList" style="display: flex; flex-direction: column; gap: 5px;"></div>
+                            </div>
+                            
+                            <!-- Bonus Actions -->
+                            <div id="bonusActionsSection" class="hidden" style="margin-bottom: 15px;">
+                                <div style="font-weight: bold; color: #ffaa44; margin-bottom: 8px; font-size: 14px;">⭐ Bonus Actions:</div>
+                                <div id="bonusActionsList" style="display: flex; flex-direction: column; gap: 5px;"></div>
+                            </div>
+                            
+                            <!-- Movement Info -->
+                            <div style="padding: 10px; background: rgba(68,255,68,0.1); border-left: 3px solid #44ff44; border-radius: 3px; font-size: 12px;">
+                                <div style="font-weight: bold; color: #44ff44; margin-bottom: 3px;">🏃 Movement:</div>
+                                <div id="movementInfo" style="color: #aaa;">Green squares show where you can move</div>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+
+                <!-- Center - Map View -->
+                <main class="map-container">
+                    <canvas id="mapCanvas" width="1200" height="800"></canvas>
+                    <div id="mapControls">
+                        <button onclick="zoomIn()">🔍+</button>
+                        <button onclick="zoomOut()">🔍-</button>
+                        <button onclick="resetZoom()">Reset</button>
+                    </div>
+                </main>
+
+                <!-- Right Sidebar - Info -->
+                <aside class="sidebar right">
+                    <!-- Token Info -->
+                    <div class="panel">
+                        <h3>Selected Token</h3>
+                        <div id="tokenInfo">No token selected</div>
+                        <div id="tokenActions" class="hidden">
+                            <input type="number" id="damageAmount" placeholder="Damage" min="0">
+                            <button onclick="dealDamage()">Deal Damage</button>
+                            <input type="number" id="healAmount" placeholder="Healing" min="0">
+                            <button onclick="healTarget()">Heal</button>
+                        </div>
+                    </div>
+
+                    <!-- Rolls Log -->
+                    <div class="panel">
+                        <h3>🎲 Rolls Log</h3>
+                        <div id="rollsLog" style="background: rgba(0, 0, 0, 0.3); padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; font-size: 12px; min-height: 60px;">
+                            <div style="opacity: 0.5; font-size: 11px; text-align: center; padding: 10px;">Initiative rolls will appear here</div>
+                        </div>
+                    </div>
+
+                    <!-- Combat Log -->
+                    <div class="panel">
+                        <h3>📜 Combat Log</h3>
+                        <div id="combatLog"></div>
+                    </div>
+
+                    <!-- Players -->
+                    <div class="panel">
+                        <h3>👥 Connected Players</h3>
+                        <div id="playerList"></div>
+                    </div>
+                </aside>
+            </div>
+        </div>
+
+        <!-- Map Upload Modal -->
+        <div id="mapUploadModal" class="modal">
+            <div class="modal-content">
+                <h2>Maps</h2>
+                <div style="margin-bottom: 20px;">
+                    <h3>Saved Maps</h3>
+                    <div id="savedMapsList" style="max-height: 300px; overflow-y: auto; margin-bottom: 15px;"></div>
+                </div>
+                <div style="border-top: 1px solid #444; padding-top: 15px; margin-top: 15px;">
+                    <h3>Upload New Map</h3>
+                    <input type="text" id="mapName" placeholder="Map Name">
+                    <input type="file" id="mapFile" accept="image/*">
+                    <canvas id="previewCanvas" width="400" height="300"></canvas>
+                    <div class="modal-actions">
+                        <button onclick="uploadMap()">Upload</button>
+                        <button onclick="closeModal('mapUploadModal')">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Enemy Manager Modal -->
+        <div id="enemyManagerModal" class="modal">
+            <div class="modal-content large" style="display: flex; flex-direction: column; padding: 0; max-height: 90vh;">
+                <div class="modal-header" style="position: sticky; top: 0; background: #1a1a1a; z-index: 1001; padding: 15px 20px; border-bottom: 2px solid #333; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                    <h2 style="margin: 0; color: #4a9eff;">Enemy Database</h2>
+                    <button onclick="closeModal('enemyManagerModal')" style="background: #ff4444; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-size: 20px; font-weight: bold; line-height: 1; min-width: 35px; height: 35px;">✕</button>
+                </div>
+                <div style="padding: 15px 20px; flex-shrink: 0; border-bottom: 1px solid #333;">
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                        <input type="text" id="npcSearchInput" placeholder="🔍 Search enemies..." oninput="renderEnemyList()" style="flex: 1; min-width: 250px; padding: 10px 15px; background: #2a2a2a; border: 2px solid #444; color: white; border-radius: 5px; font-size: 14px;">
+                        <button onclick="showCreateEnemy()" style="padding: 10px 20px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; white-space: nowrap;">Create New Enemy</button>
+                        <button onclick="showImportEnemy()" style="padding: 10px 20px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; white-space: nowrap;">Import from JSON</button>
+                    </div>
+                </div>
+                <div id="enemyList" style="flex: 1; overflow-y: auto; padding: 15px 20px; min-height: 0;"></div>
+            </div>
+        </div>
+
+        <!-- Create Enemy Modal -->
+        <div id="createEnemyModal" class="modal">
+            <div class="modal-content">
+                <h2>Create Enemy</h2>
+                <form id="enemyForm">
+                    <input type="text" id="enemyName" placeholder="Name" required>
+                    <input type="text" id="enemyType" placeholder="Type (e.g., Humanoid)" required>
+                    <input type="number" id="enemyCR" placeholder="Challenge Rating" step="0.5" required>
+                    <input type="number" id="enemyHP" placeholder="Max HP" required>
+                    <input type="number" id="enemyAC" placeholder="Armor Class" required>
+                    <input type="number" id="enemyInitBonus" placeholder="Initiative Bonus" value="0">
+                    
+                    <h4>Ability Scores</h4>
+                    <div class="ability-scores">
+                        <input type="number" id="enemyStr" placeholder="STR" value="10">
+                        <input type="number" id="enemyDex" placeholder="DEX" value="10">
+                        <input type="number" id="enemyCon" placeholder="CON" value="10">
+                        <input type="number" id="enemyInt" placeholder="INT" value="10">
+                        <input type="number" id="enemyWis" placeholder="WIS" value="10">
+                        <input type="number" id="enemyCha" placeholder="CHA" value="10">
+                    </div>
+                    
+                    <input type="number" id="enemySpeed" placeholder="Speed (ft)" value="30">
+                    <textarea id="enemyActions" placeholder="Actions (JSON format)"></textarea>
+                    <textarea id="enemyDescription" placeholder="Description"></textarea>
+                    
+                    <label style="margin-top: 10px;">Enemy Portrait (Optional):</label>
+                    <input type="file" id="enemyPortrait" accept="image/*">
+                    
+                    <div class="modal-actions">
+                        <button type="button" onclick="createEnemy()">Create</button>
+                        <button type="button" onclick="closeModal('createEnemyModal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Character Manager Modal -->
+        <div id="characterManagerModal" class="modal">
+            <div class="modal-content large">
+                <h2>Character Manager</h2>
+                <button onclick="showCreateCharacter()">Create Character</button>
+                <button onclick="showImportCharacter()">Import from JSON</button>
+                <div id="characterList"></div>
+                <button onclick="closeModal('characterManagerModal')">Close</button>
+            </div>
+        </div>
+
+        <!-- Import Enemy Modal -->
+        <div id="importEnemyModal" class="modal">
+            <div class="modal-content">
+                <h2>Import Enemy</h2>
+                <p>Paste enemy JSON data or create a simple template:</p>
+                <textarea id="enemyJson" rows="10" placeholder='{"name": "...", "creature_type": "...", "challenge_rating": 1, ...}'></textarea>
+                <label style="margin-top: 10px; display: block;">Enemy Portrait (Optional):</label>
+                <input type="file" id="importEnemyPortrait" accept="image/*">
+                <div class="modal-actions">
+                    <button onclick="importEnemy()">Import</button>
+                    <button onclick="closeModal('importEnemyModal')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Character Modal -->
+        <div id="createCharacterModal" class="modal">
+            <div class="modal-content">
+                <h2>Create Character</h2>
+                <form id="characterForm">
+                    <input type="text" id="charName" placeholder="Character Name" required>
+                    <input type="text" id="charPlayer" placeholder="Player Name" required>
+                    <input type="text" id="charClass" placeholder="Class" required>
+                    <input type="number" id="charLevel" placeholder="Level" value="1" required>
+                    <input type="number" id="charMaxHP" placeholder="Max HP" required>
+                    <input type="number" id="charAC" placeholder="Armor Class" required>
+                    <input type="number" id="charInitBonus" placeholder="Initiative Bonus" value="0">
+                    
+                    <h4>Ability Scores</h4>
+                    <div class="ability-scores">
+                        <input type="number" id="charStr" placeholder="STR" value="10">
+                        <input type="number" id="charDex" placeholder="DEX" value="10">
+                        <input type="number" id="charCon" placeholder="CON" value="10">
+                        <input type="number" id="charInt" placeholder="INT" value="10">
+                        <input type="number" id="charWis" placeholder="WIS" value="10">
+                        <input type="number" id="charCha" placeholder="CHA" value="10">
+                    </div>
+                    
+                    <input type="number" id="charSpeed" placeholder="Speed (ft)" value="30">
+                    <input type="number" id="charProfBonus" placeholder="Proficiency Bonus" value="2">
+                    
+                    <label style="margin-top: 10px;">Character Portrait (Optional):</label>
+                    <input type="file" id="charPortrait" accept="image/*">
+                    
+                    <div class="modal-actions">
+                        <button type="button" onclick="createCharacter()">Create</button>
+                        <button type="button" onclick="closeModal('createCharacterModal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Import Character Modal -->
+        <div id="importCharacterModal" class="modal">
+            <div class="modal-content">
+                <h2>Import Character</h2>
+                <p>Paste your character JSON data:</p>
+                <textarea id="characterJson" rows="10" placeholder='{"name": "...", "class": "...", ...}'></textarea>
+                <label style="margin-top: 10px; display: block;">Character Portrait (Optional):</label>
+                <input type="file" id="characterPortrait" accept="image/*" style="margin-bottom: 10px;">
+                <div id="portraitPreview" style="max-width: 100px; max-height: 100px; margin: 10px 0; display: none;">
+                    <img id="portraitPreviewImg" style="max-width: 100%; max-height: 100%; border-radius: 5px; border: 2px solid #4a9eff;">
+                </div>
+                <div class="modal-actions">
+                    <button onclick="importCharacter()">Import</button>
+                    <button onclick="closeModal('importCharacterModal')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Save/Load Game Modal -->
+        <div id="saveLoadModal" class="modal">
+            <div class="modal-content">
+                <h2>💾 Save/Load Game</h2>
+                
+                <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #444;">
+                    <h3 style="color: #4a9eff; margin-bottom: 15px;">💾 Save Game</h3>
+                    <p style="margin-bottom: 10px; opacity: 0.8;">Save the current game state including:</p>
+                    <ul style="margin-left: 20px; margin-bottom: 15px; opacity: 0.8;">
+                        <li>Current map and background</li>
+                        <li>All tokens and their positions</li>
+                        <li>HP values for all characters and enemies</li>
+                        <li>Combat state and turn order</li>
+                        <li>Canvas zoom and pan settings</li>
+                    </ul>
+                    <input type="text" id="saveFileName" placeholder="Save file name" style="width: 100%; margin-bottom: 10px;">
+                    <button onclick="saveGameState()" style="width: 100%; background: #4a9eff;">💾 Save Game</button>
+                </div>
+                
+                <div style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 2px solid #444;">
+                    <h3 style="color: #4a9eff; margin-bottom: 15px;">📂 Load Game</h3>
+                    <p style="margin-bottom: 10px; opacity: 0.8;">Load a previously saved game state:</p>
+                    <div id="savedStatesList" style="margin-bottom: 15px; min-height: 100px;"></div>
+                    <div style="border-top: 1px solid #444; padding-top: 15px; margin-top: 15px;">
+                        <p style="margin-bottom: 10px; opacity: 0.8; font-size: 12px;">Or load from file:</p>
+                        <input type="file" id="loadGameFile" accept=".json" style="width: 100%; margin-bottom: 10px;">
+                        <button onclick="loadGameState()" style="width: 100%; background: #4a9eff;">📂 Load from File</button>
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <h3 style="color: #ff4444; margin-bottom: 15px;">🗑️ Clear Map</h3>
+                    <p style="margin-bottom: 10px; opacity: 0.8;">Remove the current map and all tokens:</p>
+                    <button onclick="clearCurrentMap()" style="width: 100%; background: #ff4444;">🗑️ Clear Current Map</button>
+                </div>
+                
+                <div class="modal-actions">
+                    <button onclick="closeModal('saveLoadModal')">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map Settings Modal -->
+        <div id="mapSettingsModal" class="modal">
+            <div class="modal-content">
+                <h2>Map Settings</h2>
+                <p>Configure grid size and map dimensions</p>
+                <label>Grid Size (pixels per square):</label>
+                <input type="number" id="gridSizeInput" placeholder="50" value="50" min="20" max="200">
+                <p style="font-size: 11px; opacity: 0.7; margin-top: 5px;">Standard D&D: 50px = 5 feet</p>
+                
+                <label style="margin-top: 15px;">Map Width (pixels):</label>
+                <input type="number" id="mapWidthInput" placeholder="1200" value="1200" min="400" max="3000">
+                
+                <label style="margin-top: 10px;">Map Height (pixels):</label>
+                <input type="number" id="mapHeightInput" placeholder="800" value="800" min="400" max="3000">
+                
+                <div class="modal-actions">
+                    <button onclick="applyMapSettings()">Apply</button>
+                    <button onclick="closeModal('mapSettingsModal')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Place Character Modal -->
+        <div id="placeCharacterModal" class="modal">
+            <div class="modal-content">
+                <h2>Place Character on Map</h2>
+                <p>Select a character to place as a token:</p>
+                <div id="placeCharacterList"></div>
+                <div class="modal-actions">
+                    <button onclick="closeModal('placeCharacterModal')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Character Sheet Modal -->
+        <div id="characterSheetModal" class="modal">
+            <div class="modal-content large">
+                <h2 id="sheetCharacterName">Character Sheet</h2>
+                <div id="characterSheetContent" style="max-height: 60vh; overflow-y: auto;"></div>
+                <div class="modal-actions" style="gap: 10px;">
+                    <button id="selectCharacterBtn" class="hidden" onclick="selectFromSheet()" style="background: #44ff44; color: #000; font-weight: bold;">✅ Select This Character</button>
+                    <button id="editCharacterBtn" class="hidden" onclick="handleEditCharacterBtnClick()" style="background: #ffaa44; color: #000; font-weight: bold;">✏️ Edit</button>
+                    <button id="cancelEditCharacterBtn" class="hidden" onclick="cancelCharacterEditMode()" style="background: #555; color: white;">Cancel</button>
+                    <button onclick="closeModal('characterSheetModal')">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Initiative Prompt Modal -->
+        <div id="initiativePromptModal" class="modal">
+            <div class="modal-content">
+                <h2>🎲 Roll Initiative</h2>
+                <p id="initiativePromptText" style="line-height: 1.5; margin-bottom: 10px;"></p>
+                <div style="display: grid; gap: 10px;">
+                    <label style="font-size: 12px; opacity: 0.8;">
+                        Enter your d20 roll:
+                        <input type="number" id="initiativeRollInput" min="1" max="20" oninput="updateInitiativeTotalPreview()" onkeydown="if(event.key==='Enter'){submitInitiativePrompt();}" style="margin-top: 6px; width: 100%; padding: 8px; border-radius: 5px; background: #2a2a2a; color: white; border: 1px solid #444;">
+                    </label>
+                    <div id="initiativeTotalPreview" style="font-size: 13px; opacity: 0.8;"></div>
+                </div>
+                <div class="modal-actions" style="gap: 10px; margin-top: 15px;">
+                    <button onclick="rollInitiativeInPrompt()" style="background: #4a9eff; color: white; font-weight: bold;">🎲 Roll d20</button>
+                    <button onclick="submitInitiativePrompt()" style="background: #44ff44; color: #000; font-weight: bold;">✅ Submit</button>
+                    <button onclick="cancelInitiativePrompt()" style="background: #555; color: white;">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Custom Spells Manager Modal -->
+        <div id="customSpellsModal" class="modal">
+            <div class="modal-content large">
+                <h2>✨ Custom Spells & Powers</h2>
+                <div style="margin-bottom: 15px;">
+                    <button onclick="showCreateCustomSpell()" style="background: #aa88ff; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">➕ Create New</button>
+                    <button onclick="loadCustomSpells()" style="background: #4a9eff; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; margin-left: 10px;">🔄 Refresh List</button>
+                </div>
+                <div id="customSpellsList" style="max-height: 400px; overflow-y: auto; margin-bottom: 15px;"></div>
+                <div class="modal-actions">
+                    <button onclick="closeModal('customSpellsModal')">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Custom Spell Modal -->
+        <div id="createCustomSpellModal" class="modal">
+            <div class="modal-content">
+                <h2 id="createSpellTitle">✨ Create Custom Spell</h2>
+                <form id="customSpellForm">
+                    <input type="text" id="spellName" placeholder="Spell/Power Name" required>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                        <div>
+                            <label>Level:</label>
+                            <input type="number" id="spellLevel" placeholder="0" min="0" max="9" value="0" required>
+                        </div>
+                        <div id="powerTypeContainer" style="display: none;">
+                            <label>Power Type (Star Wars):</label>
+                            <select id="spellPowerType" style="width: 100%; padding: 8px; border-radius: 5px; background: #2a2a2a; color: white;">
+                                <option value="">Spell (D&D)</option>
+                                <option value="tech">Tech Power</option>
+                                <option value="force">Force Power</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <input type="text" id="spellSchool" placeholder="School (e.g., Evocation, Tech, etc.)" style="margin-top: 10px;">
+                    <input type="text" id="spellCastingTime" placeholder="Casting Time (e.g., 1 action, 1 bonus action)" style="margin-top: 10px;">
+                    <input type="text" id="spellRange" placeholder="Range (e.g., Self, 30 feet, 60 feet)" style="margin-top: 10px;">
+                    <input type="text" id="spellComponents" placeholder="Components (e.g., V, S, M)" style="margin-top: 10px;">
+                    <input type="text" id="spellDuration" placeholder="Duration (e.g., Instantaneous, 1 hour, Concentration)" style="margin-top: 10px;">
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                        <label style="display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" id="spellRitual">
+                            <span>Ritual</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" id="spellConcentration">
+                            <span>Concentration</span>
+                        </label>
+                    </div>
+                    
+                    <textarea id="spellDescription" placeholder="Spell/Power Description (required)" rows="6" style="margin-top: 10px; width: 100%; padding: 8px; border-radius: 5px; background: #2a2a2a; color: white; border: 1px solid #444;" required></textarea>
+                    
+                    <input type="text" id="spellHigherLevel" placeholder="At Higher Levels / Enhanced Effect" style="margin-top: 10px;">
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                        <input type="text" id="spellSaveType" placeholder="Save Type (e.g., Dexterity, Constitution)">
+                        <input type="text" id="spellDamage" placeholder="Damage (e.g., 1d6, 2d8+4)">
+                    </div>
+                    
+                    <input type="text" id="spellDamageType" placeholder="Damage Type (e.g., Fire, Lightning, Force)" style="margin-top: 10px;">
+                    
+                    <div class="modal-actions" style="margin-top: 15px;">
+                        <button type="button" onclick="saveCustomSpell()" style="background: #aa88ff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">💾 Save</button>
+                        <button type="button" onclick="closeModal('createCustomSpellModal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Spell Tooltip (at end of body for proper rendering) -->
+    <div id="spellTooltip" onmouseover="keepSpellTooltip()" onmouseout="hideSpellTooltip()" style="
+        display: none; 
+        position: fixed; 
+        background: linear-gradient(135deg, #2a1a4a 0%, #1a0a2e 100%); 
+        border: 2px solid #aa88ff; 
+        border-radius: 8px; 
+        padding: 15px; 
+        max-width: 400px; 
+        min-width: 250px;
+        z-index: 99999; 
+        box-shadow: 0 8px 32px rgba(170,136,255,0.5); 
+        color: #fff; 
+        font-size: 13px; 
+        line-height: 1.6;
+        pointer-events: auto;">
+        <div id="spellTooltipContent">TEST TOOLTIP</div>
+        <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
+    </div>
+
+    <script src="/static/app.js?v=13.2"></script>
+</body>
+</html>
+
+

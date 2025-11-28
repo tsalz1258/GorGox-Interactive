@@ -1,0 +1,478 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    color: #fff;
+    overflow: hidden;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal.active {
+    display: flex;
+}
+
+.modal-content {
+    background: #2a2a2a;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+    max-width: 500px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-content.large {
+    max-width: 800px;
+}
+
+.modal-content h2 {
+    margin-bottom: 20px;
+    color: #4a9eff;
+}
+
+.modal-content input,
+.modal-content textarea {
+    width: 100%;
+    padding: 10px;
+    margin: 10px 0;
+    background: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 5px;
+    color: #fff;
+    font-size: 14px;
+}
+
+.modal-content input:focus,
+.modal-content textarea:focus {
+    outline: none;
+    border-color: #4a9eff;
+}
+
+.modal-content textarea {
+    resize: vertical;
+    min-height: 100px;
+}
+
+.modal-content button {
+    padding: 12px 24px;
+    margin: 10px 5px;
+    background: #4a9eff;
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.modal-content button:hover {
+    background: #357abd;
+}
+
+.modal-content label {
+    display: flex;
+    align-items: center;
+    margin: 15px 0;
+    cursor: pointer;
+}
+
+.modal-content label input[type="checkbox"] {
+    width: auto;
+    margin-right: 10px;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+/* Header */
+header {
+    background: rgba(0, 0, 0, 0.5);
+    padding: 15px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+header h1 {
+    font-size: 24px;
+}
+
+#connectionStatus {
+    padding: 5px 15px;
+    background: #ff4444;
+    border-radius: 20px;
+    font-size: 12px;
+}
+
+#connectionStatus.connected {
+    background: #44ff44;
+    color: #000;
+}
+
+/* Main Container */
+.main-container {
+    display: flex;
+    height: calc(100vh - 70px);
+}
+
+/* Sidebars */
+.sidebar {
+    width: 300px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 15px;
+    overflow-y: auto;
+}
+
+.sidebar.left {
+    border-right: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.sidebar.right {
+    border-left: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.panel {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 10px;
+}
+
+.panel h3 {
+    margin-bottom: 15px;
+    color: #4a9eff;
+    font-size: 18px;
+}
+
+.panel button {
+    width: 100%;
+    padding: 10px;
+    margin: 5px 0;
+    background: #4a9eff;
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.panel button:hover {
+    background: #357abd;
+    transform: translateY(-2px);
+}
+
+.panel button:active {
+    transform: translateY(0);
+}
+
+/* Map Container */
+.map-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+#mapCanvas {
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+    background: #1a1a1a;
+    cursor: grab;
+}
+
+#mapCanvas:active {
+    cursor: grabbing;
+}
+
+#mapControls {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    gap: 10px;
+}
+
+#mapControls button {
+    padding: 10px 15px;
+    background: rgba(74, 158, 255, 0.9);
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.3s;
+}
+
+#mapControls button:hover {
+    background: rgba(53, 122, 189, 0.9);
+}
+
+/* Initiative List */
+#initiativeList {
+    list-style: none;
+}
+
+.initiative-item {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 10px;
+    margin: 5px 0;
+    border-radius: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.initiative-item.active {
+    background: rgba(74, 158, 255, 0.4);
+    border: 2px solid #4a9eff;
+}
+
+.initiative-item.player {
+    border-left: 3px solid #44ff44;
+}
+
+.initiative-item.enemy {
+    border-left: 3px solid #ff4444;
+}
+
+.initiative-roll {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-weight: bold;
+}
+
+/* Token Info */
+#tokenInfo {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 15px;
+    border-radius: 5px;
+    min-height: 100px;
+}
+
+.token-stat {
+    display: flex;
+    justify-content: space-between;
+    margin: 8px 0;
+    padding: 5px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+}
+
+.hp-bar {
+    width: 100%;
+    height: 20px;
+    background: #333;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 10px 0;
+}
+
+.hp-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff4444, #ff8844);
+    transition: width 0.3s;
+}
+
+.hp-text {
+    text-align: center;
+    margin-top: -20px;
+    font-size: 12px;
+    font-weight: bold;
+    text-shadow: 1px 1px 2px #000;
+}
+
+/* Combat Log */
+#combatLog {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 10px;
+    border-radius: 5px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 13px;
+}
+
+.log-entry {
+    padding: 5px;
+    margin: 3px 0;
+    border-left: 3px solid #4a9eff;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.log-entry.damage {
+    border-left-color: #ff4444;
+}
+
+.log-entry.healing {
+    border-left-color: #44ff44;
+}
+
+.log-entry.info {
+    border-left-color: #ffaa44;
+}
+
+/* Player List */
+#playerList {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.player-item {
+    padding: 8px;
+    margin: 5px 0;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+}
+
+.player-item.dm {
+    border-left: 3px solid #ffaa44;
+}
+
+.player-status {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #44ff44;
+    margin-right: 10px;
+}
+
+/* Enemy and Character Lists */
+.entity-item {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    margin: 10px 0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.entity-item:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateX(5px);
+}
+
+.entity-item h4 {
+    color: #4a9eff;
+    margin-bottom: 8px;
+}
+
+.entity-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    font-size: 12px;
+}
+
+.entity-stat {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 5px;
+    border-radius: 3px;
+    text-align: center;
+}
+
+/* Ability Scores */
+.ability-scores {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin: 15px 0;
+}
+
+.ability-scores input {
+    width: 100%;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(74, 158, 255, 0.5);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(74, 158, 255, 0.7);
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+    .sidebar {
+        width: 250px;
+    }
+}
+
+@media (max-width: 900px) {
+    .main-container {
+        flex-direction: column;
+    }
+    
+    .sidebar {
+        width: 100%;
+        height: auto;
+        max-height: 200px;
+    }
+    
+    .map-container {
+        height: 500px;
+    }
+}
+
+/* Animation */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.panel, .entity-item {
+    animation: fadeIn 0.3s ease-out;
+}
+
+
+

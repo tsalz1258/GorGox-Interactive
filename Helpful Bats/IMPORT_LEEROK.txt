@@ -1,0 +1,36 @@
+# 🎯 HOW TO IMPORT LEEROK NASGIN
+
+## Quick Steps:
+
+1. Run: start.bat
+
+2. Open browser: http://localhost:3000
+
+3. Connect as DM
+
+4. Click "👤 Characters" → "Import from JSON"
+
+5. Paste the JSON you provided (the one with LeeRok NasGin)
+
+6. Click "Import"
+
+7. View character sheet - it will show ALL details!
+
+## What Players Will See:
+
+✅ Full character info (name, class, subclass, species, level)
+✅ All 6 ability scores with mods and saves
+✅ HP with visual bar
+✅ AC, Initiative (with advantage indicator), Speed
+✅ ALL attacks (Greataxe, Greatsword +1, Handaxe, etc.)
+✅ Class features, species traits, feats
+✅ Bonus actions and reactions
+✅ Full equipment list with coins
+✅ Proficiencies (armor, weapons, languages)
+
+## System is 100% Ready!
+
+The character import and detailed sheet display is now COMPLETE and functional.
+
+Just paste your JSON and it works! 🎲⚔️
+

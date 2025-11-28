@@ -1,0 +1,84 @@
+[
+  {
+    "name": "Thorin Ironshield",
+    "player_name": "Player 1",
+    "class": "Fighter",
+    "level": 5,
+    "max_hp": 52,
+    "current_hp": 52,
+    "armor_class": 18,
+    "initiative_bonus": 1,
+    "strength": 18,
+    "dexterity": 12,
+    "constitution": 16,
+    "intelligence": 10,
+    "wisdom": 13,
+    "charisma": 8,
+    "speed": 30,
+    "proficiency_bonus": 3
+  },
+  {
+    "name": "Elara Moonwhisper",
+    "player_name": "Player 2",
+    "class": "Wizard",
+    "level": 5,
+    "max_hp": 28,
+    "current_hp": 28,
+    "armor_class": 13,
+    "initiative_bonus": 3,
+    "strength": 8,
+    "dexterity": 16,
+    "constitution": 12,
+    "intelligence": 18,
+    "wisdom": 14,
+    "charisma": 10,
+    "speed": 30,
+    "proficiency_bonus": 3
+  },
+  {
+    "name": "Grimjaw the Fierce",
+    "player_name": "Player 3",
+    "class": "Barbarian",
+    "level": 5,
+    "max_hp": 58,
+    "current_hp": 58,
+    "armor_class": 14,
+    "initiative_bonus": 2,
+    "strength": 19,
+    "dexterity": 14,
+    "constitution": 17,
+    "intelligence": 8,
+    "wisdom": 11,
+    "charisma": 9,
+    "speed": 40,
+    "proficiency_bonus": 3
+  },
+  {
+    "name": "Seraphina Lightbringer",
+    "player_name": "Player 4",
+    "class": "Cleric",
+    "level": 5,
+    "max_hp": 38,
+    "current_hp": 38,
+    "armor_class": 16,
+    "initiative_bonus": 0,
+    "strength": 14,
+    "dexterity": 10,
+    "constitution": 14,
+    "intelligence": 12,
+    "wisdom": 18,
+    "charisma": 15,
+    "speed": 30,
+    "proficiency_bonus": 3
+  }
+]
+
+
+
+
+
+
+
+
+
+
