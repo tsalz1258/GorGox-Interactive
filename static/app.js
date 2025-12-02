@@ -3298,33 +3298,239 @@ function showSaveLoadModal() {
         console.warn('⚠️ saveFileName input not found');
     }
     
-    // Load and display saved states list
-    renderSavedStatesList();
-    
     console.log('✅ Modal should now be visible. Modal classes:', modal.className);
 }
 
-function renderSavedStatesList() {
+async function showLoadGameModal() {
+    const modal = document.getElementById('loadGameModal');
+    if (!modal) {
+        console.error('❌ loadGameModal element not found!');
+        alert('Error: Load Game modal not found. Please refresh the page.');
+        return;
+    }
+    
+    modal.classList.add('active');
+    await renderLoadGameStatesList();
+}
+
+async function renderLoadGameStatesList() {
+    const container = document.getElementById('loadGameStatesList');
+    if (!container) {
+        console.error('❌ loadGameStatesList container not found!');
+        return;
+    }
+    
+    console.log('📋 Rendering load game states list...');
+    
+    // Show loading state
+    container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">Loading saved states...</div>';
+    
+    let savedStates = [];
+    
+    // Fetch from server first
+    try {
+        console.log('📤 Fetching saved states from server...');
+        const response = await fetch('/api/saves');
+        if (response.ok) {
+            const data = await response.json();
+            savedStates = data.saves || [];
+            console.log('✅ Found', savedStates.length, 'saved states on server');
+        } else {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            console.error('❌ Server returned error:', response.status, errorText);
+            console.warn('⚠️ Using localStorage fallback');
+        }
+    } catch (e) {
+        console.error('❌ Could not fetch from server:', e);
+        console.warn('⚠️ Using localStorage fallback');
+    }
+    
+    // Merge with localStorage as fallback
+    try {
+        const localStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
+        const serverFilenames = new Set(savedStates.map(s => s.filename || s.name + '.json'));
+        
+        localStates.forEach(state => {
+            // Only add if not already in server list
+            const localFilename = (state.name || '') + '.json';
+            if (!serverFilenames.has(localFilename)) {
+                savedStates.push({
+                    filename: localFilename,
+                    name: state.name,
+                    savedAt: state.savedAt,
+                    mapName: state.mapName || 'None',
+                    tokenCount: state.tokenCount || 0,
+                    combatActive: state.combatActive || false,
+                    isLocalStorage: true
+                });
+            }
+        });
+        console.log('📋 Total saved states after merge:', savedStates.length);
+    } catch (e) {
+        console.warn('⚠️ Could not read localStorage:', e);
+    }
+    
+    if (savedStates.length === 0) {
+        container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No saved game states yet.<br><br>Save a game first using the Save/Load Game button!</div>';
+        console.log('ℹ️ No saved states to display');
+        return;
+    }
+    
+    try {
+        // Sort by date (newest first) or modified time
+        savedStates.sort((a, b) => {
+            if (a.modified && b.modified) {
+                return (b.modified || 0) - (a.modified || 0);
+            }
+            const aDate = new Date(a.savedAt || 0);
+            const bDate = new Date(b.savedAt || 0);
+            return bDate - aDate;
+        });
+        
+        // Helper function to format relative time
+        function getRelativeTime(date) {
+            if (!date) return 'Unknown';
+            const now = new Date();
+            const saved = new Date(date);
+            const diffMs = now - saved;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMs / 3600000);
+            const diffDays = Math.floor(diffMs / 86400000);
+            
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins} min ago`;
+            if (diffHours < 24) return `${diffHours} hr ago`;
+            if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+            return saved.toLocaleDateString();
+        }
+        
+        let html = '<div style="display: flex; flex-direction: column; gap: 12px;">';
+        savedStates.forEach((state, index) => {
+            const savedDate = new Date(state.savedAt || Date.now());
+            const dateStr = savedDate.toLocaleString();
+            const relativeTime = getRelativeTime(state.savedAt);
+            const isCombatActive = state.combatActive || false;
+            
+            html += `
+                <div onclick="${state.isLocalStorage && state.id ? 
+                    `loadSavedState('${state.id}')` : 
+                    `loadSavedStateFromServer('${escapeHtml(state.filename || state.name + '.json')}')`
+                }; closeModal('loadGameModal');" 
+                     style="cursor: pointer; padding: 15px; background: linear-gradient(135deg, rgba(74,158,255,0.1) 0%, rgba(74,158,255,0.05) 100%); border-radius: 8px; border: 2px solid ${isCombatActive ? 'rgba(255,68,68,0.5)' : 'rgba(74,158,255,0.3)'}; transition: all 0.2s; position: relative;"
+                     onmouseover="this.style.borderColor='rgba(74,158,255,0.8)'; this.style.background='linear-gradient(135deg, rgba(74,158,255,0.2) 0%, rgba(74,158,255,0.1) 100%)';"
+                     onmouseout="this.style.borderColor='${isCombatActive ? 'rgba(255,68,68,0.5)' : 'rgba(74,158,255,0.3)'}'; this.style.background='linear-gradient(135deg, rgba(74,158,255,0.1) 0%, rgba(74,158,255,0.05) 100%)';">
+                    ${isDM && !state.isLocalStorage ? `<button onclick="event.stopPropagation(); deleteSavedStateFromServer('${escapeHtml(state.filename || state.name + '.json')}'); renderLoadGameStatesList();" 
+                            style="position: absolute; top: 5px; right: 5px; background: #ff4444; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 14px; font-weight: bold; line-height: 1; z-index: 10;" 
+                            title="Delete Save">✕</button>` : ''}
+                    
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                        <div style="font-size: 32px;">💾</div>
+                        <div style="flex: 1; ${isDM && !state.isLocalStorage ? 'padding-right: 35px;' : ''}">
+                            <div style="font-weight: bold; font-size: 16px; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                ${escapeHtml(state.name)}
+                                ${state.isLocalStorage ? '<span style="font-size: 10px; background: rgba(255,170,68,0.3); color: #ffaa44; padding: 3px 6px; border-radius: 3px; font-weight: 500;">LOCAL</span>' : ''}
+                                ${isCombatActive ? '<span style="font-size: 11px; color: #ff4444; font-weight: bold;">⚔️ Combat</span>' : ''}
+                            </div>
+                            <div style="font-size: 12px; color: #aaa;">
+                                ${relativeTime} • ${dateStr}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="font-size: 12px; color: #bbb; margin-top: 8px; display: flex; gap: 15px; flex-wrap: wrap;">
+                        <span>📍 ${escapeHtml(state.mapName || 'No Map')}</span>
+                        <span>🎭 ${state.tokenCount || 0} token${(state.tokenCount || 0) !== 1 ? 's' : ''}</span>
+                    </div>
+                    
+                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px; color: #888; text-align: center;">
+                        Click to load this save
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+        console.log('✅ Load game states list rendered with', savedStates.length, 'items');
+    } catch (e) {
+        console.error('❌ Error rendering load game states:', e);
+        container.innerHTML = '<div style="padding: 10px; color: #ff4444; text-align: center;">Error loading saved states: ' + e.message + '</div>';
+    }
+}
+
+async function renderSavedStatesList() {
     const container = document.getElementById('savedStatesList');
     if (!container) {
-        console.error('❌ savedStatesList container not found!');
+        // Container might not exist if using the new load modal - that's okay
+        console.log('ℹ️ savedStatesList container not found (using new load modal instead)');
         return;
     }
     
     console.log('📋 Rendering saved states list...');
     
+    // Show loading state
+    container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">Loading saved states...</div>';
+    
+    let savedStates = [];
+    
+    // Fetch from server first
     try {
-        const savedStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
-        console.log('📋 Found', savedStates.length, 'saved states in localStorage');
-        
-        if (savedStates.length === 0) {
-            container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No saved game states yet</div>';
-            console.log('ℹ️ No saved states to display');
-            return;
+        console.log('📤 Fetching saved states from server...');
+        const response = await fetch('/api/saves');
+        if (response.ok) {
+            const data = await response.json();
+            savedStates = data.saves || [];
+            console.log('✅ Found', savedStates.length, 'saved states on server');
+        } else {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            console.error('❌ Server returned error:', response.status, errorText);
+            console.warn('⚠️ Using localStorage fallback');
         }
+    } catch (e) {
+        console.error('❌ Could not fetch from server:', e);
+        console.warn('⚠️ Using localStorage fallback');
+    }
+    
+    // Merge with localStorage as fallback
+    try {
+        const localStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
+        const serverFilenames = new Set(savedStates.map(s => s.filename || s.name + '.json'));
         
-        // Sort by date (newest first)
-        savedStates.sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
+        localStates.forEach(state => {
+            // Only add if not already in server list
+            const localFilename = (state.name || '') + '.json';
+            if (!serverFilenames.has(localFilename)) {
+                savedStates.push({
+                    filename: localFilename,
+                    name: state.name,
+                    savedAt: state.savedAt,
+                    mapName: state.mapName || 'None',
+                    tokenCount: state.tokenCount || 0,
+                    combatActive: state.combatActive || false,
+                    isLocalStorage: true
+                });
+            }
+        });
+        console.log('📋 Total saved states after merge:', savedStates.length);
+    } catch (e) {
+        console.warn('⚠️ Could not read localStorage:', e);
+    }
+    
+    if (savedStates.length === 0) {
+        container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No saved game states yet</div>';
+        console.log('ℹ️ No saved states to display');
+        return;
+    }
+    
+    try {
+        // Sort by date (newest first) or modified time
+        savedStates.sort((a, b) => {
+            if (a.modified && b.modified) {
+                return (b.modified || 0) - (a.modified || 0);
+            }
+            const aDate = new Date(a.savedAt || 0);
+            const bDate = new Date(b.savedAt || 0);
+            return bDate - aDate;
+        });
         
         // Helper function to format relative time
         function getRelativeTime(date) {
@@ -3351,16 +3557,13 @@ function renderSavedStatesList() {
             
             html += `
                 <div style="position: relative; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 5px; border: 1px solid ${isCombatActive ? 'rgba(255,68,68,0.3)' : 'rgba(255,255,255,0.1)'};">
-                    ${isDM ? `<button onclick="deleteSavedState('${state.id}')" 
-                            style="position: absolute; top: 5px; right: 5px; background: #ff4444; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 14px; font-weight: bold; line-height: 1; z-index: 10;" 
-                            title="Delete Save">✕</button>` : ''}
                     
                     <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                        <div style="font-size: 24px;">${state.isFromFile ? '📁' : '💾'}</div>
+                        <div style="font-size: 24px;">💾</div>
                         <div style="flex: 1; ${isDM ? 'padding-right: 30px;' : ''}">
                             <div style="font-weight: bold; font-size: 14px; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
                                 ${escapeHtml(state.name)}
-                                ${state.isFromFile ? '<span style="font-size: 9px; background: rgba(74,158,255,0.3); color: #4a9eff; padding: 2px 5px; border-radius: 3px; font-weight: 500;">FILE</span>' : ''}
+                                ${state.isLocalStorage ? '<span style="font-size: 9px; background: rgba(255,170,68,0.3); color: #ffaa44; padding: 2px 5px; border-radius: 3px; font-weight: 500;">LOCAL</span>' : ''}
                                 ${isCombatActive ? '<span style="font-size: 10px; color: #ff4444; font-weight: bold;">⚔️ Combat</span>' : ''}
                             </div>
                             <div style="font-size: 11px; color: #888;">
@@ -3374,10 +3577,20 @@ function renderSavedStatesList() {
                         <span>🎭 ${state.tokenCount || 0} token${(state.tokenCount || 0) !== 1 ? 's' : ''}</span>
                     </div>
                     
-                    <button onclick="loadSavedState('${state.id}')" 
-                            style="width: 100%; padding: 8px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
-                        📂 Load This Save
-                    </button>
+                    <div style="display: flex; gap: 8px;">
+                        <button onclick="loadSavedStateFromServer('${escapeHtml(state.filename || state.name + '.json')}')" 
+                                style="flex: 1; padding: 8px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
+                            📂 Load
+                        </button>
+                        ${isDM && !state.isLocalStorage ? `<button onclick="deleteSavedStateFromServer('${escapeHtml(state.filename)}')" 
+                                style="padding: 8px; background: #ff4444; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;" title="Delete from server">
+                            🗑️
+                        </button>` : ''}
+                        ${state.isLocalStorage && state.id ? `<button onclick="deleteSavedState('${state.id}')" 
+                                style="padding: 8px; background: #ff4444; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;" title="Delete from localStorage">
+                            🗑️
+                        </button>` : ''}
+                    </div>
                 </div>
             `;
         });
@@ -3462,9 +3675,80 @@ async function loadSavedState(stateId) {
         // Refresh the list
         renderSavedStatesList();
         
+        // Refresh load modal if open
+        const loadModal = document.getElementById('loadGameModal');
+        if (loadModal && loadModal.classList.contains('active')) {
+            await renderLoadGameStatesList();
+        }
+        
     } catch (e) {
         console.error('Error loading saved state:', e);
         alert('Error loading saved state: ' + e.message);
+    }
+}
+
+async function loadSavedStateFromServer(filename) {
+    try {
+        if (!confirm(`⚠️ Load saved state "${filename}"?\n\nThis will replace the current game state. Are you sure?`)) {
+            return;
+        }
+        
+        console.log('📂 Loading game state from server:', filename);
+        
+        const response = await fetch(`/api/saves/${encodeURIComponent(filename)}`);
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        
+        const gameState = await response.json();
+        console.log('📋 Loaded game state from server:', gameState);
+        
+        await loadGameStateFromData(gameState, filename);
+        
+        // Refresh the lists if modals are open
+        const loadModal = document.getElementById('loadGameModal');
+        if (loadModal && loadModal.classList.contains('active')) {
+            await renderLoadGameStatesList();
+        }
+        
+    } catch (e) {
+        console.error('❌ Error loading saved state from server:', e);
+        alert('❌ Error loading saved state: ' + e.message);
+    }
+}
+
+async function deleteSavedStateFromServer(filename) {
+    if (!isDM) {
+        alert('Only DM can delete saved states!');
+        return;
+    }
+    
+    try {
+        if (!confirm(`⚠️ Delete saved state "${filename}"?\n\nThis cannot be undone!`)) {
+            return;
+        }
+        
+        const response = await fetch(`/api/saves/${encodeURIComponent(filename)}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            console.log('🗑️ Deleted saved state from server:', filename);
+            addLogEntry(`🗑️ Deleted saved state: ${filename}`, 'info');
+            
+            // Refresh the lists if modals are open
+            const loadModal = document.getElementById('loadGameModal');
+            if (loadModal && loadModal.classList.contains('active')) {
+                await renderLoadGameStatesList();
+            }
+            renderSavedStatesList();
+        } else {
+            throw new Error(`Server returned ${response.status}`);
+        }
+        
+    } catch (e) {
+        console.error('Error deleting saved state:', e);
+        alert('Error deleting saved state: ' + e.message);
     }
 }
 
@@ -7907,7 +8191,7 @@ function findImportedForcePowerDetail(powerName) {
 // ==================== SAVE/LOAD GAME STATE ====================
 
 // Save game state to file
-function saveGameState() {
+async function saveGameState() {
     const fileName = document.getElementById('saveFileName').value.trim() || 'Game Session';
     
     console.log('💾 Saving game state...');
@@ -8048,48 +8332,106 @@ function saveGameState() {
     // Convert to JSON
     const jsonData = JSON.stringify(gameState, null, 2);
     
-    // Save to localStorage for quick access
+    // Sanitize filename (remove invalid characters)
+    const safeFileName = fileName.replace(/[<>:"/\\|?*]/g, '_');
+    const filename = `${safeFileName}.json`;
+    
+    // Save to server first
     try {
-        const savedStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
-        const stateId = generateUUID();
-        const stateEntry = {
-            id: stateId,
-            name: fileName,
-            savedAt: gameState.savedAt,
-            mapName: currentMap ? currentMap.name : 'None',
-            tokenCount: tokens.length,
-            combatActive: combatState.active,
-            data: jsonData  // Store reference for fallback
-        };
+        console.log('📤 Attempting to save to server:', filename);
+        console.log('📤 JSON data size:', jsonData.length, 'bytes');
         
-        // Store full data separately (localStorage has size limits)
-        localStorage.setItem(`savedGameState_${stateId}`, jsonData);
+        const url = `/api/saves/${encodeURIComponent(filename)}`;
+        console.log('📤 Making POST request to:', url);
         
-        // Add metadata to list
-        savedStates.push(stateEntry);
-        localStorage.setItem('savedGameStates', JSON.stringify(savedStates));
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
         
-        console.log('✅ Game state saved to localStorage:', fileName);
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: jsonData,
+            signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId));
+        
+        console.log('📥 Server response status:', response.status, response.statusText);
+        
+        if (response.ok) {
+            const result = await response.json().catch(() => ({}));
+            console.log('✅ Game state saved to server:', filename, result);
+            addLogEntry(`💾 Game state saved to server: ${fileName}`, 'info');
+            
+            // Refresh the load modal list if it's open
+            const loadModal = document.getElementById('loadGameModal');
+            if (loadModal && loadModal.classList.contains('active')) {
+                await renderLoadGameStatesList();
+            }
+            
+            alert(`✅ Game saved successfully!\n\nSaved to: saves/${filename}`);
+        } else {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            console.error('❌ Failed to save to server:', response.status, errorText);
+            alert(`⚠️ Failed to save to server (${response.status}). Check console for details.`);
+            console.warn('⚠️ Falling back to localStorage');
+            // Fallback to localStorage
+            try {
+                const savedStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
+                const stateId = generateUUID();
+                const stateEntry = {
+                    id: stateId,
+                    name: fileName,
+                    savedAt: gameState.savedAt,
+                    mapName: currentMap ? currentMap.name : 'None',
+                    tokenCount: tokens.length,
+                    combatActive: combatState.active,
+                    data: jsonData
+                };
+                localStorage.setItem(`savedGameState_${stateId}`, jsonData);
+                savedStates.push(stateEntry);
+                localStorage.setItem('savedGameStates', JSON.stringify(savedStates));
+            } catch (e) {
+                console.warn('⚠️ Could not save to localStorage:', e);
+            }
+        }
     } catch (e) {
-        console.warn('⚠️ Could not save to localStorage (may be full):', e);
+        console.error('❌ Could not save to server:', e);
+        alert(`❌ Error saving to server: ${e.message}\n\nFalling back to localStorage.`);
+        console.warn('⚠️ Falling back to localStorage');
+        // Fallback to localStorage
+        try {
+            const savedStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
+            const stateId = generateUUID();
+            const stateEntry = {
+                id: stateId,
+                name: fileName,
+                savedAt: gameState.savedAt,
+                mapName: currentMap ? currentMap.name : 'None',
+                tokenCount: tokens.length,
+                combatActive: combatState.active,
+                data: jsonData
+            };
+            localStorage.setItem(`savedGameState_${stateId}`, jsonData);
+            savedStates.push(stateEntry);
+            localStorage.setItem('savedGameStates', JSON.stringify(savedStates));
+        } catch (e2) {
+            console.warn('⚠️ Could not save to localStorage:', e2);
+        }
     }
     
-    // Create blob and download
+    // Also create blob and download for backup
     const blob = new Blob([jsonData], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${fileName}.json`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     
     console.log('✅ Game state saved successfully!');
-    addLogEntry(`💾 Game state saved: ${fileName}`, 'info');
-    
-    // Refresh saved states list
-    renderSavedStatesList();
     
     closeModal('saveLoadModal');
 }

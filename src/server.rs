@@ -5,10 +5,11 @@ use base64::{Engine as _, engine::general_purpose};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        State, Path, Json,
     },
     response::Response,
-    routing::get,
+    routing::{get, post, delete},
+    http::StatusCode,
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -145,6 +146,11 @@ pub async fn start_server(
         warn!("⚠️ No characters found in databases on startup");
     }
 
+    // Ensure saves directory exists
+    if let Err(e) = tokio::fs::create_dir_all("saves").await {
+        warn!("⚠️ Could not create saves directory: {}", e);
+    }
+
     let app = Router::new()
         .route("/ws", get(websocket_handler))
         .route("/", get(|| async {
@@ -153,11 +159,28 @@ pub async fn start_server(
                 Err(_) => axum::response::Html(include_str!("../static/index.html").to_string()),
             }
         }))
+        .route("/api/test", get(|| async { 
+            axum::response::Json(serde_json::json!({"status": "ok", "message": "API is working"}))
+        }))
+        .route("/api/saves", get(list_saved_states))
+        .route("/api/saves/:filename", get(get_saved_state))
+        .route("/api/saves/:filename", post(save_game_state_handler))
+        .route("/api/saves/:filename", delete(delete_saved_state))
         .nest_service("/static", tower_http::services::ServeDir::new("static"))
+        .layer(
+            tower::ServiceBuilder::new()
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(50 * 1024 * 1024)) // 50MB limit
+        )
         .with_state((dnd_db, starwars_db, game_state, clients.clone()));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     info!("Server listening on http://0.0.0.0:3000");
+    info!("✅ Save/Load API endpoints available:");
+    info!("   GET  /api/test - Test endpoint");
+    info!("   GET  /api/saves - List saved states");
+    info!("   GET  /api/saves/:filename - Get saved state");
+    info!("   POST /api/saves/:filename - Save game state");
+    info!("   DELETE /api/saves/:filename - Delete saved state");
 
     axum::serve(listener, app).await?;
     Ok(())
@@ -1093,4 +1116,216 @@ async fn broadcast_message(clients: &Clients, message: &ServerMessage) {
             clients_write.remove(&session_id);
         }
     }
+}
+
+// Save game state endpoints
+async fn list_saved_states() -> Result<axum::Json<serde_json::Value>, StatusCode> {
+    use std::path::Path;
+    
+    let saves_dir = Path::new("saves");
+    if !saves_dir.exists() {
+        if let Err(e) = tokio::fs::create_dir_all(saves_dir).await {
+            error!("❌ Failed to create saves directory: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    
+    let mut saves = Vec::new();
+    let mut entries = match tokio::fs::read_dir(saves_dir).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            error!("❌ Failed to read saves directory: {}", e);
+            return Ok(axum::Json(serde_json::json!({ "saves": [] })));
+        }
+    };
+    
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            if let Ok(metadata) = entry.metadata().await {
+                if let Ok(modified) = metadata.modified() {
+                    let file_name = path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    
+                    // Try to read metadata from file
+                    if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                        if let Ok(game_state) = serde_json::from_str::<serde_json::Value>(&content) {
+                            saves.push(serde_json::json!({
+                            "filename": format!("{}.json", file_name),
+                            "name": file_name,
+                            "savedAt": game_state.get("savedAt")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(""),
+                            "mapName": game_state.get("currentMap")
+                                .and_then(|m| m.get("name"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("None"),
+                            "tokenCount": game_state.get("tokens")
+                                .and_then(|v| v.as_array())
+                                .map(|a| a.len())
+                                .unwrap_or(0),
+                            "combatActive": game_state.get("combatState")
+                                .and_then(|c| c.get("active"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                                "modified": modified.duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Sort by modified time (newest first)
+    saves.sort_by(|a, b| {
+        let a_time = a.get("modified").and_then(|v| v.as_u64()).unwrap_or(0);
+        let b_time = b.get("modified").and_then(|v| v.as_u64()).unwrap_or(0);
+        b_time.cmp(&a_time)
+    });
+    
+    Ok(axum::Json(serde_json::json!({ "saves": saves })))
+}
+
+async fn get_saved_state(Path(filename): Path<String>) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
+    use std::path::Path;
+    
+    let file_path = Path::new("saves").join(&filename);
+    if !file_path.exists() {
+        warn!("❌ Save file not found: {}", filename);
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    match tokio::fs::read_to_string(&file_path).await {
+        Ok(content) => {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(game_state) => {
+                    info!("📂 Loaded game state: {}", filename);
+                    Ok(axum::response::Json(game_state))
+                },
+                Err(e) => {
+                    error!("❌ Failed to parse save file {}: {}", filename, e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+        Err(e) => {
+            error!("❌ Failed to read save file {}: {}", filename, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn save_game_state_handler(
+    Path(filename): Path<String>,
+    body: axum::body::Body,
+) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
+    save_game_state_internal(filename, body).await
+}
+
+async fn save_game_state_internal(
+    filename: String,
+    body: axum::body::Body,
+) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
+    use std::path::Path;
+    
+    info!("📥 Save request received for: {}", filename);
+    
+    // Read body manually to avoid Json extractor issues
+    let body_bytes = match axum::body::to_bytes(body, 50_000_000).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            error!("❌ Failed to read request body: {}", e);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+    
+    info!("📋 Received body: {} bytes", body_bytes.len());
+    
+    // Parse JSON
+    let game_state: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(json) => json,
+        Err(e) => {
+            error!("❌ Failed to parse JSON: {}", e);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+    
+    info!("✅ Parsed JSON successfully");
+    
+    // Get absolute path to saves directory (relative to server executable)
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let saves_dir = current_dir.join("saves");
+    
+    info!("📁 Current directory: {}", current_dir.display());
+    info!("📁 Saves directory: {}", saves_dir.display());
+    
+    // Ensure saves directory exists
+    if !saves_dir.exists() {
+        info!("📁 Creating saves directory at: {}", saves_dir.display());
+        if let Err(e) = tokio::fs::create_dir_all(&saves_dir).await {
+            error!("❌ Failed to create saves directory at {}: {}", saves_dir.display(), e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        info!("✅ Created saves directory at: {}", saves_dir.display());
+    }
+    
+    let file_path = saves_dir.join(&filename);
+    info!("💾 Full file path: {}", file_path.display());
+    
+    // Serialize to JSON (already have it, but re-serialize to ensure format)
+    let json_string = match serde_json::to_string_pretty(&game_state) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("❌ Failed to serialize game state: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+    
+    let json_len = json_string.len();
+    info!("💾 Writing {} bytes to {}", json_len, file_path.display());
+    
+    // Write file
+    if let Err(e) = tokio::fs::write(&file_path, json_string).await {
+        error!("❌ Failed to write save file {}: {}", file_path.display(), e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
+    // Verify file was written
+    if !file_path.exists() {
+        error!("❌ File was not created after write!");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
+    info!("✅ Successfully saved game state to: {} ({} bytes)", file_path.display(), json_len);
+    
+    Ok(axum::response::Json(serde_json::json!({
+        "status": "success",
+        "filename": filename,
+        "size": json_len,
+        "path": file_path.display().to_string(),
+        "message": "Game state saved successfully"
+    })))
+}
+
+async fn delete_saved_state(Path(filename): Path<String>) -> Result<StatusCode, StatusCode> {
+    use std::path::Path;
+    
+    let file_path = Path::new("saves").join(&filename);
+    if !file_path.exists() {
+        warn!("❌ Save file not found for deletion: {}", filename);
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    if let Err(e) = tokio::fs::remove_file(&file_path).await {
+        error!("❌ Failed to delete save file {}: {}", filename, e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
+    info!("🗑️ Deleted game state: {}", filename);
+    Ok(StatusCode::OK)
 }
