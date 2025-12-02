@@ -353,6 +353,17 @@ async fn handle_client_message(
             broadcast_message(clients, &ruler_update).await;
         }
         
+        // Measurement shapes - broadcast to all clients
+        ClientMessage::MeasurementShapeAdded { shape } => {
+            let shape_added = ServerMessage::MeasurementShapeAdded { shape };
+            broadcast_message(clients, &shape_added).await;
+        }
+        
+        ClientMessage::ClearMeasurements => {
+            let clear_measurements = ServerMessage::ClearMeasurements;
+            broadcast_message(clients, &clear_measurements).await;
+        }
+        
         // Combat handlers
         ClientMessage::StartCombat => {
             let mut gs = game_state.write().await;
