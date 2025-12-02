@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State, Path, Json,
+        State, Path, Multipart,
     },
     response::Response,
     routing::{get, post, delete},
@@ -166,6 +166,10 @@ pub async fn start_server(
         .route("/api/saves/:filename", get(get_saved_state))
         .route("/api/saves/:filename", post(save_game_state_handler))
         .route("/api/saves/:filename", delete(delete_saved_state))
+        .route("/api/sounds", get(list_sounds))
+        .route("/api/sounds", post(upload_sound))
+        .route("/api/sounds/:filename", delete(delete_sound))
+        .route("/static/sounds/:filename", get(get_sound_file))
         .nest_service("/static", tower_http::services::ServeDir::new("static"))
         .layer(
             tower::ServiceBuilder::new()
@@ -1231,8 +1235,6 @@ async fn save_game_state_internal(
     filename: String,
     body: axum::body::Body,
 ) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
-    use std::path::Path;
-    
     info!("📥 Save request received for: {}", filename);
     
     // Read body manually to avoid Json extractor issues
@@ -1328,4 +1330,183 @@ async fn delete_saved_state(Path(filename): Path<String>) -> Result<StatusCode, 
     
     info!("🗑️ Deleted game state: {}", filename);
     Ok(StatusCode::OK)
+}
+
+// Sound board endpoints
+async fn list_sounds() -> Result<axum::Json<serde_json::Value>, StatusCode> {
+    use std::path::Path;
+    
+    let sounds_dir = Path::new("sounds");
+    if !sounds_dir.exists() {
+        if let Err(e) = tokio::fs::create_dir_all(sounds_dir).await {
+            error!("❌ Failed to create sounds directory: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    
+    let mut sounds = Vec::new();
+    let mut entries = match tokio::fs::read_dir(sounds_dir).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            error!("❌ Failed to read sounds directory: {}", e);
+            return Ok(axum::Json(serde_json::json!({ "sounds": [] })));
+        }
+    };
+    
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if let Some(ext) = path.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            if ext_str == "mp3" || ext_str == "wav" || ext_str == "ogg" || ext_str == "m4a" {
+                if let Ok(metadata) = entry.metadata().await {
+                    if let Ok(modified) = metadata.modified() {
+                        let file_name = path.file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        
+                        let filename = path.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        
+                        sounds.push(serde_json::json!({
+                            "filename": filename,
+                            "name": file_name,
+                            "type": ext_str,
+                            "size": metadata.len(),
+                            "modified": modified.duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    
+    // Sort by modified time (newest first)
+    sounds.sort_by(|a, b| {
+        let a_time = a.get("modified").and_then(|v| v.as_u64()).unwrap_or(0);
+        let b_time = b.get("modified").and_then(|v| v.as_u64()).unwrap_or(0);
+        b_time.cmp(&a_time)
+    });
+    
+    Ok(axum::Json(serde_json::json!({ "sounds": sounds })))
+}
+
+async fn upload_sound(
+    mut multipart: Multipart,
+) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
+    use std::path::Path;
+    
+    let sounds_dir = Path::new("sounds");
+    if !sounds_dir.exists() {
+        if let Err(e) = tokio::fs::create_dir_all(sounds_dir).await {
+            error!("❌ Failed to create sounds directory: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    
+    let mut filename = String::new();
+    let mut file_data = Vec::new();
+    
+    while let Some(mut field) = multipart.next_field().await.map_err(|e| {
+        error!("❌ Failed to read multipart field: {}", e);
+        StatusCode::BAD_REQUEST
+    })? {
+        let field_name = field.name().unwrap_or("");
+        if field_name == "file" {
+            if let Some(name) = field.file_name() {
+                filename = name.to_string();
+            }
+            
+            let mut field_data = Vec::new();
+            while let Some(chunk) = field.chunk().await.map_err(|e| {
+                error!("❌ Failed to read file chunk: {}", e);
+                StatusCode::BAD_REQUEST
+            })? {
+                field_data.extend_from_slice(&chunk);
+            }
+            file_data = field_data;
+        }
+    }
+    
+    if filename.is_empty() || file_data.is_empty() {
+        error!("❌ No file data received (filename: '{}', data_len: {})", filename, file_data.len());
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    
+    // Sanitize filename
+    let safe_filename = filename.replace("/", "_").replace("\\", "_").replace("..", "_");
+    let file_path = sounds_dir.join(&safe_filename);
+    
+    info!("📤 Uploading sound: {} ({} bytes)", safe_filename, file_data.len());
+    
+    if let Err(e) = tokio::fs::write(&file_path, file_data).await {
+        error!("❌ Failed to write sound file {}: {}", file_path.display(), e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
+    info!("✅ Sound uploaded: {}", file_path.display());
+    
+    Ok(axum::response::Json(serde_json::json!({
+        "status": "success",
+        "filename": safe_filename,
+        "size": file_path.metadata().map(|m| m.len()).unwrap_or(0),
+        "message": "Sound uploaded successfully"
+    })))
+}
+
+async fn delete_sound(Path(filename): Path<String>) -> Result<StatusCode, StatusCode> {
+    use std::path::Path;
+    
+    let file_path = Path::new("sounds").join(&filename);
+    if !file_path.exists() {
+        warn!("❌ Sound file not found for deletion: {}", filename);
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    if let Err(e) = tokio::fs::remove_file(&file_path).await {
+        error!("❌ Failed to delete sound file {}: {}", filename, e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
+    info!("🗑️ Deleted sound: {}", filename);
+    Ok(StatusCode::OK)
+}
+
+async fn get_sound_file(Path(filename): Path<String>) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    use std::path::Path;
+    
+    let file_path = Path::new("sounds").join(&filename);
+    if !file_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    match tokio::fs::read(&file_path).await {
+        Ok(data) => {
+            let content_type = if filename.ends_with(".mp3") {
+                "audio/mpeg"
+            } else if filename.ends_with(".wav") {
+                "audio/wav"
+            } else if filename.ends_with(".ogg") {
+                "audio/ogg"
+            } else if filename.ends_with(".m4a") {
+                "audio/mp4"
+            } else {
+                "audio/mpeg"
+            };
+            
+            Ok(axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", content_type)
+                .body(axum::body::Body::from(data))
+                .unwrap())
+        }
+        Err(e) => {
+            error!("❌ Failed to read sound file {}: {}", filename, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }

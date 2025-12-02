@@ -1075,6 +1075,11 @@ function handleServerMessage(message) {
             renderEnemyList();
             break;
             
+        case 'SoundPlayed':
+            console.log('🔊 Sound received:', message.sound_name);
+            playSoundFromServer(message.sound_id, message.sound_name, message.sound_data, message.sound_type);
+            break;
+            
         case 'Error':
             alert('Error: ' + message.message);
             addLogEntry('Error: ' + message.message, 'damage');
@@ -8775,5 +8780,266 @@ async function loadGameStateFromData(gameState, sourceName) {
                   `- Enemies: ${enemies.length}\n` +
                   `- Combat: ${combatState.active ? 'Active' : 'Inactive'}`);
         }, 1000);
+}
+
+// ==================== SOUND BOARD ====================
+
+let sounds = [];
+let currentlyPlayingSounds = new Map(); // Track playing sounds
+
+async function showSoundBoard() {
+    if (!isDM) {
+        alert('Only the DM can use the sound board!');
+        return;
+    }
+    
+    const modal = document.getElementById('soundBoardModal');
+    if (!modal) {
+        console.error('❌ soundBoardModal not found!');
+        return;
+    }
+    
+    modal.classList.add('active');
+    await renderSoundsList();
+}
+
+async function renderSoundsList() {
+    const container = document.getElementById('soundsList');
+    if (!container) {
+        console.error('❌ soundsList container not found!');
+        return;
+    }
+    
+    container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">Loading sounds...</div>';
+    
+    try {
+        const response = await fetch('/api/sounds');
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status}`);
+        }
+        
+        const data = await response.json();
+        sounds = data.sounds || [];
+        
+        if (sounds.length === 0) {
+            container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No sounds uploaded yet.<br><br>Upload a sound file to get started!</div>';
+            return;
+        }
+        
+        let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px;">';
+        
+        sounds.forEach(sound => {
+            const sizeMB = (sound.size / (1024 * 1024)).toFixed(2);
+            html += `
+                <div style="padding: 15px; background: linear-gradient(135deg, rgba(170,68,255,0.1) 0%, rgba(170,68,255,0.05) 100%); border-radius: 8px; border: 2px solid rgba(170,68,255,0.3); cursor: pointer; transition: all 0.2s; position: relative;"
+                     onclick="playSound('${escapeHtml(sound.filename)}', '${escapeHtml(sound.name)}')"
+                     onmouseover="this.style.borderColor='rgba(170,68,255,0.8)'; this.style.background='linear-gradient(135deg, rgba(170,68,255,0.2) 0%, rgba(170,68,255,0.1) 100%)';"
+                     onmouseout="this.style.borderColor='rgba(170,68,255,0.3)'; this.style.background='linear-gradient(135deg, rgba(170,68,255,0.1) 0%, rgba(170,68,255,0.05) 100%)';">
+                    ${isDM ? `<button onclick="event.stopPropagation(); deleteSound('${escapeHtml(sound.filename)}');" 
+                            style="position: absolute; top: 5px; right: 5px; background: #ff4444; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 14px; font-weight: bold; line-height: 1; z-index: 10;" 
+                            title="Delete Sound">✕</button>` : ''}
+                    <div style="font-size: 32px; text-align: center; margin-bottom: 8px;">🔊</div>
+                    <div style="font-weight: bold; font-size: 14px; color: #fff; margin-bottom: 4px; text-align: center; ${isDM ? 'padding-right: 30px;' : ''}">
+                        ${escapeHtml(sound.name)}
+                    </div>
+                    <div style="font-size: 11px; color: #aaa; text-align: center;">
+                        ${sound.type.toUpperCase()} • ${sizeMB} MB
+                    </div>
+                    <div style="font-size: 10px; color: #888; text-align: center; margin-top: 8px;">
+                        Click to play
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+        container.innerHTML = html;
+        console.log('✅ Sounds list rendered with', sounds.length, 'sounds');
+    } catch (e) {
+        console.error('❌ Error loading sounds:', e);
+        container.innerHTML = '<div style="padding: 10px; color: #ff4444; text-align: center;">Error loading sounds: ' + e.message + '</div>';
+    }
+}
+
+async function uploadSound() {
+    if (!isDM) {
+        alert('Only the DM can upload sounds!');
+        return;
+    }
+    
+    const fileInput = document.getElementById('soundUploadFile');
+    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        alert('Please select a sound file to upload!');
+        return;
+    }
+    
+    const file = fileInput.files[0];
+    const maxSize = 10 * 1024 * 1024; // 10MB limit
+    
+    if (file.size > maxSize) {
+        alert(`File is too large! Maximum size is 10MB. Your file is ${(file.size / (1024 * 1024)).toFixed(2)}MB.`);
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+        console.log('📤 Uploading sound:', file.name);
+        const response = await fetch('/api/sounds', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => 'Unknown error');
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
+        
+        const result = await response.json();
+        console.log('✅ Sound uploaded:', result);
+        addLogEntry(`🔊 Sound uploaded: ${file.name}`, 'info');
+        
+        // Clear file input
+        fileInput.value = '';
+        
+        // Refresh sounds list
+        await renderSoundsList();
+        
+        alert(`✅ Sound uploaded successfully!\n\n${file.name}`);
+    } catch (e) {
+        console.error('❌ Error uploading sound:', e);
+        alert('Error uploading sound: ' + e.message);
+    }
+}
+
+async function playSound(filename, name) {
+    if (!isDM) {
+        alert('Only the DM can play sounds!');
+        return;
+    }
+    
+    try {
+        console.log('🔊 DM playing sound:', name);
+        
+        // Load sound file and convert to base64
+        const response = await fetch(`/static/sounds/${encodeURIComponent(filename)}`);
+        if (!response.ok) {
+            throw new Error(`Failed to load sound: ${response.status}`);
+        }
+        
+        const blob = await response.blob();
+        const reader = new FileReader();
+        
+        reader.onloadend = () => {
+            const base64 = reader.result.split(',')[1]; // Remove data:audio/...;base64, prefix
+            const soundType = filename.split('.').pop() || 'mp3';
+            
+            // Send to server to broadcast to all clients (including DM)
+            // Don't play locally here - let the server broadcast handle it for everyone
+            sendMessage({
+                type: 'PlaySound',
+                sound_id: filename,
+                sound_name: name,
+                sound_data: base64,
+                sound_type: soundType
+            });
+            
+            console.log('📤 Sent PlaySound message to server for broadcast');
+        };
+        
+        reader.readAsDataURL(blob);
+    } catch (e) {
+        console.error('❌ Error playing sound:', e);
+        alert('Error playing sound: ' + e.message);
+    }
+}
+
+function playSoundFromServer(soundId, soundName, soundData, soundType) {
+    try {
+        // Stop any currently playing sound with the same ID
+        if (currentlyPlayingSounds.has(soundId)) {
+            const oldAudio = currentlyPlayingSounds.get(soundId);
+            try {
+                oldAudio.pause();
+                oldAudio.currentTime = 0;
+            } catch (e) {
+                // Ignore errors when pausing/stopping old audio
+            }
+            currentlyPlayingSounds.delete(soundId);
+        }
+        
+        // Create audio element
+        const audio = new Audio(`data:audio/${soundType};base64,${soundData}`);
+        audio.volume = 1.0;
+        
+        // Track this sound
+        currentlyPlayingSounds.set(soundId, audio);
+        
+        // Play sound with error handling
+        const playPromise = audio.play();
+        
+        if (playPromise !== undefined) {
+            playPromise
+                .then(() => {
+                    console.log('🔊 Playing sound:', soundName);
+                    addLogEntry(`🔊 Playing: ${soundName}`, 'info');
+                })
+                .catch(e => {
+                    // Some browsers require user interaction before playing audio
+                    if (e.name === 'NotAllowedError' || e.name === 'NotSupportedError') {
+                        console.warn('⚠️ Audio autoplay blocked by browser. User may need to interact with page first.');
+                        addLogEntry(`⚠️ Could not play sound: ${e.name}`, 'error');
+                    } else {
+                        console.error('❌ Error playing audio:', e);
+                        addLogEntry(`❌ Error playing sound: ${e.message}`, 'error');
+                    }
+                    currentlyPlayingSounds.delete(soundId);
+                });
+        }
+        
+        // Clean up when done
+        audio.onended = () => {
+            console.log('🔇 Sound finished:', soundName);
+            currentlyPlayingSounds.delete(soundId);
+        };
+        
+        audio.onerror = (e) => {
+            console.error('❌ Audio playback error:', e);
+            currentlyPlayingSounds.delete(soundId);
+        };
+    } catch (e) {
+        console.error('❌ Error creating audio:', e);
+    }
+}
+
+async function deleteSound(filename) {
+    if (!isDM) {
+        alert('Only the DM can delete sounds!');
+        return;
+    }
+    
+    if (!confirm(`⚠️ Delete sound "${filename}"?\n\nThis cannot be undone!`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/sounds/${encodeURIComponent(filename)}`, {
+            method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status}`);
+        }
+        
+        console.log('🗑️ Deleted sound:', filename);
+        addLogEntry(`🗑️ Deleted sound: ${filename}`, 'info');
+        
+        // Refresh sounds list
+        await renderSoundsList();
+    } catch (e) {
+        console.error('❌ Error deleting sound:', e);
+        alert('Error deleting sound: ' + e.message);
+    }
 }
 
