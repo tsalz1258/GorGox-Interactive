@@ -153,6 +153,10 @@ pub enum ClientMessage {
     // Ruler tool
     RulerUpdate { start_x: Option<f32>, start_y: Option<f32>, end_x: Option<f32>, end_y: Option<f32> },
     
+    // Measurement shapes (cone, circle, etc.)
+    MeasurementShapeAdded { shape: serde_json::Value },
+    ClearMeasurements,
+    
     // Ability checks
     RollAbilityCheck { character_name: String, ability: String, roll: i32, modifier: i32, total: i32 },
     RollSavingThrow { character_name: String, ability: String, roll: i32, modifier: i32, total: i32 },
@@ -223,6 +227,10 @@ pub enum ServerMessage {
     
     // Ruler tool
     RulerUpdate { start_x: Option<f32>, start_y: Option<f32>, end_x: Option<f32>, end_y: Option<f32> },
+    
+    // Measurement shapes (cone, circle, etc.)
+    MeasurementShapeAdded { shape: serde_json::Value },
+    ClearMeasurements,
     
     // Ability checks
     AbilityCheckRolled { character_name: String, ability: String, roll: i32, modifier: i32, total: i32 },

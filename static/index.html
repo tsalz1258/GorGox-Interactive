@@ -591,6 +591,163 @@
         </div>
     </div>
 
+    <!-- Measurement Tool Panel -->
+    <div id="measurementToolPanel" style="
+        display: none;
+        position: fixed;
+        right: 20px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 280px;
+        background: linear-gradient(135deg, #1a1a2e 0%, #0a0a1e 100%);
+        border: 2px solid #ffaa44;
+        border-radius: 10px;
+        padding: 20px;
+        z-index: 10000;
+        box-shadow: 0 8px 32px rgba(255,170,68,0.4);
+        color: #fff;
+    ">
+        <h3 style="margin: 0 0 15px 0; color: #ffaa44; text-align: center; font-size: 18px;">📏 Measurement Tools</h3>
+        
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            <button onclick="selectMeasurementTool('ruler')" id="measurementToolRuler" style="
+                padding: 12px;
+                background: rgba(255,170,68,0.2);
+                border: 2px solid #ffaa44;
+                border-radius: 5px;
+                color: #ffaa44;
+                font-weight: bold;
+                cursor: pointer;
+                transition: all 0.2s;
+            " onmouseover="this.style.background='rgba(255,170,68,0.4)'" onmouseout="this.style.background='rgba(255,170,68,0.2)'">
+                📏 Ruler
+            </button>
+            
+            <button onclick="selectMeasurementTool('cone')" id="measurementToolCone" style="
+                padding: 12px;
+                background: rgba(68,255,68,0.2);
+                border: 2px solid #44ff44;
+                border-radius: 5px;
+                color: #44ff44;
+                font-weight: bold;
+                cursor: pointer;
+                transition: all 0.2s;
+            " onmouseover="this.style.background='rgba(68,255,68,0.4)'" onmouseout="this.style.background='rgba(68,255,68,0.2)'">
+                🔺 Cone
+            </button>
+            
+            <button onclick="selectMeasurementTool('circle')" id="measurementToolCircle" style="
+                padding: 12px;
+                background: rgba(68,170,255,0.2);
+                border: 2px solid #4a9eff;
+                border-radius: 5px;
+                color: #4a9eff;
+                font-weight: bold;
+                cursor: pointer;
+                transition: all 0.2s;
+            " onmouseover="this.style.background='rgba(68,170,255,0.4)'" onmouseout="this.style.background='rgba(68,170,255,0.2)'">
+                ⭕ Circle
+            </button>
+        </div>
+        
+        <!-- Cone Settings -->
+        <div id="coneSettings" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #444;">
+            <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Angle (degrees):</label>
+            <input type="number" id="coneAngleInput" value="60" min="15" max="180" step="5" style="
+                width: 100%;
+                padding: 8px;
+                border-radius: 5px;
+                background: #2a2a2a;
+                color: white;
+                border: 1px solid #444;
+            ">
+            <button onclick="updateConeAngle()" style="
+                width: 100%;
+                margin-top: 10px;
+                padding: 8px;
+                background: #44ff44;
+                color: black;
+                border: none;
+                border-radius: 5px;
+                font-weight: bold;
+                cursor: pointer;
+            ">Update Angle</button>
+            
+            <label style="display: block; margin-top: 15px; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Distance (feet, optional):</label>
+            <input type="number" id="coneDistanceInput" value="15" min="5" max="120" step="5" placeholder="Optional: default 15ft" style="
+                width: 100%;
+                padding: 8px;
+                border-radius: 5px;
+                background: #2a2a2a;
+                color: white;
+                border: 1px solid #444;
+            ">
+            <div style="font-size: 10px; opacity: 0.7; margin-top: 5px; margin-bottom: 10px;">Leave empty or set to 0 for default 15ft</div>
+            <button onclick="updateConeDistance()" style="
+                width: 100%;
+                margin-top: 5px;
+                padding: 8px;
+                background: #44ff44;
+                color: black;
+                border: none;
+                border-radius: 5px;
+                font-weight: bold;
+                cursor: pointer;
+            ">Update Distance</button>
+        </div>
+        
+        <!-- Circle Settings -->
+        <div id="circleSettings" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #444;">
+            <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Radius (feet):</label>
+            <input type="number" id="circleRadiusInput" value="25" min="5" max="500" step="5" style="
+                width: 100%;
+                padding: 8px;
+                border-radius: 5px;
+                background: #2a2a2a;
+                color: white;
+                border: 1px solid #444;
+            ">
+            <button onclick="updateCircleRadius()" style="
+                width: 100%;
+                margin-top: 10px;
+                padding: 8px;
+                background: #4a9eff;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                font-weight: bold;
+                cursor: pointer;
+            ">Update Radius</button>
+        </div>
+        
+        <button onclick="clearAllMeasurements()" style="
+            width: 100%;
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(255,68,68,0.2);
+            border: 2px solid #ff4444;
+            border-radius: 5px;
+            color: #ff4444;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        " onmouseover="this.style.background='rgba(255,68,68,0.4)'" onmouseout="this.style.background='rgba(255,68,68,0.2)'">
+            🗑️ Clear All
+        </button>
+        
+        <button onclick="closeMeasurementToolPanel()" style="
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px;
+            background: #444;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+        ">Close</button>
+    </div>
+
     <!-- Spell Tooltip (at end of body for proper rendering) -->
     <div id="spellTooltip" onmouseover="keepSpellTooltip()" onmouseout="hideSpellTooltip()" style="
         display: none; 

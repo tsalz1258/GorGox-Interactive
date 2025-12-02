@@ -44,6 +44,15 @@ let rulerEnd = null;
 let tokenImages = {}; // Cache for character portrait images
 let rulerActive = false;
 
+// Measurement tools system
+let measurementToolType = null; // 'ruler', 'cone', 'circle'
+let measurementShapes = []; // Array of placed measurement shapes
+let coneAngle = 60; // Default cone angle in degrees
+let coneDistance = 15; // Default cone distance in feet (optional, defaults to 15ft if not set)
+let circleRadius = 25; // Default circle radius in feet
+let currentPlacementShape = null; // Shape being placed (cone or circle)
+let conePlacementState = null; // Track cone placement: {startX, startY} or null
+
 const syncedCharacterIds = new Set();
 let techPowersCache = {};
 let techPowersLoaded = false;
@@ -374,6 +383,25 @@ function handleServerMessage(message) {
             }
             
             renderCanvas();
+            break;
+            
+        case 'MeasurementShapeAdded':
+            // Add measurement shape from another player
+            if (message.shape) {
+                console.log('📏 Measurement shape received:', message.shape);
+                measurementShapes.push(message.shape);
+                renderCanvas();
+                console.log('📏 Measurement shape added. Total shapes:', measurementShapes.length);
+            }
+            break;
+            
+        case 'ClearMeasurements':
+            // Clear all measurement shapes
+            measurementShapes = [];
+            rulerStart = null;
+            rulerEnd = null;
+            renderCanvas();
+            console.log('🗑️ All measurements cleared');
             break;
             
         case 'AbilityCheckRolled':
@@ -1366,9 +1394,56 @@ function renderCanvas() {
         drawToken(token);
     });
     
-    // Draw ruler if active
+    // Draw all measurement shapes
+    if (measurementShapes.length > 0) {
+        console.log('Drawing', measurementShapes.length, 'measurement shapes');
+    }
+    measurementShapes.forEach((shape, index) => {
+        if (shape.type === 'ruler') {
+            drawRulerShape(shape);
+        } else if (shape.type === 'cone') {
+            drawCone(shape);
+        } else if (shape.type === 'circle') {
+            drawCircle(shape);
+        } else {
+            console.warn('Unknown shape type:', shape.type, shape);
+        }
+    });
+    
+    // Draw current ruler if active
     if (rulerActive && rulerStart) {
         drawRuler();
+    }
+    
+    // Draw preview of cone being placed (with rotation preview)
+    if (conePlacementState && measurementToolType === 'cone') {
+        // Show preview cone with direction towards mouse
+        if (lastMouseX !== 0 || lastMouseY !== 0) {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (lastMouseX - rect.left - panX) / zoom;
+            const mouseY = (lastMouseY - rect.top - panY) / zoom;
+            
+            const dx = mouseX - conePlacementState.startX;
+            const dy = mouseY - conePlacementState.startY;
+            const direction = Math.atan2(dy, dx) * (180 / Math.PI);
+            
+            const previewCone = {
+                type: 'cone',
+                x: conePlacementState.startX,
+                y: conePlacementState.startY,
+                angle: coneAngle,
+                direction: direction,
+                distance: coneDistance > 0 ? coneDistance : 15 // Use set distance or default
+            };
+            drawCone(previewCone, true);
+        }
+    }
+    
+    // Draw preview of circle being placed
+    if (currentPlacementShape) {
+        if (currentPlacementShape.type === 'circle') {
+            drawCircle(currentPlacementShape, true);
+        }
     }
     
     ctx.restore();
@@ -1411,6 +1486,158 @@ function drawRuler() {
         ctx.font = 'bold 14px Arial';
         ctx.textAlign = 'center';
         ctx.fillText(`${distance.feet} ft`, midX, midY + 5);
+    }
+}
+
+function drawRulerShape(shape) {
+    if (!shape.start || !shape.end) return;
+    
+    ctx.strokeStyle = '#ffaa44';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([10, 5]);
+    ctx.beginPath();
+    ctx.moveTo(shape.start.x, shape.start.y);
+    ctx.lineTo(shape.end.x, shape.end.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    
+    // Draw endpoints
+    ctx.fillStyle = '#ffaa44';
+    ctx.beginPath();
+    ctx.arc(shape.start.x, shape.start.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(shape.end.x, shape.end.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Draw distance label
+    const midX = (shape.start.x + shape.end.x) / 2;
+    const midY = (shape.start.y + shape.end.y) / 2;
+    const dx = shape.end.x - shape.start.x;
+    const dy = shape.end.y - shape.start.y;
+    const pixelDistance = Math.sqrt(dx * dx + dy * dy);
+    const squares = pixelDistance / gridSize;
+    const feet = Math.round(squares * 5);
+    
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(midX - 40, midY - 15, 80, 30);
+    ctx.fillStyle = '#ffaa44';
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${feet} ft`, midX, midY + 5);
+}
+
+function drawCone(shape, isPreview = false) {
+    if (shape.x === undefined || shape.x === null || shape.y === undefined || shape.y === null) {
+        console.warn('drawCone: Invalid shape coordinates', shape);
+        return;
+    }
+    
+    const x = shape.x;
+    const y = shape.y;
+    const angle = shape.angle || 60;
+    const direction = shape.direction || 0;
+    const distanceFeet = shape.distance || 15; // Distance in feet, default to 15ft
+    
+    // Convert angle from degrees to radians
+    const halfAngle = (angle * Math.PI) / 180 / 2;
+    const directionRad = (direction * Math.PI) / 180;
+    
+    // Calculate cone length (convert feet to squares, then to pixels)
+    // Each square is 5 feet, so divide by 5 to get squares
+    const lengthInSquares = distanceFeet / 5;
+    const length = lengthInSquares * gridSize;
+    
+    // Calculate cone tip and edges
+    const tipX = x;
+    const tipY = y;
+    
+    // Calculate direction vector
+    const dirX = Math.cos(directionRad);
+    const dirY = Math.sin(directionRad);
+    
+    // Calculate base points
+    const baseX = tipX + dirX * length;
+    const baseY = tipY + dirY * length;
+    
+    // Calculate perpendicular vector for base width
+    const perpX = -dirY;
+    const perpY = dirX;
+    const baseWidth = Math.tan(halfAngle) * length;
+    
+    const baseLeftX = baseX + perpX * baseWidth;
+    const baseLeftY = baseY + perpY * baseWidth;
+    const baseRightX = baseX - perpX * baseWidth;
+    const baseRightY = baseY - perpY * baseWidth;
+    
+    // Draw cone shape
+    ctx.fillStyle = isPreview ? 'rgba(68,255,68,0.2)' : 'rgba(68,255,68,0.15)';
+    ctx.strokeStyle = isPreview ? '#44ff44' : '#66ff66';
+    ctx.lineWidth = isPreview ? 2 : 2;
+    
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseLeftX, baseLeftY);
+    ctx.lineTo(baseRightX, baseRightY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Draw tip point
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 5, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Draw label
+    if (!isPreview) {
+        const labelText = distanceFeet ? `${angle}° ${distanceFeet}ft Cone` : `${angle}° Cone`;
+        const labelWidth = labelText.length * 7; // Approximate width
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(baseX - labelWidth / 2, baseY - 15, labelWidth, 30);
+        ctx.fillStyle = '#44ff44';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(labelText, baseX, baseY + 5);
+    }
+}
+
+function drawCircle(shape, isPreview = false) {
+    if (shape.x === undefined || shape.x === null || shape.y === undefined || shape.y === null) {
+        console.warn('drawCircle: Invalid shape coordinates', shape);
+        return;
+    }
+    
+    const x = shape.x;
+    const y = shape.y;
+    const radius = shape.radius || (circleRadius * gridSize);
+    
+    // Draw circle
+    ctx.fillStyle = isPreview ? 'rgba(68,170,255,0.2)' : 'rgba(68,170,255,0.15)';
+    ctx.strokeStyle = isPreview ? '#4a9eff' : '#66aaff';
+    ctx.lineWidth = isPreview ? 2 : 2;
+    
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Draw center point
+    ctx.fillStyle = '#4a9eff';
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Draw label
+    if (!isPreview) {
+        // Use stored radiusFeet if available, otherwise calculate from pixels
+        const radiusFeet = shape.radiusFeet || Math.round((radius / gridSize) * 5);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(x - 50, y - 15, 100, 30);
+        ctx.fillStyle = '#4a9eff';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${radiusFeet}ft radius`, x, y + 5);
     }
 }
 
@@ -1748,34 +1975,113 @@ function onCanvasMouseDown(e) {
     const mouseX = (e.clientX - rect.left - panX) / zoom;
     const mouseY = (e.clientY - rect.top - panY) / zoom;
     
-    // FIX: Ruler tool takes priority and prevents other actions
-    if (rulerActive) {
+    // Measurement tools take priority - prevent ALL token interactions
+    if (measurementToolType) {
+        // Always prevent default for clicks when using measurement tools
+        // But allow normal scrolling when not clicking
         e.preventDefault();
         e.stopPropagation();
         
-        if (!rulerStart) {
-            rulerStart = { x: mouseX, y: mouseY };
-            // Broadcast ruler start to all players
+        // Ensure we're not dragging tokens when using measurement tools
+        isDragging = false;
+        selectedToken = null;
+        
+        if (measurementToolType === 'ruler') {
+            if (!rulerStart) {
+                // Remove any existing ruler shapes before placing a new one
+                measurementShapes = measurementShapes.filter(shape => shape.type !== 'ruler');
+                
+                rulerStart = { x: mouseX, y: mouseY };
+                sendMessage({
+                    type: 'RulerUpdate',
+                    start_x: mouseX,
+                    start_y: mouseY,
+                    end_x: null,
+                    end_y: null
+                });
+                addLogEntry('Ruler: First point set. Click second point.', 'info');
+                renderCanvas();
+            } else {
+                rulerEnd = { x: mouseX, y: mouseY };
+                // Save ruler as a shape (old rulers already removed above)
+                const rulerShape = {
+                    type: 'ruler',
+                    start: { x: rulerStart.x, y: rulerStart.y },
+                    end: { x: mouseX, y: mouseY }
+                };
+                measurementShapes.push(rulerShape);
+                
+                sendMessage({
+                    type: 'MeasurementShapeAdded',
+                    shape: rulerShape
+                });
+                
+                const distance = calculateRulerDistance();
+                addLogEntry(`📏 Distance: ${distance.feet} feet (${distance.squares} squares)`, 'info');
+                rulerStart = null;
+                rulerEnd = null;
+                renderCanvas();
+            }
+        } else if (measurementToolType === 'cone') {
+            // First click: place cone tip, second click: set direction
+            if (!conePlacementState) {
+                // Remove any existing cone shapes before placing a new one
+                measurementShapes = measurementShapes.filter(shape => shape.type !== 'cone');
+                
+                // First click - place the cone tip
+                conePlacementState = { startX: mouseX, startY: mouseY };
+                addLogEntry('🔺 Cone tip placed. Click again to set direction, or move mouse to preview rotation.', 'info');
+                renderCanvas();
+            } else {
+                // Second click - set direction based on angle from tip to click position
+                const dx = mouseX - conePlacementState.startX;
+                const dy = mouseY - conePlacementState.startY;
+                const direction = Math.atan2(dy, dx) * (180 / Math.PI); // Convert to degrees
+                
+                const coneShape = {
+                    type: 'cone',
+                    x: conePlacementState.startX,
+                    y: conePlacementState.startY,
+                    angle: coneAngle,
+                    direction: direction,
+                    distance: coneDistance > 0 ? coneDistance : 15 // Store distance in feet, default to 15
+                };
+                measurementShapes.push(coneShape);
+                
+                sendMessage({
+                    type: 'MeasurementShapeAdded',
+                    shape: coneShape
+                });
+                
+                const distanceText = coneDistance > 0 ? `${coneDistance}ft` : '15ft (default)';
+                addLogEntry(`🔺 Cone placed (${coneAngle}° at ${Math.round(direction)}°, ${distanceText})`, 'info');
+                conePlacementState = null;
+                renderCanvas();
+            }
+        } else if (measurementToolType === 'circle') {
+            // Remove any existing circle shapes before placing a new one
+            measurementShapes = measurementShapes.filter(shape => shape.type !== 'circle');
+            
+            // Place circle at click location
+            // Convert feet to pixels: circleRadius is in feet, each square is 5 feet
+            const radiusInSquares = circleRadius / 5;
+            const radiusInPixels = radiusInSquares * gridSize;
+            
+            const circleShape = {
+                type: 'circle',
+                x: mouseX,
+                y: mouseY,
+                radius: radiusInPixels,
+                radiusFeet: circleRadius // Store feet for display
+            };
+            measurementShapes.push(circleShape);
+            
             sendMessage({
-                type: 'RulerUpdate',
-                start_x: mouseX,
-                start_y: mouseY,
-                end_x: null,
-                end_y: null
+                type: 'MeasurementShapeAdded',
+                shape: JSON.parse(JSON.stringify(circleShape)) // Ensure it's a plain object
             });
-            addLogEntry('Ruler: First point set. Click second point.', 'info');
-        } else {
-            rulerEnd = { x: mouseX, y: mouseY };
-            // Broadcast ruler end to all players
-            sendMessage({
-                type: 'RulerUpdate',
-                start_x: rulerStart.x,
-                start_y: rulerStart.y,
-                end_x: mouseX,
-                end_y: mouseY
-            });
-            const distance = calculateRulerDistance();
-            addLogEntry(`📏 Distance: ${distance.feet} feet (${distance.squares} squares)`, 'info');
+            
+            addLogEntry(`⭕ Circle placed (${circleRadius}ft radius)`, 'info');
             renderCanvas();
         }
         return; // Stop here - don't process token clicks
@@ -1819,6 +2125,22 @@ function calculateRulerDistance() {
 }
 
 function onCanvasMouseMove(e) {
+    // Always track mouse position for cone preview
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    
+    // If any measurement tool is active, prevent token dragging
+    if (measurementToolType) {
+        // Redraw if placing a cone to show rotation preview
+        if (conePlacementState && measurementToolType === 'cone') {
+            renderCanvas();
+        }
+        // Prevent token dragging when measurement tools are active
+        isDragging = false;
+        return;
+    }
+    
+    // Normal token/pan dragging when no measurement tool is active
     if (isDragging) {
         panX = e.clientX - dragStartX;
         panY = e.clientY - dragStartY;
@@ -1830,8 +2152,9 @@ function onCanvasMouseMove(e) {
 }
 
 function onCanvasMouseUp(e) {
-    // FIX: If ruler is active, don't process token movement
-    if (rulerActive) {
+    // If any measurement tool is active, don't process token movement
+    if (measurementToolType) {
+        isDragging = false;
         return;
     }
     
@@ -7760,27 +8083,117 @@ function buildDetailedCharacterSheet(char, charData) {
     return html;
 }
 
-// Ruler Tool
+// Measurement Tool Panel Functions
 function toggleRulerTool() {
-    rulerActive = !rulerActive;
-    if (rulerActive) {
-        addLogEntry('📏 Ruler tool activated - Click two points to measure (double-click to deactivate)', 'info');
-        canvas.style.cursor = 'crosshair';
+    const panel = document.getElementById('measurementToolPanel');
+    if (panel.style.display === 'none' || panel.style.display === '') {
+        panel.style.display = 'block';
+        addLogEntry('📏 Measurement tools panel opened', 'info');
     } else {
-        addLogEntry('Ruler tool deactivated', 'info');
-        canvas.style.cursor = 'default';
-        rulerStart = null;
-        rulerEnd = null;
-        // Clear ruler for all players
-        sendMessage({
-            type: 'RulerUpdate',
-            start_x: null,
-            start_y: null,
-            end_x: null,
-            end_y: null
-        });
-        renderCanvas();
+        panel.style.display = 'none';
+        closeMeasurementTool();
     }
+}
+
+function closeMeasurementToolPanel() {
+    document.getElementById('measurementToolPanel').style.display = 'none';
+    closeMeasurementTool();
+}
+
+function closeMeasurementTool() {
+    measurementToolType = null;
+    rulerActive = false;
+    rulerStart = null;
+    rulerEnd = null;
+    currentPlacementShape = null;
+    conePlacementState = null; // Reset cone placement state
+    canvas.style.cursor = 'default';
+    
+    // Reset button styles
+    document.getElementById('measurementToolRuler').style.background = 'rgba(255,170,68,0.2)';
+    document.getElementById('measurementToolCone').style.background = 'rgba(68,255,68,0.2)';
+    document.getElementById('measurementToolCircle').style.background = 'rgba(68,170,255,0.2)';
+    
+    // Hide settings
+    document.getElementById('coneSettings').style.display = 'none';
+    document.getElementById('circleSettings').style.display = 'none';
+    
+    renderCanvas(); // Redraw to clear preview
+}
+
+function selectMeasurementTool(toolType) {
+    closeMeasurementTool();
+    measurementToolType = toolType;
+    
+    // Reset all button styles
+    document.getElementById('measurementToolRuler').style.background = 'rgba(255,170,68,0.2)';
+    document.getElementById('measurementToolCone').style.background = 'rgba(68,255,68,0.2)';
+    document.getElementById('measurementToolCircle').style.background = 'rgba(68,170,255,0.2)';
+    
+    // Highlight selected tool
+    if (toolType === 'ruler') {
+        rulerActive = true;
+        document.getElementById('measurementToolRuler').style.background = 'rgba(255,170,68,0.5)';
+        document.getElementById('coneSettings').style.display = 'none';
+        document.getElementById('circleSettings').style.display = 'none';
+        addLogEntry('📏 Ruler tool active - Click two points to measure', 'info');
+        canvas.style.cursor = 'crosshair';
+    } else if (toolType === 'cone') {
+        document.getElementById('measurementToolCone').style.background = 'rgba(68,255,68,0.5)';
+        document.getElementById('coneSettings').style.display = 'block';
+        document.getElementById('circleSettings').style.display = 'none';
+        addLogEntry('🔺 Cone tool active - Click to place cone', 'info');
+        canvas.style.cursor = 'crosshair';
+    } else if (toolType === 'circle') {
+        document.getElementById('measurementToolCircle').style.background = 'rgba(68,170,255,0.5)';
+        document.getElementById('circleSettings').style.display = 'block';
+        document.getElementById('coneSettings').style.display = 'none';
+        addLogEntry('⭕ Circle tool active - Click to place circle', 'info');
+        canvas.style.cursor = 'crosshair';
+    }
+}
+
+function updateConeAngle() {
+    const input = document.getElementById('coneAngleInput');
+    coneAngle = parseInt(input.value) || 60;
+    if (coneAngle < 15) coneAngle = 15;
+    if (coneAngle > 180) coneAngle = 180;
+    input.value = coneAngle;
+    addLogEntry(`🔺 Cone angle set to ${coneAngle}°`, 'info');
+}
+
+function updateConeDistance() {
+    const input = document.getElementById('coneDistanceInput');
+    const value = parseInt(input.value) || 0;
+    coneDistance = value > 0 ? value : 0; // 0 means use default
+    if (coneDistance > 120) coneDistance = 120;
+    if (coneDistance > 0) {
+        input.value = coneDistance;
+        addLogEntry(`🔺 Cone distance set to ${coneDistance} feet`, 'info');
+    } else {
+        input.value = '';
+        addLogEntry(`🔺 Cone distance set to default (15 feet)`, 'info');
+    }
+}
+
+function updateCircleRadius() {
+    const input = document.getElementById('circleRadiusInput');
+    circleRadius = parseInt(input.value) || 25;
+    if (circleRadius < 5) circleRadius = 5;
+    if (circleRadius > 500) circleRadius = 500;
+    input.value = circleRadius;
+    addLogEntry(`⭕ Circle radius set to ${circleRadius} feet`, 'info');
+}
+
+function clearAllMeasurements() {
+    measurementShapes = [];
+    rulerStart = null;
+    rulerEnd = null;
+    sendMessage({
+        type: 'ClearMeasurements'
+    });
+    renderCanvas();
+    addLogEntry('🗑️ All measurements cleared', 'info');
 }
 
 // Add double-click handler for ruler tool (moved to setupCanvas to ensure canvas exists)
