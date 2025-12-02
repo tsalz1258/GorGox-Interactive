@@ -414,13 +414,15 @@ function handleServerMessage(message) {
             const npcInstancesBefore = enemies.filter(e => e && e.isNPC && e.npcData);
             console.log('📋 NPC instances before token update:', npcInstancesBefore.length);
             
-            tokens = message.tokens;
+            // Update tokens array - this is authoritative from server
+            tokens = message.tokens || [];
             console.log('✅ Local tokens array updated. Total tokens:', tokens.length);
             if (tokens.length > 0) {
                 console.log('Token details:');
                 tokens.forEach((t, i) => {
                     const enemy = enemies.find(e => e.id === t.entity_id);
-                    const name = enemy ? enemy.name : 'Unknown';
+                    const char = characters.find(c => c.id === t.entity_id);
+                    const name = enemy ? enemy.name : (char ? char.name : 'Unknown');
                     console.log(`  ${i + 1}. ${t.entity_type} at (${t.x}, ${t.y}) - entity_id: ${t.entity_id} - name: ${name}`);
                 });
             }
@@ -431,11 +433,13 @@ function handleServerMessage(message) {
                 console.warn('⚠️ NPC instance count changed! Before:', npcInstancesBefore.length, 'After:', npcInstancesAfter.length);
             }
             
+            // Always render canvas when tokens update - this ensures all clients see the tokens
+            renderCanvas();
+            
             if (combatState.active) {
                 syncParticipantsWithTokens();
                 updateInitiativeList();
             }
-            renderCanvas();
             break;
             
         case 'TokenList':
@@ -3302,39 +3306,76 @@ function showSaveLoadModal() {
 
 function renderSavedStatesList() {
     const container = document.getElementById('savedStatesList');
-    if (!container) return;
+    if (!container) {
+        console.error('❌ savedStatesList container not found!');
+        return;
+    }
+    
+    console.log('📋 Rendering saved states list...');
     
     try {
         const savedStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
+        console.log('📋 Found', savedStates.length, 'saved states in localStorage');
         
         if (savedStates.length === 0) {
-            container.innerHTML = '<div style="padding: 10px; color: #888; text-align: center;">No saved game states</div>';
+            container.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No saved game states yet</div>';
+            console.log('ℹ️ No saved states to display');
             return;
         }
         
         // Sort by date (newest first)
         savedStates.sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
         
-        let html = '<div style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">';
+        // Helper function to format relative time
+        function getRelativeTime(date) {
+            const now = new Date();
+            const saved = new Date(date);
+            const diffMs = now - saved;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMs / 3600000);
+            const diffDays = Math.floor(diffMs / 86400000);
+            
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins} min ago`;
+            if (diffHours < 24) return `${diffHours} hr ago`;
+            if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+            return saved.toLocaleDateString();
+        }
+        
+        let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
         savedStates.forEach((state, index) => {
             const savedDate = new Date(state.savedAt);
             const dateStr = savedDate.toLocaleString();
+            const relativeTime = getRelativeTime(state.savedAt);
+            const isCombatActive = state.combatActive || false;
+            
             html += `
-                <div style="position: relative; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; border: 1px solid rgba(255,255,255,0.1);">
+                <div style="position: relative; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 5px; border: 1px solid ${isCombatActive ? 'rgba(255,68,68,0.3)' : 'rgba(255,255,255,0.1)'};">
                     ${isDM ? `<button onclick="deleteSavedState('${state.id}')" 
                             style="position: absolute; top: 5px; right: 5px; background: #ff4444; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 14px; font-weight: bold; line-height: 1; z-index: 10;" 
                             title="Delete Save">✕</button>` : ''}
-                    <div style="font-weight: bold; margin-bottom: 5px; color: #fff; ${isDM ? 'padding-right: 30px;' : ''}">
-                        ${escapeHtml(state.name)}
+                    
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                        <div style="font-size: 24px;">${state.isFromFile ? '📁' : '💾'}</div>
+                        <div style="flex: 1; ${isDM ? 'padding-right: 30px;' : ''}">
+                            <div style="font-weight: bold; font-size: 14px; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                ${escapeHtml(state.name)}
+                                ${state.isFromFile ? '<span style="font-size: 9px; background: rgba(74,158,255,0.3); color: #4a9eff; padding: 2px 5px; border-radius: 3px; font-weight: 500;">FILE</span>' : ''}
+                                ${isCombatActive ? '<span style="font-size: 10px; color: #ff4444; font-weight: bold;">⚔️ Combat</span>' : ''}
+                            </div>
+                            <div style="font-size: 11px; color: #888;">
+                                ${relativeTime} • ${dateStr}
+                            </div>
+                        </div>
                     </div>
-                    <div style="font-size: 11px; color: #888; margin-bottom: 8px;">
-                        ${dateStr}
+                    
+                    <div style="font-size: 11px; color: #aaa; margin-bottom: 8px; display: flex; gap: 12px; flex-wrap: wrap;">
+                        <span>📍 ${escapeHtml(state.mapName || 'No Map')}</span>
+                        <span>🎭 ${state.tokenCount || 0} token${(state.tokenCount || 0) !== 1 ? 's' : ''}</span>
                     </div>
-                    <div style="font-size: 11px; color: #aaa; margin-bottom: 8px;">
-                        Map: ${state.mapName || 'None'} | Tokens: ${state.tokenCount || 0} | ${state.combatActive ? '⚔️ Combat Active' : 'No Combat'}
-                    </div>
+                    
                     <button onclick="loadSavedState('${state.id}')" 
-                            style="width: 100%; padding: 6px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">
+                            style="width: 100%; padding: 8px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
                         📂 Load This Save
                     </button>
                 </div>
@@ -3342,9 +3383,10 @@ function renderSavedStatesList() {
         });
         html += '</div>';
         container.innerHTML = html;
+        console.log('✅ Saved states list rendered with', savedStates.length, 'items');
     } catch (e) {
-        console.error('Error rendering saved states:', e);
-        container.innerHTML = '<div style="padding: 10px; color: #ff4444; text-align: center;">Error loading saved states</div>';
+        console.error('❌ Error rendering saved states:', e);
+        container.innerHTML = '<div style="padding: 10px; color: #ff4444; text-align: center;">Error loading saved states: ' + e.message + '</div>';
     }
 }
 
@@ -8052,6 +8094,70 @@ function saveGameState() {
     closeModal('saveLoadModal');
 }
 
+// Handle file selection - preview and add to saved states list
+async function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    try {
+        const fileText = await file.text();
+        const gameState = JSON.parse(fileText);
+        
+        // Validate it's a game state file
+        if (!gameState || typeof gameState !== 'object') {
+            console.warn('⚠️ Selected file is not a valid game state file');
+            return;
+        }
+        
+        // Add to localStorage if not already there (or update if it exists)
+        try {
+            const savedStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
+            const fileName = file.name.replace(/\.json$/i, '');
+            const existingIndex = savedStates.findIndex(s => s.name === fileName);
+            
+            const stateId = existingIndex >= 0 ? savedStates[existingIndex].id : generateUUID();
+            const stateEntry = {
+                id: stateId,
+                name: fileName,
+                savedAt: gameState.savedAt || new Date().toISOString(),
+                mapName: gameState.currentMap ? gameState.currentMap.name : 'None',
+                tokenCount: gameState.tokens ? gameState.tokens.length : 0,
+                combatActive: gameState.combatState ? gameState.combatState.active : false,
+                data: fileText, // Store reference for fallback
+                isFromFile: true // Mark as from file
+            };
+            
+            // Store full data separately
+            localStorage.setItem(`savedGameState_${stateId}`, fileText);
+            
+            if (existingIndex >= 0) {
+                // Update existing
+                savedStates[existingIndex] = stateEntry;
+                console.log('✅ Updated existing saved state from file:', fileName);
+            } else {
+                // Add new
+                savedStates.push(stateEntry);
+                console.log('✅ Added file to saved states list:', fileName);
+            }
+            
+            localStorage.setItem('savedGameStates', JSON.stringify(savedStates));
+            
+            // Refresh the saved states list to show the file
+            renderSavedStatesList();
+            
+            // Show a brief notification
+            addLogEntry(`📁 File "${fileName}" added to saved states`, 'info');
+            
+        } catch (e) {
+            console.warn('⚠️ Could not save file to localStorage:', e);
+        }
+        
+    } catch (error) {
+        console.error('❌ Error reading file:', error);
+        alert('❌ Error reading file: ' + error.message + '\n\nPlease make sure it\'s a valid game state JSON file.');
+    }
+}
+
 // Load game state from file
 async function loadGameState() {
     const fileInput = document.getElementById('loadGameFile');
@@ -8077,16 +8183,20 @@ async function loadGameState() {
         // Also save to localStorage if not already there
         try {
             const savedStates = JSON.parse(localStorage.getItem('savedGameStates') || '[]');
-            const existing = savedStates.find(s => s.name === file.name.replace('.json', ''));
-            if (!existing) {
+            const fileName = file.name.replace(/\.json$/i, '');
+            const existingIndex = savedStates.findIndex(s => s.name === fileName);
+            
+            if (existingIndex < 0) {
                 const stateId = generateUUID();
                 const stateEntry = {
                     id: stateId,
-                    name: file.name.replace('.json', ''),
+                    name: fileName,
                     savedAt: gameState.savedAt || new Date().toISOString(),
                     mapName: gameState.currentMap ? gameState.currentMap.name : 'None',
                     tokenCount: gameState.tokens ? gameState.tokens.length : 0,
-                    combatActive: gameState.combatState ? gameState.combatState.active : false
+                    combatActive: gameState.combatState ? gameState.combatState.active : false,
+                    data: fileText,
+                    isFromFile: true
                 };
                 localStorage.setItem(`savedGameState_${stateId}`, fileText);
                 savedStates.push(stateEntry);
@@ -8095,6 +8205,9 @@ async function loadGameState() {
         } catch (e) {
             console.warn('⚠️ Could not save to localStorage:', e);
         }
+        
+        // Clear the file input after loading
+        fileInput.value = '';
         
         await loadGameStateFromData(gameState, file.name);
         
@@ -8123,11 +8236,11 @@ async function loadGameStateFromData(gameState, sourceName) {
             currentMap = gameState.currentMap;
             console.log('✅ Restored map:', currentMap.name);
             
-            // Send map to server first (preserve tokens since they're part of saved state)
+            // Send map to server - clear tokens first, we'll restore them from save
             sendMessage({
                 type: 'LoadMap',
                 map_id: currentMap.id,
-                clear_tokens: false
+                clear_tokens: true
             });
             
             // Send map settings to server
@@ -8199,15 +8312,16 @@ async function loadGameStateFromData(gameState, sourceName) {
         }
         
         // Restore tokens after map is loaded
-        if (gameState.tokens && Array.isArray(gameState.tokens)) {
-            // Wait a bit for map to be processed by server
-            await new Promise(resolve => setTimeout(resolve, 500));
+        if (gameState.tokens && Array.isArray(gameState.tokens) && gameState.tokens.length > 0) {
+            // Wait for map to be fully loaded and processed by server
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
-            tokens = gameState.tokens;
-            console.log('✅ Restored', tokens.length, 'tokens');
+            // Store saved tokens for HP restoration and placement
+            const savedTokens = gameState.tokens;
+            console.log('📋 Restoring', savedTokens.length, 'tokens...');
             
-            // Restore HP values from tokens to their entities
-            tokens.forEach(token => {
+            // First, restore HP values from tokens to their entities
+            savedTokens.forEach(token => {
                 if (token.current_hp !== undefined && token.max_hp !== undefined) {
                     if (token.entity_type === 'Player') {
                         const char = characters.find(c => c.id === token.entity_id);
@@ -8227,24 +8341,37 @@ async function loadGameStateFromData(gameState, sourceName) {
                 }
             });
             
-            // Send tokens to server to sync with other clients
-            tokens.forEach((token, index) => {
-                // Stagger token placement slightly to avoid overwhelming the server
-                setTimeout(() => {
-                    sendMessage({
-                        type: 'PlaceToken',
-                        entity_id: token.entity_id,
-                        entity_type: token.entity_type,
-                        x: token.x,
-                        y: token.y
-                    });
-                }, index * 50); // 50ms delay between each token
-            });
+            // Clear local tokens first - server will send updated tokens via TokenUpdate
+            tokens = [];
+            renderCanvas(); // Clear canvas
             
-            // Wait for tokens to be placed, then render
-            await new Promise(resolve => setTimeout(resolve, tokens.length * 50 + 200));
+            // Send tokens to server to sync with all clients
+            // Place tokens sequentially with delays to avoid overwhelming the server
+            console.log('📤 Sending', savedTokens.length, 'tokens to server...');
+            for (let i = 0; i < savedTokens.length; i++) {
+                const token = savedTokens[i];
+                sendMessage({
+                    type: 'PlaceToken',
+                    entity_id: token.entity_id,
+                    entity_type: token.entity_type,
+                    x: token.x,
+                    y: token.y
+                });
+                
+                // Small delay between tokens to avoid race conditions
+                if (i < savedTokens.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
             
-            // Force render canvas to show tokens
+            // Wait for all tokens to be placed and server to respond with TokenUpdate
+            // Server sends TokenUpdate after each PlaceToken, so wait for all to complete
+            console.log('⏳ Waiting for server to process all tokens...');
+            await new Promise(resolve => setTimeout(resolve, savedTokens.length * 150 + 500));
+            
+            // Server should have sent TokenUpdate which updated our tokens array
+            // Force a final render to ensure everything is displayed
+            console.log('✅ Tokens synced. Current token count:', tokens.length);
             renderCanvas();
             console.log('✅ Canvas rendered with tokens');
             
@@ -8254,6 +8381,7 @@ async function loadGameStateFromData(gameState, sourceName) {
             }
         } else {
             // Even if no tokens, render canvas to show map
+            console.log('ℹ️ No tokens to restore');
             renderCanvas();
         }
         
@@ -8279,7 +8407,15 @@ async function loadGameStateFromData(gameState, sourceName) {
         // Update UI
         updateInitiativeList();
         updateCombatStatus();
+        
+        // Final render to ensure map and tokens are visible for all clients
         renderCanvas();
+        
+        // Force one more render after a short delay to catch any late token updates
+        setTimeout(() => {
+            renderCanvas();
+            console.log('✅ Final canvas render completed');
+        }, 500);
         
         console.log('✅ Game state loaded successfully!');
         addLogEntry(`📂 Game state loaded: ${sourceName}`, 'info');
@@ -8289,11 +8425,13 @@ async function loadGameStateFromData(gameState, sourceName) {
         renderSavedStatesList();
         
         // Show success message
-        alert('✅ Game state loaded successfully!\n\n' +
-              `- Map: ${currentMap ? currentMap.name : 'None'}\n` +
-              `- Tokens: ${tokens.length}\n` +
-              `- Characters: ${characters.length}\n` +
-              `- Enemies: ${enemies.length}\n` +
-              `- Combat: ${combatState.active ? 'Active' : 'Inactive'}`);
+        setTimeout(() => {
+            alert('✅ Game state loaded successfully!\n\n' +
+                  `- Map: ${currentMap ? currentMap.name : 'None'}\n` +
+                  `- Tokens: ${tokens.length}\n` +
+                  `- Characters: ${characters.length}\n` +
+                  `- Enemies: ${enemies.length}\n` +
+                  `- Combat: ${combatState.active ? 'Active' : 'Inactive'}`);
+        }, 1000);
 }
 

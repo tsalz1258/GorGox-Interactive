@@ -56,6 +56,7 @@
                             <button onclick="showEnemyManager()">👹 Enemy Database</button>
                             <button onclick="showCharacterManager()">👤 Characters</button>
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
+                            <button onclick="showSaveLoadModal()" style="background: #4a9eff; color: white; font-weight: bold;">💾 Save/Load Game</button>
                             <button onclick="showPlaceCharacter()">🎭 Place Character</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                             <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
@@ -348,11 +349,12 @@
                 <div style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 2px solid #444;">
                     <h3 style="color: #4a9eff; margin-bottom: 15px;">📂 Load Game</h3>
                     <p style="margin-bottom: 10px; opacity: 0.8;">Load a previously saved game state:</p>
-                    <div id="savedStatesList" style="margin-bottom: 15px; min-height: 100px;"></div>
+                    <div id="savedStatesList" style="max-height: 300px; overflow-y: auto; margin-bottom: 15px; min-height: 50px; border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; padding: 10px; background: rgba(0,0,0,0.2);"></div>
                     <div style="border-top: 1px solid #444; padding-top: 15px; margin-top: 15px;">
                         <p style="margin-bottom: 10px; opacity: 0.8; font-size: 12px;">Or load from file:</p>
-                        <input type="file" id="loadGameFile" accept=".json" style="width: 100%; margin-bottom: 10px;">
+                        <input type="file" id="loadGameFile" accept=".json" style="width: 100%; margin-bottom: 10px;" onchange="handleFileSelect(event)">
                         <button onclick="loadGameState()" style="width: 100%; background: #4a9eff;">📂 Load from File</button>
+                        <p style="margin-top: 10px; font-size: 11px; opacity: 0.6; text-align: center;">💡 Tip: Select a file to preview it in the list above</p>
                     </div>
                 </div>
                 
