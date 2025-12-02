@@ -58,6 +58,7 @@
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
                             <button onclick="showSaveLoadModal()" style="background: #4a9eff; color: white; font-weight: bold;">💾 Save/Load Game</button>
                             <button onclick="showSoundBoard()" style="background: #aa44ff; color: white; font-weight: bold;">🔊 Sound Board</button>
+                            <button onclick="showSettings()" style="background: #ffaa44; color: white; font-weight: bold;">⚙️ Settings</button>
                             <button onclick="showPlaceCharacter()">🎭 Place Character</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                             <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
@@ -441,10 +442,51 @@
             </div>
         </div>
 
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="modal">
+            <div class="modal-content large">
+                <h2>⚙️ Game Settings</h2>
+                
+                <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #444;">
+                    <h3 style="color: #ffaa44; margin-bottom: 15px;">🎲 Critical Roll Sounds</h3>
+                    <p style="margin-bottom: 15px; opacity: 0.8;">Upload sounds to play when players roll natural 20 or natural 1:</p>
+                    
+                    <div style="margin-bottom: 20px; padding: 15px; background: rgba(44, 255, 68, 0.1); border: 2px solid #44ff44; border-radius: 5px;">
+                        <h4 style="color: #44ff44; margin-bottom: 10px;">✨ Natural 20 Sound</h4>
+                        <p style="font-size: 12px; opacity: 0.8; margin-bottom: 10px;">Played when anyone rolls a natural 20 (critical success):</p>
+                        <input type="file" id="nat20SoundFile" accept="audio/*" style="width: 100%; margin-bottom: 10px;">
+                        <div id="nat20SoundDisplay" style="margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 5px; font-size: 12px;">
+                            <div id="nat20SoundInfo" style="opacity: 0.7;">No sound configured</div>
+                            <audio id="nat20SoundPreview" controls style="width: 100%; margin-top: 5px; display: none;"></audio>
+                        </div>
+                        <button onclick="uploadNat20Sound()" style="width: 100%; margin-top: 10px; background: #44ff44; color: #000; font-weight: bold;">📤 Upload Nat 20 Sound</button>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px; padding: 15px; background: rgba(255, 68, 68, 0.1); border: 2px solid #ff4444; border-radius: 5px;">
+                        <h4 style="color: #ff4444; margin-bottom: 10px;">❌ Natural 1 Sound</h4>
+                        <p style="font-size: 12px; opacity: 0.8; margin-bottom: 10px;">Played when anyone rolls a natural 1 (critical failure):</p>
+                        <input type="file" id="nat1SoundFile" accept="audio/*" style="width: 100%; margin-bottom: 10px;">
+                        <div id="nat1SoundDisplay" style="margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 5px; font-size: 12px;">
+                            <div id="nat1SoundInfo" style="opacity: 0.7;">No sound configured</div>
+                            <audio id="nat1SoundPreview" controls style="width: 100%; margin-top: 5px; display: none;"></audio>
+                        </div>
+                        <button onclick="uploadNat1Sound()" style="width: 100%; margin-top: 10px; background: #ff4444; color: white; font-weight: bold;">📤 Upload Nat 1 Sound</button>
+                    </div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button onclick="closeModal('settingsModal')">Close</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Character Sheet Modal -->
         <div id="characterSheetModal" class="modal">
             <div class="modal-content large">
-                <h2 id="sheetCharacterName">Character Sheet</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #444;">
+                    <h2 id="sheetCharacterName" style="margin: 0;">Character Sheet</h2>
+                    <button id="openSheetInNewWindowBtn" onclick="openCharacterSheetInNewWindow()" style="background: #4a9eff; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;">🖥️ Open in New Window</button>
+                </div>
                 <div id="characterSheetContent" style="max-height: 60vh; overflow-y: auto;"></div>
                 <div class="modal-actions" style="gap: 10px;">
                     <button id="selectCharacterBtn" class="hidden" onclick="selectFromSheet()" style="background: #44ff44; color: #000; font-weight: bold;">✅ Select This Character</button>
