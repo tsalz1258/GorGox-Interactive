@@ -57,6 +57,7 @@
                             <button onclick="showCharacterManager()">👤 Characters</button>
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
                             <button onclick="showSaveLoadModal()" style="background: #4a9eff; color: white; font-weight: bold;">💾 Save/Load Game</button>
+                            <button onclick="showSoundBoard()" style="background: #aa44ff; color: white; font-weight: bold;">🔊 Sound Board</button>
                             <button onclick="showPlaceCharacter()">🎭 Place Character</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                             <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
@@ -400,6 +401,30 @@
                 <div id="placeCharacterList"></div>
                 <div class="modal-actions">
                     <button onclick="closeModal('placeCharacterModal')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sound Board Modal -->
+        <div id="soundBoardModal" class="modal">
+            <div class="modal-content large">
+                <h2>🔊 Sound Board</h2>
+                
+                <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #444;">
+                    <h3 style="color: #aa44ff; margin-bottom: 15px;">📤 Upload Sound</h3>
+                    <p style="margin-bottom: 10px; opacity: 0.8;">Upload audio files (MP3, WAV, OGG, M4A):</p>
+                    <input type="file" id="soundUploadFile" accept="audio/*" style="width: 100%; margin-bottom: 10px;">
+                    <button onclick="uploadSound()" style="width: 100%; background: #aa44ff;">📤 Upload Sound</button>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <h3 style="color: #aa44ff; margin-bottom: 15px;">🎵 Sound Library</h3>
+                    <p style="margin-bottom: 10px; opacity: 0.8;">Click a sound to play it for everyone:</p>
+                    <div id="soundsList" style="max-height: 400px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; padding: 10px; background: rgba(0,0,0,0.2);"></div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button onclick="closeModal('soundBoardModal')">Close</button>
                 </div>
             </div>
         </div>
