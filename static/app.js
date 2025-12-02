@@ -380,20 +380,50 @@ function handleServerMessage(message) {
             console.log('🎲 Ability check rolled:', message);
             const abilityName = message.ability.toUpperCase();
             const rollDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
-            addRollEntry(`🎲 ${message.character_name} rolled ${abilityName} check: ${rollDisplay} = ${message.total}`);
+            const isAbilityNat20 = message.roll === 20;
+            const isAbilityNat1 = message.roll === 1;
+            const abilityNatText = isAbilityNat20 ? ' ✨ NATURAL 20!' : (isAbilityNat1 ? ' ❌ NATURAL 1!' : '');
+            addRollEntry(`🎲 ${message.character_name} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
+            
+            // Play sounds for nat 20/1
+            if (isAbilityNat20) {
+                playNat20Sound();
+            } else if (isAbilityNat1) {
+                playNat1Sound();
+            }
             break;
             
         case 'SavingThrowRolled':
             console.log('🛡️ Saving throw rolled:', message);
             const saveName = message.ability.toUpperCase();
             const saveDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
-            addRollEntry(`🛡️ ${message.character_name} rolled ${saveName} save: ${saveDisplay} = ${message.total}`);
+            const isSaveNat20 = message.roll === 20;
+            const isSaveNat1 = message.roll === 1;
+            const saveNatText = isSaveNat20 ? ' ✨ NATURAL 20!' : (isSaveNat1 ? ' ❌ NATURAL 1!' : '');
+            addRollEntry(`🛡️ ${message.character_name} rolled ${saveName} save: ${saveDisplay} = ${message.total}${saveNatText}`, isSaveNat20, isSaveNat1);
+            
+            // Play sounds for nat 20/1
+            if (isSaveNat20) {
+                playNat20Sound();
+            } else if (isSaveNat1) {
+                playNat1Sound();
+            }
             break;
             
         case 'SkillRolled':
             console.log('🎯 Skill check rolled:', message);
             const skillDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
-            addRollEntry(`🎯 ${message.character_name} rolled ${message.skill}: ${skillDisplay} = ${message.total}`);
+            const isSkillNat20 = message.roll === 20;
+            const isSkillNat1 = message.roll === 1;
+            const skillNatText = isSkillNat20 ? ' ✨ NATURAL 20!' : (isSkillNat1 ? ' ❌ NATURAL 1!' : '');
+            addRollEntry(`🎯 ${message.character_name} rolled ${message.skill}: ${skillDisplay} = ${message.total}${skillNatText}`, isSkillNat20, isSkillNat1);
+            
+            // Play sounds for nat 20/1
+            if (isSkillNat20) {
+                playNat20Sound();
+            } else if (isSkillNat1) {
+                playNat1Sound();
+            }
             break;
             
         case 'AttackRolled':
@@ -401,8 +431,15 @@ function handleServerMessage(message) {
             const hitDisplay = `${message.to_hit_roll} ${message.to_hit_mod >= 0 ? '+' : ''}${message.to_hit_mod}`;
             const isCrit = message.to_hit_roll === 20;
             const isFail = message.to_hit_roll === 1;
-            const critText = isCrit ? ' 🎉 CRITICAL HIT!' : (isFail ? ' ❌ CRITICAL MISS!' : '');
-            addRollEntry(`⚔️ ${message.character_name} attacks with ${message.weapon}: To Hit ${hitDisplay} = ${message.to_hit_total} | Damage: ${message.damage} ${message.damage_type}${critText}`);
+            const critText = isCrit ? ' 🎉 CRITICAL HIT! ✨ NATURAL 20!' : (isFail ? ' ❌ CRITICAL MISS! NATURAL 1!' : '');
+            addRollEntry(`⚔️ ${message.character_name} attacks with ${message.weapon}: To Hit ${hitDisplay} = ${message.to_hit_total} | Damage: ${message.damage} ${message.damage_type}${critText}`, isCrit, isFail);
+            
+            // Play sounds for nat 20/1
+            if (isCrit) {
+                playNat20Sound();
+            } else if (isFail) {
+                playNat1Sound();
+            }
             break;
             
         case 'TokenUpdate':
@@ -745,7 +782,17 @@ function handleServerMessage(message) {
                 // Only add log entry if not already logged (to avoid duplicates from auto-roll)
                 // The auto-roll already logs it, so we skip here to avoid double logging
                 if (!message.silent) {
-                    addRollEntry(`🎲 ${participant.name} rolled ${rollWithoutBonus} + ${bonus} = ${message.initiative} for initiative`);
+                    const isInitiativeNat20 = rollWithoutBonus === 20;
+                    const isInitiativeNat1 = rollWithoutBonus === 1;
+                    const initiativeNatText = isInitiativeNat20 ? ' ✨ NATURAL 20!' : (isInitiativeNat1 ? ' ❌ NATURAL 1!' : '');
+                    addRollEntry(`🎲 ${participant.name} rolled ${rollWithoutBonus} + ${bonus} = ${message.initiative} for initiative${initiativeNatText}`, isInitiativeNat20, isInitiativeNat1);
+                    
+                    // Play sounds for nat 20/1
+                    if (isInitiativeNat20) {
+                        playNat20Sound();
+                    } else if (isInitiativeNat1) {
+                        playNat1Sound();
+                    }
                 }
             } else {
                 console.error('⚠️ Participant not found for entity:', message.entity_id);
@@ -1077,7 +1124,23 @@ function handleServerMessage(message) {
             
         case 'SoundPlayed':
             console.log('🔊 Sound received:', message.sound_name);
-            playSoundFromServer(message.sound_id, message.sound_name, message.sound_data, message.sound_type);
+            // Check if this is a critical roll sound (don't log it as a regular sound)
+            const isCriticalSound = message.sound_name === 'Natural 20!' || message.sound_name === 'Natural 1!';
+            if (!isCriticalSound) {
+                playSoundFromServer(message.sound_id, message.sound_name, message.sound_data, message.sound_type);
+            } else {
+                // Play critical roll sound silently (no log entry, just play)
+                try {
+                    const audio = new Audio(`data:audio/${message.sound_type};base64,${message.sound_data}`);
+                    audio.volume = 0.8;
+                    audio.play().catch(e => {
+                        console.warn('⚠️ Could not play critical roll sound:', e);
+                    });
+                    console.log('🎵 Playing critical roll sound:', message.sound_name);
+                } catch (e) {
+                    console.error('❌ Error playing critical roll sound:', e);
+                }
+            }
             break;
             
         case 'Error':
@@ -5541,18 +5604,77 @@ function closeModal(modalId) {
     document.getElementById(modalId).classList.remove('active');
 }
 
+// Helper function to check if a name belongs to a player character
+function isPlayerCharacter(name) {
+    if (!name) return false;
+    // Check if this name matches any character in the characters array
+    return characters.some(char => char.name === name);
+}
+
+// Helper function to format message text - bold player names
+function formatLogMessage(message) {
+    if (!message || !characters || characters.length === 0) return message;
+    
+    let formatted = message;
+    
+    // Sort characters by name length (longest first) to avoid partial matches
+    const sortedChars = [...characters].sort((a, b) => b.name.length - a.name.length);
+    
+    // Find all potential player names in the message and bold them
+    sortedChars.forEach(char => {
+        const name = char.name;
+        if (!name || name.trim() === '') return;
+        
+        // Escape special regex characters in the name
+        const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        
+        // Use word boundaries to avoid partial matches, but also handle cases where
+        // the name appears at the start or end of the message or after/before punctuation
+        // Match the name only if it's not already inside HTML tags
+        const regex = new RegExp(`(^|[^>])(${escapedName})(?![^<]*>)`, 'g');
+        
+        formatted = formatted.replace(regex, (match, before, nameMatch) => {
+            // Check if we've already formatted this name (avoid double formatting)
+            if (before.includes('<strong')) return match;
+            
+            return before + `<strong style="color: #4a9eff; font-weight: bold;">${nameMatch}</strong>`;
+        });
+    });
+    
+    return formatted;
+}
+
 function addLogEntry(message, type = 'info') {
     const log = document.getElementById('combatLog');
+    if (!log) {
+        console.error('❌ Combat log element not found!');
+        return;
+    }
+    
     const entry = document.createElement('div');
     entry.className = `log-entry ${type}`;
     const timestamp = new Date().toLocaleTimeString();
-    entry.textContent = `[${timestamp}] ${message}`;
+    
+    // Special styling for success type (nat 20) - green
+    let extraStyle = '';
+    if (type === 'success') {
+        extraStyle = 'background: linear-gradient(135deg, rgba(68, 255, 68, 0.25) 0%, rgba(34, 200, 34, 0.15) 100%); border-left: 4px solid #44ff44; color: #88ff88; font-weight: bold; box-shadow: 0 0 10px rgba(68, 255, 68, 0.3);';
+    }
+    
+    // Format the message to bold player names
+    const formattedMessage = formatLogMessage(message);
+    entry.innerHTML = `<span style="opacity: 0.6; font-size: 10px;">[${timestamp}]</span> ${formattedMessage}`;
+    
+    if (extraStyle) {
+        entry.style.cssText = (entry.style.cssText || '') + extraStyle;
+    }
+    
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;
 }
 
-// Add roll-specific log entry
-function addRollEntry(message) {
+// Add roll-specific log entry with support for nat 20/1 styling
+function addRollEntry(message, isNat20 = false, isNat1 = false) {
     console.log('🎲 Adding to rolls log:', message);
     
     const log = document.getElementById('rollsLog');
@@ -5563,16 +5685,29 @@ function addRollEntry(message) {
     
     const entry = document.createElement('div');
     entry.className = 'log-entry info';
-    entry.style.cssText = 'padding: 8px; margin: 4px 0; border-left: 3px solid #ffaa44; background: rgba(255, 170, 68, 0.15); border-radius: 3px;';
+    
+    // Special styling for nat 20 (green) and nat 1 (red)
+    if (isNat20) {
+        entry.style.cssText = 'padding: 8px; margin: 4px 0; border-left: 4px solid #44ff44; background: linear-gradient(135deg, rgba(68, 255, 68, 0.25) 0%, rgba(34, 200, 34, 0.15) 100%); border-radius: 3px; color: #88ff88; font-weight: bold; box-shadow: 0 0 10px rgba(68, 255, 68, 0.3);';
+    } else if (isNat1) {
+        entry.style.cssText = 'padding: 8px; margin: 4px 0; border-left: 4px solid #ff4444; background: linear-gradient(135deg, rgba(255, 68, 68, 0.25) 0%, rgba(200, 34, 34, 0.15) 100%); border-radius: 3px; color: #ff8888; font-weight: bold; box-shadow: 0 0 10px rgba(255, 68, 68, 0.3);';
+    } else {
+        entry.style.cssText = 'padding: 8px; margin: 4px 0; border-left: 3px solid #ffaa44; background: rgba(255, 170, 68, 0.15); border-radius: 3px;';
+    }
+    
     const timestamp = new Date().toLocaleTimeString();
-    entry.innerHTML = `<span style="opacity: 0.6; font-size: 10px;">[${timestamp}]</span> ${message}`;
+    
+    // Format the message to bold player names
+    const formattedMessage = formatLogMessage(message);
+    entry.innerHTML = `<span style="opacity: 0.6; font-size: 10px;">[${timestamp}]</span> ${formattedMessage}`;
+    
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;
     
     console.log('✅ Added to rolls log, total entries:', log.children.length);
     
-    // Also add to main combat log
-    addLogEntry(message, 'info');
+    // Also add to main combat log (will be formatted there too)
+    addLogEntry(message, isNat20 ? 'success' : (isNat1 ? 'damage' : 'info'));
 }
 
 function generateUUID() {
@@ -5786,8 +5921,8 @@ function showSpellTooltip(spellName, event) {
         console.log('Content element:', content);
         
         if (!tooltip || !content) {
-            console.error('❌ TOOLTIP ELEMENTS NOT FOUND!');
-            alert('Tooltip elements missing! Check HTML.');
+            console.warn('⚠️ TOOLTIP ELEMENTS NOT FOUND - Tooltip will not display');
+            // Don't show alert - just fail silently (tooltip is optional)
             return;
         }
         
@@ -5820,7 +5955,7 @@ function showSpellTooltip(spellName, event) {
         
     } catch (error) {
         console.error('❌ ERROR IN showSpellTooltip:', error);
-        alert('Error: ' + error.message);
+        // Don't show alert - just log the error (tooltip is optional)
     }
 }
 
@@ -5910,7 +6045,10 @@ async function fetchSpellDataAndDisplay(spellName, tooltip, content, event) {
 function hideSpellTooltip() {
     // Delay hiding to allow moving mouse to tooltip
     spellTooltipTimeout = setTimeout(() => {
-        document.getElementById('spellTooltip').style.display = 'none';
+        const tooltip = document.getElementById('spellTooltip');
+        if (tooltip) {
+            tooltip.style.display = 'none';
+        }
     }, 300);
 }
 
@@ -6158,18 +6296,64 @@ function rollAttack(weaponName, toHitMod, damageNotation, damageType, characterN
     const toHitRoll = Math.floor(Math.random() * 20) + 1;
     const toHitTotal = toHitRoll + toHitMod;
     
-    // Roll damage
-    const damageResult = rollDice(damageNotation);
-    
     // Check for critical hit
     const isCrit = toHitRoll === 20;
-    let damageDisplay = damageResult.breakdown;
+    
+    // Roll damage - on crit, roll all dice twice but modifier only once (D&D 5e rules)
+    let damageDisplay;
     
     if (isCrit) {
-        // Double the dice on crit (not the modifier)
-        const critResult = rollDice(damageNotation);
-        const totalCritDamage = damageResult.total + critResult.total - (damageNotation.match(/[+-]\d+/) ? parseInt(damageNotation.match(/[+-]\d+/)[0]) : 0);
-        damageDisplay = `${damageResult.breakdown} + ${critResult.breakdown} = ${totalCritDamage} CRIT!`;
+        // Parse the damage notation to separate dice from modifier
+        const flatMatch = damageNotation.match(/^(\d+)$/);
+        
+        if (flatMatch) {
+            // Flat damage (no dice) - just double it
+            const flatDamage = parseInt(flatMatch[1]);
+            damageDisplay = `${flatDamage} + ${flatDamage} = ${flatDamage * 2} CRIT!`;
+        } else {
+            const match = damageNotation.match(/(\d+)d(\d+)([+-]\d+)?/i);
+            if (!match) {
+                console.error('Invalid dice notation for crit:', damageNotation);
+                const damageResult = rollDice(damageNotation);
+                damageDisplay = damageResult.breakdown;
+            } else {
+                const numDice = parseInt(match[1]);
+                const diceSize = parseInt(match[2]);
+                const modifier = match[3] ? parseInt(match[3]) : 0;
+                
+                // Roll the dice twice (double the number of dice)
+                const firstRolls = [];
+                const secondRolls = [];
+                let diceTotal = 0;
+                
+                // First set of dice
+                for (let i = 0; i < numDice; i++) {
+                    const roll = Math.floor(Math.random() * diceSize) + 1;
+                    firstRolls.push(roll);
+                    diceTotal += roll;
+                }
+                
+                // Second set of dice (doubled)
+                for (let i = 0; i < numDice; i++) {
+                    const roll = Math.floor(Math.random() * diceSize) + 1;
+                    secondRolls.push(roll);
+                    diceTotal += roll;
+                }
+                
+                // Add modifier only once
+                const totalCritDamage = diceTotal + modifier;
+                
+                // Format breakdown: (1+2+3) + (4+5+6) + 1 = 22 CRIT!
+                const firstSet = firstRolls.join('+');
+                const secondSet = secondRolls.join('+');
+                const modifierText = modifier !== 0 ? (modifier >= 0 ? ` + ${modifier}` : ` ${modifier}`) : '';
+                damageDisplay = `(${firstSet}) + (${secondSet})${modifierText} = ${totalCritDamage} CRIT!`;
+            }
+        }
+    } else {
+        // Normal hit - roll damage normally
+        const damageResult = rollDice(damageNotation);
+        damageDisplay = damageResult.breakdown;
     }
     
     console.log(`   To Hit Roll: ${toHitRoll} + ${toHitMod} = ${toHitTotal}`);
@@ -6480,7 +6664,89 @@ function showCharacterSheet(char, isSelectionMode = false) {
     }
     
     renderCharacterSheetContent();
+    
+    // Show/hide the "Open in New Window" button (only for players viewing their own sheet)
+    const openBtn = document.getElementById('openSheetInNewWindowBtn');
+    if (openBtn) {
+        // Show button if this is the player's own character sheet (not selection mode)
+        openBtn.style.display = (!isSelectionMode && char && char.id === myCharacterId) ? 'block' : 'none';
+    }
+    
     document.getElementById('characterSheetModal').classList.add('active');
+}
+
+// Reference to the standalone character sheet window
+let standaloneCharacterSheetWindow = null;
+
+// Listen for messages from standalone character sheet window
+window.addEventListener('message', (event) => {
+    // Only accept messages from same origin
+    if (event.origin !== window.location.origin) return;
+    
+    if (event.data && event.data.type === 'characterSheetRoll') {
+        // Handle roll requests from standalone window
+        const { rollType, ...params } = event.data;
+        
+        console.log('📨 Received roll request from standalone window:', rollType, params);
+        
+        switch (rollType) {
+            case 'abilityCheck':
+                rollAbilityCheck(params.ability, params.modifier, params.characterName);
+                break;
+            case 'savingThrow':
+                rollSavingThrow(params.ability, params.modifier, params.characterName);
+                break;
+            case 'skill':
+                rollSkill(params.skillName, params.modifier, params.characterName);
+                break;
+            case 'attack':
+                rollAttack(params.weaponName, params.toHitMod, params.damageNotation, params.damageType, params.characterName);
+                break;
+        }
+    }
+});
+
+// Open character sheet in a new window for dual monitor setup
+function openCharacterSheetInNewWindow() {
+    if (!currentViewingCharacter) {
+        alert('No character sheet to open!');
+        return;
+    }
+    
+    // Render the HTML first
+    const char = currentViewingCharacter;
+    const charData = currentViewingCharacterData;
+    let html;
+    
+    if (charData) {
+        html = buildDetailedCharacterSheet(char, charData);
+    } else {
+        html = buildSimpleCharacterSheet(char);
+    }
+    
+    // Store character data and HTML in sessionStorage (accessible across windows)
+    const characterData = {
+        character: char,
+        characterData: charData,
+        fullData: currentViewingCharacterFullData,
+        html: html,
+        timestamp: Date.now()
+    };
+    
+    sessionStorage.setItem('characterSheetData', JSON.stringify(characterData));
+    
+    // Open new window with character sheet page
+    const newWindow = window.open('/static/character-sheet.html', 'CharacterSheet', 'width=1200,height=800,resizable=yes,scrollbars=yes');
+    
+    if (!newWindow) {
+        alert('⚠️ Pop-up blocked! Please allow pop-ups for this site to open the character sheet in a new window.');
+        return;
+    }
+    
+    // Store reference to the new window
+    standaloneCharacterSheetWindow = newWindow;
+    
+    console.log('✅ Opened character sheet in new window');
 }
 
 function renderCharacterSheetContent() {
@@ -6544,10 +6810,46 @@ function renderCharacterSheetContent() {
     } else {
         sheetTitleEl.textContent = getCharacterSheetTitle(char, charData);
     if (charData) {
-            contentEl.innerHTML = buildDetailedCharacterSheet(char, charData);
+            const html = buildDetailedCharacterSheet(char, charData);
+            contentEl.innerHTML = html;
+            
+            // Update sessionStorage for standalone window (if it exists)
+            updateStandaloneCharacterSheet(char, charData, html);
     } else {
-            contentEl.innerHTML = buildSimpleCharacterSheet(char);
+            const html = buildSimpleCharacterSheet(char);
+            contentEl.innerHTML = html;
+            
+            // Update sessionStorage for standalone window (if it exists)
+            updateStandaloneCharacterSheet(char, null, html);
         }
+    }
+}
+
+// Update standalone character sheet window if it exists
+function updateStandaloneCharacterSheet(char, charData, html) {
+    try {
+        const characterData = {
+            character: char,
+            characterData: charData,
+            fullData: currentViewingCharacterFullData,
+            html: html,
+            timestamp: Date.now()
+        };
+        sessionStorage.setItem('characterSheetData', JSON.stringify(characterData));
+        
+        // Also try to update the standalone window directly via postMessage if it's open
+        if (standaloneCharacterSheetWindow && !standaloneCharacterSheetWindow.closed) {
+            try {
+                standaloneCharacterSheetWindow.postMessage({
+                    type: 'characterSheetUpdate',
+                    characterData: characterData
+                }, window.location.origin);
+            } catch (e) {
+                console.warn('Could not send update to standalone window:', e);
+            }
+        }
+    } catch (e) {
+        console.warn('Could not update standalone character sheet:', e);
     }
 }
 
@@ -9040,6 +9342,329 @@ async function deleteSound(filename) {
     } catch (e) {
         console.error('❌ Error deleting sound:', e);
         alert('Error deleting sound: ' + e.message);
+    }
+}
+
+// ==================== SETTINGS & CRITICAL ROLL SOUNDS ====================
+
+let nat20SoundFile = null; // Store the sound filename
+let nat1SoundFile = null;
+
+// Load saved sound preferences from localStorage
+function loadCriticalRollSounds() {
+    nat20SoundFile = localStorage.getItem('nat20SoundFile') || null;
+    nat1SoundFile = localStorage.getItem('nat1SoundFile') || null;
+    
+    console.log('🔊 Loaded critical roll sounds - Nat 20:', nat20SoundFile, 'Nat 1:', nat1SoundFile);
+    
+    // Update display if settings modal is open
+    const settingsModal = document.getElementById('settingsModal');
+    if (settingsModal && settingsModal.classList.contains('active')) {
+        if (nat20SoundFile) {
+            updateNat20SoundDisplay(nat20SoundFile);
+        }
+        if (nat1SoundFile) {
+            updateNat1SoundDisplay(nat1SoundFile);
+        }
+    }
+}
+
+// Initialize on page load (after DOM is ready)
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(loadCriticalRollSounds, 1000);
+        });
+    } else {
+        // DOM already loaded
+        setTimeout(loadCriticalRollSounds, 1000);
+    }
+}
+
+function showSettings() {
+    if (!isDM) {
+        alert('Only the DM can access settings!');
+        return;
+    }
+    
+    const modal = document.getElementById('settingsModal');
+    if (!modal) {
+        console.error('❌ settingsModal not found!');
+        return;
+    }
+    
+    modal.classList.add('active');
+    loadCriticalRollSounds(); // Refresh display
+}
+
+function updateNat20SoundDisplay(filename) {
+    const infoDiv = document.getElementById('nat20SoundInfo');
+    const previewAudio = document.getElementById('nat20SoundPreview');
+    
+    if (infoDiv && filename) {
+        infoDiv.textContent = `Current: ${filename}`;
+        infoDiv.style.opacity = '1';
+        infoDiv.style.color = '#44ff44';
+        
+        if (previewAudio) {
+            previewAudio.src = `/static/sounds/${encodeURIComponent(filename)}`;
+            previewAudio.style.display = 'block';
+        }
+    }
+}
+
+function updateNat1SoundDisplay(filename) {
+    const infoDiv = document.getElementById('nat1SoundInfo');
+    const previewAudio = document.getElementById('nat1SoundPreview');
+    
+    if (infoDiv && filename) {
+        infoDiv.textContent = `Current: ${filename}`;
+        infoDiv.style.opacity = '1';
+        infoDiv.style.color = '#ff4444';
+        
+        if (previewAudio) {
+            previewAudio.src = `/static/sounds/${encodeURIComponent(filename)}`;
+            previewAudio.style.display = 'block';
+        }
+    }
+}
+
+async function uploadNat20Sound() {
+    if (!isDM) {
+        alert('Only the DM can upload sounds!');
+        return;
+    }
+    
+    const fileInput = document.getElementById('nat20SoundFile');
+    const file = fileInput?.files[0];
+    
+    if (!file) {
+        alert('Please select a sound file first!');
+        return;
+    }
+    
+    // Check file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+        alert('File too large! Maximum size is 5MB.');
+        return;
+    }
+    
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch('/api/sounds', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
+        
+        const result = await response.json();
+        const filename = result.filename || file.name;
+        
+        // Save to localStorage (for this client)
+        nat20SoundFile = filename;
+        localStorage.setItem('nat20SoundFile', filename);
+        
+        console.log('✅ Nat 20 sound uploaded:', filename);
+        updateNat20SoundDisplay(filename);
+        
+        // Clear file input
+        fileInput.value = '';
+        
+        alert(`✅ Natural 20 sound uploaded successfully!\n\n${filename}\n\nNote: This sound will play for all players when anyone rolls a natural 20!`);
+    } catch (e) {
+        console.error('❌ Error uploading nat 20 sound:', e);
+        alert('Error uploading sound: ' + e.message);
+    }
+}
+
+async function uploadNat1Sound() {
+    if (!isDM) {
+        alert('Only the DM can upload sounds!');
+        return;
+    }
+    
+    const fileInput = document.getElementById('nat1SoundFile');
+    const file = fileInput?.files[0];
+    
+    if (!file) {
+        alert('Please select a sound file first!');
+        return;
+    }
+    
+    // Check file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+        alert('File too large! Maximum size is 5MB.');
+        return;
+    }
+    
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch('/api/sounds', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
+        
+        const result = await response.json();
+        const filename = result.filename || file.name;
+        
+        // Save to localStorage (for this client)
+        nat1SoundFile = filename;
+        localStorage.setItem('nat1SoundFile', filename);
+        
+        console.log('✅ Nat 1 sound uploaded:', filename);
+        updateNat1SoundDisplay(filename);
+        
+        // Clear file input
+        fileInput.value = '';
+        
+        alert(`✅ Natural 1 sound uploaded successfully!\n\n${filename}\n\nNote: This sound will play for all players when anyone rolls a natural 1!`);
+    } catch (e) {
+        console.error('❌ Error uploading nat 1 sound:', e);
+        alert('Error uploading sound: ' + e.message);
+    }
+}
+
+// Play critical roll sounds - broadcasts to all clients if DM, or plays locally if player
+async function playNat20Sound() {
+    if (!nat20SoundFile) {
+        // Try to load from localStorage (in case it was set by another tab)
+        nat20SoundFile = localStorage.getItem('nat20SoundFile') || null;
+        if (!nat20SoundFile) return;
+    }
+    
+    // If DM, broadcast to all clients via WebSocket
+    if (isDM && ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            console.log('📤 DM broadcasting nat 20 sound to all clients:', nat20SoundFile);
+            
+            // Load sound file and convert to base64
+            const response = await fetch(`/static/sounds/${encodeURIComponent(nat20SoundFile)}`);
+            if (!response.ok) {
+                throw new Error(`Failed to load sound: ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            const reader = new FileReader();
+            
+            reader.onloadend = () => {
+                const base64 = reader.result.split(',')[1];
+                const soundType = nat20SoundFile.split('.').pop() || 'mp3';
+                
+                // Broadcast to all clients via WebSocket
+                sendMessage({
+                    type: 'PlaySound',
+                    sound_id: `nat20_${Date.now()}`,
+                    sound_name: 'Natural 20!',
+                    sound_data: base64,
+                    sound_type: soundType
+                });
+                
+                console.log('✅ Nat 20 sound broadcast sent');
+            };
+            
+            reader.readAsDataURL(blob);
+        } catch (e) {
+            console.error('❌ Error broadcasting nat 20 sound:', e);
+            // Fallback to local playback
+            playNat20SoundLocal();
+        }
+    } else {
+        // Player: play locally (if they have the filename)
+        playNat20SoundLocal();
+    }
+}
+
+// Local playback (for players or fallback)
+function playNat20SoundLocal() {
+    if (!nat20SoundFile) return;
+    
+    try {
+        const audio = new Audio(`/static/sounds/${encodeURIComponent(nat20SoundFile)}`);
+        audio.volume = 0.8;
+        audio.play().catch(e => {
+            console.warn('⚠️ Could not play nat 20 sound:', e);
+        });
+        console.log('🎵 Playing nat 20 sound locally:', nat20SoundFile);
+    } catch (e) {
+        console.error('❌ Error playing nat 20 sound:', e);
+    }
+}
+
+async function playNat1Sound() {
+    if (!nat1SoundFile) {
+        // Try to load from localStorage (in case it was set by another tab)
+        nat1SoundFile = localStorage.getItem('nat1SoundFile') || null;
+        if (!nat1SoundFile) return;
+    }
+    
+    // If DM, broadcast to all clients via WebSocket
+    if (isDM && ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            console.log('📤 DM broadcasting nat 1 sound to all clients:', nat1SoundFile);
+            
+            // Load sound file and convert to base64
+            const response = await fetch(`/static/sounds/${encodeURIComponent(nat1SoundFile)}`);
+            if (!response.ok) {
+                throw new Error(`Failed to load sound: ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            const reader = new FileReader();
+            
+            reader.onloadend = () => {
+                const base64 = reader.result.split(',')[1];
+                const soundType = nat1SoundFile.split('.').pop() || 'mp3';
+                
+                // Broadcast to all clients via WebSocket
+                sendMessage({
+                    type: 'PlaySound',
+                    sound_id: `nat1_${Date.now()}`,
+                    sound_name: 'Natural 1!',
+                    sound_data: base64,
+                    sound_type: soundType
+                });
+                
+                console.log('✅ Nat 1 sound broadcast sent');
+            };
+            
+            reader.readAsDataURL(blob);
+        } catch (e) {
+            console.error('❌ Error broadcasting nat 1 sound:', e);
+            // Fallback to local playback
+            playNat1SoundLocal();
+        }
+    } else {
+        // Player: play locally (if they have the filename)
+        playNat1SoundLocal();
+    }
+}
+
+// Local playback (for players or fallback)
+function playNat1SoundLocal() {
+    if (!nat1SoundFile) return;
+    
+    try {
+        const audio = new Audio(`/static/sounds/${encodeURIComponent(nat1SoundFile)}`);
+        audio.volume = 0.8;
+        audio.play().catch(e => {
+            console.warn('⚠️ Could not play nat 1 sound:', e);
+        });
+        console.log('🎵 Playing nat 1 sound locally:', nat1SoundFile);
+    } catch (e) {
+        console.error('❌ Error playing nat 1 sound:', e);
     }
 }
 

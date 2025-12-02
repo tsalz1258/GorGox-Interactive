@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Character Sheet - Gorgox Interactive</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .character-sheet-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #444;
+        }
+        .header h1 {
+            margin: 0;
+            color: #4a9eff;
+        }
+        .refresh-btn {
+            background: #4a9eff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .refresh-btn:hover {
+            background: #3a8eef;
+        }
+        #characterSheetContent {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 5px;
+            padding: 20px;
+        }
+        .error-message {
+            text-align: center;
+            padding: 40px;
+            color: #ff4444;
+            font-size: 18px;
+        }
+        .loading-message {
+            text-align: center;
+            padding: 40px;
+            color: #ffaa44;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="character-sheet-container">
+        <div class="header">
+            <h1 id="sheetTitle">Character Sheet</h1>
+            <button class="refresh-btn" onclick="refreshCharacterSheet()">🔄 Refresh</button>
+        </div>
+        <div id="characterSheetContent">
+            <div class="loading-message">Loading character sheet...</div>
+        </div>
+    </div>
+
+    <!-- Spell Tooltip (needed for spell/ability tooltips) -->
+    <div id="spellTooltip" onmouseover="keepSpellTooltip()" onmouseout="hideSpellTooltip()" style="
+        display: none; 
+        position: fixed; 
+        background: linear-gradient(135deg, #2a1a4a 0%, #1a0a2e 100%); 
+        border: 2px solid #aa88ff; 
+        border-radius: 8px; 
+        padding: 15px; 
+        max-width: 400px; 
+        min-width: 250px;
+        z-index: 99999; 
+        box-shadow: 0 8px 32px rgba(170,136,255,0.5); 
+        color: #fff; 
+        font-size: 13px; 
+        line-height: 1.6;
+        pointer-events: auto;">
+        <div id="spellTooltipContent">Loading...</div>
+        <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
+    </div>
+
+    <script>
+        // CRITICAL: Define roll functions FIRST (before any HTML is loaded)
+        // These functions send roll requests to the parent window via postMessage
+        // The parent window then executes the actual roll via WebSocket
+        
+        // Send roll request to parent window
+        function sendRollToParent(rollType, params) {
+            const parent = window.opener;
+            if (parent && parent !== window && !parent.closed) {
+                parent.postMessage({
+                    type: 'characterSheetRoll',
+                    rollType: rollType,
+                    ...params
+                }, window.location.origin);
+                console.log('📤 Sent roll request to parent window:', rollType, params);
+                return true;
+            } else {
+                console.warn('⚠️ Parent window not available, cannot send roll request');
+                alert('⚠️ Cannot roll dice: Parent game window is not available. Please keep the main game window open.');
+                return false;
+            }
+        }
+
+        // Define roll functions globally - these will be called by onclick handlers
+        window.rollAbilityCheck = function(ability, modifier, characterName) {
+            sendRollToParent('abilityCheck', { ability, modifier, characterName });
+        };
+
+        window.rollSavingThrow = function(ability, modifier, characterName) {
+            sendRollToParent('savingThrow', { ability, modifier, characterName });
+        };
+
+        window.rollSkill = function(skillName, modifier, characterName) {
+            sendRollToParent('skill', { skillName, modifier, characterName });
+        };
+
+        window.rollAttack = function(weaponName, toHitMod, damageNotation, damageType, characterName) {
+            sendRollToParent('attack', { weaponName, toHitMod, damageNotation, damageType, characterName });
+        };
+
+        console.log('✅ Roll functions defined for standalone character sheet');
+    </script>
+    <script src="/static/app.js"></script>
+    <script>
+        // Character sheet rendering functions (simplified version for standalone page)
+        let characterData = null;
+        let characterFullData = null;
+        let lastTimestamp = 0;
+
+        // Re-define roll functions after app.js loads to ensure they send to parent
+        // (app.js might override them, so we override again)
+        setTimeout(() => {
+            window.rollAbilityCheck = function(ability, modifier, characterName) {
+                const parent = window.opener;
+                if (parent && !parent.closed) {
+                    parent.postMessage({
+                        type: 'characterSheetRoll',
+                        rollType: 'abilityCheck',
+                        ability: ability,
+                        modifier: modifier,
+                        characterName: characterName
+                    }, window.location.origin);
+                    console.log('📤 Sent ability check to parent:', ability);
+                } else {
+                    alert('⚠️ Cannot roll: Parent game window is not available.');
+                }
+            };
+
+            window.rollSavingThrow = function(ability, modifier, characterName) {
+                const parent = window.opener;
+                if (parent && !parent.closed) {
+                    parent.postMessage({
+                        type: 'characterSheetRoll',
+                        rollType: 'savingThrow',
+                        ability: ability,
+                        modifier: modifier,
+                        characterName: characterName
+                    }, window.location.origin);
+                    console.log('📤 Sent saving throw to parent:', ability);
+                } else {
+                    alert('⚠️ Cannot roll: Parent game window is not available.');
+                }
+            };
+
+            window.rollSkill = function(skillName, modifier, characterName) {
+                const parent = window.opener;
+                if (parent && !parent.closed) {
+                    parent.postMessage({
+                        type: 'characterSheetRoll',
+                        rollType: 'skill',
+                        skillName: skillName,
+                        modifier: modifier,
+                        characterName: characterName
+                    }, window.location.origin);
+                    console.log('📤 Sent skill check to parent:', skillName);
+                } else {
+                    alert('⚠️ Cannot roll: Parent game window is not available.');
+                }
+            };
+
+            window.rollAttack = function(weaponName, toHitMod, damageNotation, damageType, characterName) {
+                const parent = window.opener;
+                if (parent && !parent.closed) {
+                    parent.postMessage({
+                        type: 'characterSheetRoll',
+                        rollType: 'attack',
+                        weaponName: weaponName,
+                        toHitMod: toHitMod,
+                        damageNotation: damageNotation,
+                        damageType: damageType,
+                        characterName: characterName
+                    }, window.location.origin);
+                    console.log('📤 Sent attack to parent:', weaponName);
+                } else {
+                    alert('⚠️ Cannot roll: Parent game window is not available.');
+                }
+            };
+            
+            console.log('✅ Roll functions re-defined for standalone window');
+        }, 100);
+
+        function loadCharacterSheet() {
+            try {
+                const stored = sessionStorage.getItem('characterSheetData');
+                if (!stored) {
+                    document.getElementById('characterSheetContent').innerHTML = 
+                        '<div class="error-message">❌ No character data found. Please open the character sheet from the main game window.</div>';
+                    return;
+                }
+
+                const data = JSON.parse(stored);
+                characterData = data.character;
+                characterFullData = data.fullData || data.characterData;
+
+                if (!characterData) {
+                    document.getElementById('characterSheetContent').innerHTML = 
+                        '<div class="error-message">❌ Invalid character data.</div>';
+                    return;
+                }
+
+                // Set title
+                document.getElementById('sheetTitle').textContent = `${characterData.name} - Character Sheet`;
+
+                // If HTML is already rendered, use it directly (preferred method)
+                if (data.html) {
+                    document.getElementById('characterSheetContent').innerHTML = data.html;
+                    lastTimestamp = data.timestamp || 0;
+                } else {
+                    // Fallback: try to render using functions from app.js
+                    renderStandaloneCharacterSheet();
+                }
+            } catch (e) {
+                console.error('Error loading character sheet:', e);
+                document.getElementById('characterSheetContent').innerHTML = 
+                    '<div class="error-message">❌ Error loading character sheet: ' + e.message + '</div>';
+            }
+        }
+
+        function renderStandaloneCharacterSheet() {
+            const char = characterData;
+            const charData = characterFullData;
+
+            if (!char) {
+                document.getElementById('characterSheetContent').innerHTML = 
+                    '<div class="error-message">❌ No character data available.</div>';
+                return;
+            }
+
+            // Try to use build functions from app.js if available
+            if (typeof buildDetailedCharacterSheet === 'function' && charData) {
+                const html = buildDetailedCharacterSheet(char, charData);
+                document.getElementById('characterSheetContent').innerHTML = html;
+            } else if (typeof buildSimpleCharacterSheet === 'function') {
+                const html = buildSimpleCharacterSheet(char);
+                document.getElementById('characterSheetContent').innerHTML = html;
+            } else {
+                // Ultimate fallback: simple display
+                renderSimpleCharacterSheet();
+            }
+        }
+
+        function renderSimpleCharacterSheet() {
+            const char = characterData;
+
+            if (!char) return;
+
+            let html = `
+                <div style="background: rgba(0, 0, 0, 0.3); padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+                    <h2 style="color: #4a9eff; margin-top: 0;">${escapeHtml(char.name || 'Unknown')}</h2>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                        <div><strong>Class:</strong> ${escapeHtml(char.class || 'N/A')}</div>
+                        <div><strong>Level:</strong> ${char.level || 0}</div>
+                        <div><strong>HP:</strong> ${char.current_hp || 0} / ${char.max_hp || 0}</div>
+                        <div><strong>AC:</strong> ${char.armor_class || 0}</div>
+                    </div>
+                </div>
+                <div style="color: #ffaa44; text-align: center; padding: 20px;">
+                    ⚠️ Full character sheet rendering requires the main game window.<br>
+                    Please keep the main game window open and refresh this page to see updates.
+                </div>
+            `;
+
+            document.getElementById('characterSheetContent').innerHTML = html;
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function refreshCharacterSheet() {
+            // Reload from sessionStorage (parent window should update it)
+            loadCharacterSheet();
+        }
+
+        // Listen for messages from parent window
+        window.addEventListener('message', (event) => {
+            // Only accept messages from same origin
+            if (event.origin !== window.location.origin) return;
+            
+            if (event.data && event.data.type === 'characterSheetUpdate') {
+                // Update character sheet data
+                const data = event.data.characterData;
+                if (data) {
+                    sessionStorage.setItem('characterSheetData', JSON.stringify(data));
+                    loadCharacterSheet();
+                }
+            }
+        });
+
+        // Load on page load (after app.js is loaded)
+        window.addEventListener('load', () => {
+            // Wait a bit for app.js to fully load
+            setTimeout(() => {
+                loadCharacterSheet();
+            }, 100);
+        });
+
+        // Poll for updates every 2 seconds (since storage events don't work for same-origin)
+        setInterval(() => {
+            const stored = sessionStorage.getItem('characterSheetData');
+            if (stored) {
+                try {
+                    const data = JSON.parse(stored);
+                    // Refresh if timestamp changed (meaning the sheet was updated)
+                    if (data.timestamp && data.timestamp !== lastTimestamp) {
+                        lastTimestamp = data.timestamp;
+                        loadCharacterSheet();
+                    }
+                } catch (e) {
+                    // Ignore parse errors
+                }
+            }
+        }, 2000);
+    </script>
+</body>
+</html>
