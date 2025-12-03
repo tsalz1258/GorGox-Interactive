@@ -1,0 +1,17 @@
+# Discord Bot Configuration
+DISCORD_BOT_TOKEN=your_bot_token_here
+
+# Game Server Configuration
+GAME_SERVER_URL=ws://localhost:3000/ws
+
+# Optional: Specific channels to monitor
+# Leave empty to monitor all voice channels (bot will auto-join when users join)
+# To set a specific channel: Get the channel ID by right-clicking the voice channel in Discord
+# (with Developer Mode enabled) and selecting "Copy Channel ID"
+VOICE_CHANNEL_ID=1228504528626647132
+TEXT_CHANNEL_ID=
+
+# Highlight Settings
+HIGHLIGHT_DURATION=3000
+HIGHLIGHT_COLOR=#4a9eff
+

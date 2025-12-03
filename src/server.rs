@@ -364,6 +364,112 @@ async fn handle_client_message(
             broadcast_message(clients, &clear_measurements).await;
         }
         
+        // Ping location - broadcast to all clients
+        ClientMessage::PingLocation { x, y, player_name } => {
+            let ping = ServerMessage::PingLocation { x, y, player_name };
+            broadcast_message(clients, &ping).await;
+        }
+        
+        // Discord integration - highlight character
+        ClientMessage::HighlightCharacter { character_id, discord_user_id, discord_username, duration } => {
+            info!("📥 Received HighlightCharacter from Discord bot: character_id={}, discord_user={} ({})", 
+                character_id, discord_username, discord_user_id);
+            let highlight = ServerMessage::HighlightCharacter {
+                character_id,
+                discord_user_id,
+                discord_username,
+                duration
+            };
+            info!("📤 Broadcasting HighlightCharacter to all clients");
+            broadcast_message(clients, &highlight).await;
+        }
+        
+        // Discord account linking - save to file for bot
+        ClientMessage::LinkDiscordAccount { character_id, discord_user_id, character_name } => {
+            // Save link to discord_links.json file (in discord-bot folder)
+            use std::path::Path;
+            use tokio::fs;
+            
+            let links_file = Path::new("discord-bot").join("discord_links.json");
+            
+            info!("📥 Received LinkDiscordAccount request: discord_user_id={}, character_id={}, character_name={}", 
+                discord_user_id, character_id, character_name);
+            info!("📁 Saving to: {}", links_file.display());
+            
+            // Ensure discord-bot directory exists
+            if let Some(parent) = links_file.parent() {
+                if let Err(e) = fs::create_dir_all(parent).await {
+                    warn!("⚠️ Failed to create discord-bot directory: {}", e);
+                }
+            }
+            
+            // Load existing links
+            let mut links: std::collections::HashMap<String, String> = if links_file.exists() {
+                match fs::read_to_string(&links_file).await {
+                    Ok(content) => {
+                        match serde_json::from_str(&content) {
+                            Ok(parsed) => {
+                                info!("✅ Loaded {} existing Discord link(s) from file", parsed.len());
+                                parsed
+                            }
+                            Err(e) => {
+                                warn!("⚠️ Failed to parse existing discord_links.json: {}. Starting fresh.", e);
+                                std::collections::HashMap::new()
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("⚠️ Failed to read existing discord_links.json: {}. Starting fresh.", e);
+                        std::collections::HashMap::new()
+                    }
+                }
+            } else {
+                info!("ℹ️ discord_links.json does not exist yet, creating new file");
+                std::collections::HashMap::new()
+            };
+            
+            // Update with new link
+            let old_character_id = links.insert(discord_user_id.clone(), character_id.clone());
+            if let Some(old_id) = old_character_id {
+                info!("🔄 Updated existing link: {} was linked to {}, now linked to {}", 
+                    discord_user_id, old_id, character_id);
+            } else {
+                info!("➕ Added new link: {} -> {}", discord_user_id, character_id);
+            }
+            
+            // Save back to file
+            match serde_json::to_string_pretty(&links) {
+                Ok(json) => {
+                    match fs::write(&links_file, json).await {
+                        Ok(_) => {
+                            info!("✅ Successfully saved Discord link to {}: {} -> {} ({})", 
+                                links_file.display(), discord_user_id, character_id, character_name);
+                            info!("📊 Total links in file: {}", links.len());
+                            
+                            // Verify file was written by reading it back
+                            if let Ok(verify_content) = fs::read_to_string(&links_file).await {
+                                if let Ok(verify_links) = serde_json::from_str::<std::collections::HashMap<String, String>>(&verify_content) {
+                                    if verify_links.get(&discord_user_id) == Some(&character_id) {
+                                        info!("✅ Verified: Link successfully saved and verified in file");
+                                    } else {
+                                        warn!("⚠️ Verification failed: Link not found in saved file!");
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("❌ Failed to save Discord link to file: {}", e);
+                            error!("   File path: {}", links_file.display());
+                            error!("   Error details: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("❌ Failed to serialize Discord links to JSON: {}", e);
+                }
+            }
+        }
+        
         // Combat handlers
         ClientMessage::StartCombat => {
             let mut gs = game_state.write().await;

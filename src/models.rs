@@ -157,6 +157,15 @@ pub enum ClientMessage {
     MeasurementShapeAdded { shape: serde_json::Value },
     ClearMeasurements,
     
+    // Ping location
+    PingLocation { x: f32, y: f32, player_name: String },
+    
+    // Discord integration - highlight character when Discord user speaks
+    HighlightCharacter { character_id: String, discord_user_id: String, discord_username: String, duration: u32 },
+    
+    // Discord account linking - sync link from game to bot
+    LinkDiscordAccount { character_id: String, discord_user_id: String, character_name: String },
+    
     // Ability checks
     RollAbilityCheck { character_name: String, ability: String, roll: i32, modifier: i32, total: i32 },
     RollSavingThrow { character_name: String, ability: String, roll: i32, modifier: i32, total: i32 },
@@ -231,6 +240,12 @@ pub enum ServerMessage {
     // Measurement shapes (cone, circle, etc.)
     MeasurementShapeAdded { shape: serde_json::Value },
     ClearMeasurements,
+    
+    // Ping location
+    PingLocation { x: f32, y: f32, player_name: String },
+    
+    // Discord integration - highlight character when Discord user speaks
+    HighlightCharacter { character_id: String, discord_user_id: String, discord_username: String, duration: u32 },
     
     // Ability checks
     AbilityCheckRolled { character_name: String, ability: String, roll: i32, modifier: i32, total: i32 },

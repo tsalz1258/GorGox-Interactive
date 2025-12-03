@@ -1,6 +1,5 @@
 use sqlx::SqlitePool;
 use anyhow::Result;
-use sqlx::Row;
 
 pub type Database = SqlitePool;
 

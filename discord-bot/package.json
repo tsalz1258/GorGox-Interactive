@@ -1,0 +1,30 @@
+{
+  "name": "gorgox-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot integration for GorGox Interactive D&D game",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "dnd",
+    "gorgox"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@discordjs/voice": "^0.16.1",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.1",
+    "libsodium-wrappers": "^0.7.15",
+    "sodium-native": "^5.0.10",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

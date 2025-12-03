@@ -53,6 +53,14 @@ let circleRadius = 25; // Default circle radius in feet
 let currentPlacementShape = null; // Shape being placed (cone or circle)
 let conePlacementState = null; // Track cone placement: {startX, startY} or null
 
+// Ping system
+let activePings = []; // Array of active pings: [{x, y, timestamp, playerName, id}]
+let contextMenuVisible = false;
+let contextMenuPosition = { x: 0, y: 0 };
+
+// Character highlighting system (for Discord integration)
+let highlightedTokens = new Map(); // Map of token_id -> {timestamp, duration, color, discordUsername}
+
 const syncedCharacterIds = new Set();
 let techPowersCache = {};
 let techPowersLoaded = false;
@@ -389,6 +397,17 @@ function handleServerMessage(message) {
             // Add measurement shape from another player
             if (message.shape) {
                 console.log('📏 Measurement shape received:', message.shape);
+                
+                // Remove existing shapes of the same type before adding new one
+                // This ensures only one ruler/cone/circle exists at a time for all players
+                if (message.shape.type === 'ruler') {
+                    measurementShapes = measurementShapes.filter(shape => shape.type !== 'ruler');
+                } else if (message.shape.type === 'cone') {
+                    measurementShapes = measurementShapes.filter(shape => shape.type !== 'cone');
+                } else if (message.shape.type === 'circle') {
+                    measurementShapes = measurementShapes.filter(shape => shape.type !== 'circle');
+                }
+                
                 measurementShapes.push(message.shape);
                 renderCanvas();
                 console.log('📏 Measurement shape added. Total shapes:', measurementShapes.length);
@@ -402,6 +421,59 @@ function handleServerMessage(message) {
             rulerEnd = null;
             renderCanvas();
             console.log('🗑️ All measurements cleared');
+            break;
+            
+        case 'PingLocation':
+            // Add ping from another player
+            if (message.x !== undefined && message.y !== undefined) {
+                const pingId = 'ping_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                const ping = {
+                    id: pingId,
+                    x: message.x,
+                    y: message.y,
+                    timestamp: Date.now(),
+                    playerName: message.player_name || 'Unknown'
+                };
+                activePings.push(ping);
+                renderCanvas();
+                
+                // Remove ping after 3 seconds
+                setTimeout(() => {
+                    activePings = activePings.filter(p => p.id !== pingId);
+                    renderCanvas();
+                }, 3000);
+                
+                console.log(`📍 Ping received from ${ping.playerName}`);
+            }
+            break;
+            
+        case 'HighlightCharacter':
+            // Highlight a character token when Discord user speaks
+            console.log('📥 Received HighlightCharacter message:', message);
+            if (message.character_id) {
+                console.log(`🔍 Looking for tokens with entity_id: ${message.character_id}`);
+                console.log(`📊 Current tokens on map:`, tokens.map(t => ({ 
+                    id: t.id, 
+                    entity_id: t.entity_id, 
+                    entity_type: t.entity_type,
+                    x: t.x,
+                    y: t.y
+                })));
+                
+                // Also log all characters to help debug ID mismatches
+                if (characters && characters.length > 0) {
+                    console.log(`📋 Available characters:`, characters.map(c => ({ 
+                        id: c.id, 
+                        name: c.name 
+                    })));
+                }
+                
+                highlightCharacterToken(message.character_id, message.discord_username || 'Discord User', message.duration || 3000);
+                console.log(`✨ Highlighting character ${message.character_id} (Discord: ${message.discord_username})`);
+            } else {
+                console.warn('⚠️ HighlightCharacter message missing character_id');
+                console.warn('   Full message:', JSON.stringify(message, null, 2));
+            }
             break;
             
         case 'AbilityCheckRolled':
@@ -1359,10 +1431,21 @@ function setupCanvas() {
     canvas.addEventListener('mouseup', onCanvasMouseUp);
     canvas.addEventListener('wheel', onCanvasWheel);
     
+    // Right-click context menu - MUST be added for all users
+    canvas.addEventListener('contextmenu', onCanvasRightClick);
+    console.log('✅ Context menu event listener added to canvas');
+    
     // Add double-click handler for ruler tool
     canvas.addEventListener('dblclick', (e) => {
         if (rulerActive) {
             toggleRulerTool(); // Deactivate on double-click
+        }
+    });
+    
+    // Close context menu when clicking elsewhere
+    document.addEventListener('click', (e) => {
+        if (contextMenuVisible && !e.target.closest('#contextMenu')) {
+            closeContextMenu();
         }
     });
     
@@ -1446,7 +1529,277 @@ function renderCanvas() {
         }
     }
     
+    // Draw active pings
+    drawPings();
+    
+    // Update highlighted tokens (remove expired ones)
+    updateHighlightedTokens();
+    
     ctx.restore();
+}
+
+// Update highlighted tokens and remove expired ones
+// Discord Link Functions
+function openDiscordLinkModal() {
+    console.log('🔗 openDiscordLinkModal called');
+    const modal = document.getElementById('discordLinkModal');
+    if (!modal) {
+        console.error('❌ discordLinkModal not found in DOM!');
+        alert('Discord link modal not found. Please refresh the page.');
+        return;
+    }
+    
+    const char = currentViewingCharacter;
+    if (!char) {
+        console.warn('⚠️ No character currently being viewed');
+        alert('No character selected. Please open a character sheet first.');
+        return;
+    }
+    
+    console.log('✅ Opening Discord link modal for character:', char.name, char.id);
+    
+    // Load current Discord link from localStorage
+    const linkKey = `discord_link_${char.id}`;
+    const currentLink = localStorage.getItem(linkKey);
+    
+    const input = document.getElementById('discordUserIdInput');
+    const statusDiv = document.getElementById('discordLinkStatus');
+    const currentLinkDiv = document.getElementById('currentDiscordLink');
+    const currentIdDisplay = document.getElementById('currentDiscordIdDisplay');
+    const removeBtn = document.getElementById('removeDiscordLinkBtn');
+    
+    // Clear input and status
+    if (input) input.value = '';
+    if (statusDiv) {
+        statusDiv.style.display = 'none';
+        statusDiv.textContent = '';
+    }
+    
+    // Show current link if exists
+    if (currentLink) {
+        if (currentLinkDiv) {
+            currentLinkDiv.style.display = 'block';
+            if (currentIdDisplay) currentIdDisplay.textContent = currentLink;
+        }
+        if (removeBtn) removeBtn.style.display = 'inline-block';
+        if (input) input.value = currentLink;
+    } else {
+        if (currentLinkDiv) currentLinkDiv.style.display = 'none';
+        if (removeBtn) removeBtn.style.display = 'none';
+    }
+    
+    modal.classList.add('active');
+}
+
+function saveDiscordLink() {
+    const char = currentViewingCharacter;
+    if (!char) {
+        alert('No character selected');
+        return;
+    }
+    
+    const input = document.getElementById('discordUserIdInput');
+    const statusDiv = document.getElementById('discordLinkStatus');
+    
+    if (!input || !statusDiv) return;
+    
+    const discordUserId = input.value.trim();
+    
+    // Validate Discord User ID (should be numeric, 17-19 digits)
+    if (!discordUserId) {
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = 'rgba(255, 68, 68, 0.1)';
+        statusDiv.style.borderLeft = '4px solid #ff4444';
+        statusDiv.style.color = '#ff4444';
+        statusDiv.innerHTML = '<strong>❌ Error:</strong> Please enter your Discord User ID';
+        return;
+    }
+    
+    if (!/^\d{17,19}$/.test(discordUserId)) {
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = 'rgba(255, 68, 68, 0.1)';
+        statusDiv.style.borderLeft = '4px solid #ff4444';
+        statusDiv.style.color = '#ff4444';
+        statusDiv.innerHTML = '<strong>❌ Invalid format:</strong> Discord User ID should be a 17-19 digit number';
+        return;
+    }
+    
+    // Save to localStorage
+    const linkKey = `discord_link_${char.id}`;
+    localStorage.setItem(linkKey, discordUserId);
+    
+    // Also save in a central map for easy lookup
+    let discordLinks = {};
+    try {
+        const stored = localStorage.getItem('discord_links_map');
+        if (stored) discordLinks = JSON.parse(stored);
+    } catch (e) {
+        console.error('Error loading discord links map:', e);
+    }
+    
+    discordLinks[discordUserId] = char.id;
+    localStorage.setItem('discord_links_map', JSON.stringify(discordLinks));
+    
+    // Send link to server so Discord bot can use it
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const linkMessage = {
+            type: 'LinkDiscordAccount',
+            character_id: char.id,
+            discord_user_id: discordUserId,
+            character_name: char.name
+        };
+        sendMessage(linkMessage);
+        console.log('📤 Sent Discord link to server for bot sync:', linkMessage);
+        console.log('   💡 Check game server console for confirmation that file was saved');
+    } else {
+        console.error('❌ WebSocket not connected! Cannot send link to server.');
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = 'rgba(255, 68, 68, 0.1)';
+        statusDiv.style.borderLeft = '4px solid #ff4444';
+        statusDiv.style.color = '#ff4444';
+        statusDiv.innerHTML = '<strong>⚠️ Warning:</strong> WebSocket not connected. Link saved locally but not synced to server. Please refresh the page and try again.';
+        return;
+    }
+    
+    // Show success message
+    statusDiv.style.display = 'block';
+    statusDiv.style.background = 'rgba(68, 255, 68, 0.1)';
+    statusDiv.style.borderLeft = '4px solid #44ff44';
+    statusDiv.style.color = '#44ff44';
+    statusDiv.innerHTML = '<strong>✅ Success!</strong> Discord account linked. Your token will highlight when you speak in Discord voice channels.';
+    
+    // Update UI
+    const currentLinkDiv = document.getElementById('currentDiscordLink');
+    const currentIdDisplay = document.getElementById('currentDiscordIdDisplay');
+    const removeBtn = document.getElementById('removeDiscordLinkBtn');
+    
+    if (currentLinkDiv) {
+        currentLinkDiv.style.display = 'block';
+        if (currentIdDisplay) currentIdDisplay.textContent = discordUserId;
+    }
+    if (removeBtn) removeBtn.style.display = 'inline-block';
+    
+    console.log(`🔗 Linked Discord User ID ${discordUserId} to character ${char.id} (${char.name})`);
+}
+
+function removeDiscordLink() {
+    const char = currentViewingCharacter;
+    if (!char) {
+        alert('No character selected');
+        return;
+    }
+    
+    const linkKey = `discord_link_${char.id}`;
+    const discordUserId = localStorage.getItem(linkKey);
+    
+    if (discordUserId) {
+        // Remove from character-specific storage
+        localStorage.removeItem(linkKey);
+        
+        // Remove from central map
+        try {
+            const stored = localStorage.getItem('discord_links_map');
+            if (stored) {
+                const discordLinks = JSON.parse(stored);
+                delete discordLinks[discordUserId];
+                localStorage.setItem('discord_links_map', JSON.stringify(discordLinks));
+            }
+        } catch (e) {
+            console.error('Error updating discord links map:', e);
+        }
+        
+        console.log(`🔓 Removed Discord link for character ${char.id} (${char.name})`);
+    }
+    
+    // Update UI
+    const input = document.getElementById('discordUserIdInput');
+    const statusDiv = document.getElementById('discordLinkStatus');
+    const currentLinkDiv = document.getElementById('currentDiscordLink');
+    const removeBtn = document.getElementById('removeDiscordLinkBtn');
+    
+    if (input) input.value = '';
+    if (statusDiv) {
+        statusDiv.style.display = 'none';
+        statusDiv.textContent = '';
+    }
+    if (currentLinkDiv) currentLinkDiv.style.display = 'none';
+    if (removeBtn) removeBtn.style.display = 'none';
+}
+
+// Get character ID from Discord User ID (helper for Discord bot integration)
+function getCharacterIdFromDiscordUserId(discordUserId) {
+    try {
+        const stored = localStorage.getItem('discord_links_map');
+        if (stored) {
+            const discordLinks = JSON.parse(stored);
+            return discordLinks[discordUserId] || null;
+        }
+    } catch (e) {
+        console.error('Error loading discord links map:', e);
+    }
+    return null;
+}
+
+function updateHighlightedTokens() {
+    const now = Date.now();
+    for (const [tokenId, highlight] of highlightedTokens.entries()) {
+        const age = now - highlight.timestamp;
+        if (age > highlight.duration) {
+            highlightedTokens.delete(tokenId);
+        }
+    }
+}
+
+// Highlight a character token (called when Discord user speaks)
+function highlightCharacterToken(characterId, discordUsername, duration = 3000) {
+    console.log(`🎯 highlightCharacterToken called: characterId=${characterId}, username=${discordUsername}, duration=${duration}`);
+    console.log(`📊 Total tokens: ${tokens.length}`);
+    
+    // Find all tokens with this character_id
+    const matchingTokens = tokens.filter(token => {
+        const matches = token.entity_id === characterId;
+        console.log(`  Token ${token.id}: entity_id=${token.entity_id}, matches=${matches}`);
+        return matches;
+    });
+    
+    if (matchingTokens.length === 0) {
+        console.warn(`⚠️ No tokens found for character_id: ${characterId}`);
+        console.warn(`   Available entity_ids:`, tokens.map(t => t.entity_id));
+        console.warn(`   Make sure your character token is placed on the map!`);
+        return;
+    }
+    
+    console.log(`✅ Found ${matchingTokens.length} matching token(s)`);
+    matchingTokens.forEach(token => {
+        const highlightData = {
+            timestamp: Date.now(),
+            duration: duration,
+            color: '#8a2be2', // Purple
+            discordUsername: discordUsername
+        };
+        highlightedTokens.set(token.id, highlightData);
+        console.log(`  → Added highlight to token ${token.id}:`, highlightData);
+    });
+    
+    console.log(`📝 Total highlighted tokens now: ${highlightedTokens.size}`);
+    
+    // Start continuous rendering while highlight is active
+    renderCanvas();
+    
+    // Set up animation loop for pulsing effect
+    const highlightStart = Date.now();
+    const animateHighlight = () => {
+        const elapsed = Date.now() - highlightStart;
+        if (elapsed < duration) {
+            renderCanvas();
+            requestAnimationFrame(animateHighlight);
+        } else {
+            console.log(`⏱️ Highlight animation finished after ${elapsed}ms`);
+        }
+    };
+    requestAnimationFrame(animateHighlight);
+    
+    console.log(`✨ Highlighted ${matchingTokens.length} token(s) for character: ${characterId} (${discordUsername})`);
 }
 
 function drawRuler() {
@@ -1868,7 +2221,49 @@ function drawToken(token) {
         ctx.stroke();
     }
     
-    // Selection highlight
+    // Discord highlight (speaking indicator) - draw before selection highlight
+    const highlight = highlightedTokens.get(token.id);
+    if (highlight) {
+        const now = Date.now();
+        const age = now - highlight.timestamp;
+        const fade = 1.0 - Math.min(age / highlight.duration, 1.0);
+        
+        if (fade > 0) {
+            // Draw pulsing glow effect
+            const pulseRadius = (size / 2) + 15 + (Math.sin(age / 100) * 5); // Pulsing effect
+            const gradient = ctx.createRadialGradient(x, y, size / 2, x, y, pulseRadius);
+            gradient.addColorStop(0, `rgba(138, 43, 226, ${0.8 * fade})`); // Purple glow
+            gradient.addColorStop(0.5, `rgba(138, 43, 226, ${0.4 * fade})`);
+            gradient.addColorStop(1, `rgba(138, 43, 226, 0)`);
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(x, y, pulseRadius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw purple border
+            ctx.beginPath();
+            ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(138, 43, 226, ${fade})`;
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            
+            // Draw "Speaking" label
+            if (fade > 0.5 && highlight.discordUsername) {
+                ctx.fillStyle = `rgba(0, 0, 0, ${0.8 * fade})`;
+                ctx.fillRect(x - 50, y - size / 2 - 25, 100, 20);
+                ctx.fillStyle = `rgba(138, 43, 226, ${fade})`;
+                ctx.font = 'bold 11px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`🔊 ${highlight.discordUsername}`, x, y - size / 2 - 10);
+            }
+        } else {
+            // Remove expired highlight (will be cleaned up in renderCanvas)
+            highlightedTokens.delete(token.id);
+        }
+    }
+    
+    // Selection highlight (yellow, above Discord highlight)
     if (selectedToken && selectedToken.id === token.id) {
         ctx.beginPath();
         ctx.arc(x, y, size / 2, 0, Math.PI * 2);
@@ -2196,6 +2591,124 @@ function onCanvasMouseUp(e) {
         
         addLogEntry(`Moved to (${gridX}, ${gridY})`, 'info');
     }
+}
+
+// Right-click context menu handler
+function onCanvasRightClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Don't show context menu if measurement tools are active
+    if (measurementToolType) {
+        return;
+    }
+    
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left - panX) / zoom;
+    const mouseY = (e.clientY - rect.top - panY) / zoom;
+    
+    // Store the canvas coordinates for ping
+    contextMenuPosition = { x: mouseX, y: mouseY };
+    
+    // Show context menu at mouse position
+    const contextMenu = document.getElementById('contextMenu');
+    if (contextMenu) {
+        contextMenu.style.display = 'block';
+        contextMenu.style.left = e.clientX + 'px';
+        contextMenu.style.top = e.clientY + 'px';
+        contextMenuVisible = true;
+        console.log('📍 Context menu opened at:', mouseX, mouseY);
+    } else {
+        console.warn('⚠️ Context menu element not found!');
+    }
+}
+
+function closeContextMenu() {
+    const contextMenu = document.getElementById('contextMenu');
+    contextMenu.style.display = 'none';
+    contextMenuVisible = false;
+}
+
+// Ping at the context menu location
+function pingAtContextMenuLocation() {
+    if (!contextMenuPosition) return;
+    
+    const pingId = 'ping_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    const ping = {
+        id: pingId,
+        x: contextMenuPosition.x,
+        y: contextMenuPosition.y,
+        timestamp: Date.now(),
+        playerName: myPlayerName || 'Unknown'
+    };
+    
+    // Add ping locally
+    activePings.push(ping);
+    
+    // Broadcast to all players
+    sendMessage({
+        type: 'PingLocation',
+        x: ping.x,
+        y: ping.y,
+        player_name: ping.playerName
+    });
+    
+    addLogEntry(`📍 Pinged location`, 'info');
+    closeContextMenu();
+    renderCanvas();
+    
+    // Remove ping after 3 seconds
+    setTimeout(() => {
+        activePings = activePings.filter(p => p.id !== pingId);
+        renderCanvas();
+    }, 3000);
+}
+
+// Draw all active pings
+function drawPings() {
+    const now = Date.now();
+    const pingDuration = 3000; // 3 seconds
+    
+    activePings.forEach(ping => {
+        const age = now - ping.timestamp;
+        if (age > pingDuration) return; // Skip expired pings
+        
+        // Calculate fade (starts at 1.0, fades to 0.0 over 3 seconds)
+        const fade = 1.0 - (age / pingDuration);
+        
+        // Draw expanding circle animation
+        const baseRadius = 20;
+        const maxRadius = 60;
+        const expansionProgress = Math.min(age / 1000, 1.0); // Expand over 1 second
+        const currentRadius = baseRadius + (maxRadius - baseRadius) * expansionProgress;
+        
+        // Draw outer glow
+        const gradient = ctx.createRadialGradient(ping.x, ping.y, 0, ping.x, ping.y, currentRadius);
+        gradient.addColorStop(0, `rgba(74,158,255,${0.6 * fade})`);
+        gradient.addColorStop(0.5, `rgba(74,158,255,${0.3 * fade})`);
+        gradient.addColorStop(1, `rgba(74,158,255,0)`);
+        
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(ping.x, ping.y, currentRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Draw center dot
+        ctx.fillStyle = `rgba(74,158,255,${fade})`;
+        ctx.beginPath();
+        ctx.arc(ping.x, ping.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Draw player name label
+        if (fade > 0.5) {
+            ctx.fillStyle = `rgba(0, 0, 0, ${0.8 * fade})`;
+            ctx.fillRect(ping.x - 40, ping.y - 35, 80, 20);
+            ctx.fillStyle = `rgba(74,158,255,${fade})`;
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(ping.playerName, ping.x, ping.y - 20);
+        }
+    });
 }
 
 function onCanvasWheel(e) {
@@ -6992,7 +7505,18 @@ function showCharacterSheet(char, isSelectionMode = false) {
     const openBtn = document.getElementById('openSheetInNewWindowBtn');
     if (openBtn) {
         // Show button if this is the player's own character sheet (not selection mode)
-        openBtn.style.display = (!isSelectionMode && char && char.id === myCharacterId) ? 'block' : 'none';
+        const shouldShow = !isSelectionMode && char && char.id === myCharacterId;
+        openBtn.style.display = shouldShow ? 'block' : 'none';
+        console.log('🖥️ Open in New Window button visibility:', shouldShow, 'for character:', char?.id, 'myCharacterId:', myCharacterId);
+    }
+    
+    // Show/hide the "Link Discord" button (only for players viewing their own sheet)
+    const linkDiscordBtn = document.getElementById('linkDiscordBtn');
+    if (linkDiscordBtn) {
+        // Show button for players viewing their own sheet OR for DM viewing any character
+        const shouldShow = (!isSelectionMode && char && char.id === myCharacterId) || (isDM && !isSelectionMode);
+        linkDiscordBtn.style.display = shouldShow ? 'block' : 'none';
+        console.log('🔗 Link Discord button visibility:', shouldShow, 'isDM:', isDM, 'char.id:', char?.id, 'myCharacterId:', myCharacterId);
     }
     
     document.getElementById('characterSheetModal').classList.add('active');
