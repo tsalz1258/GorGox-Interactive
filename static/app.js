@@ -61,6 +61,9 @@ let contextMenuPosition = { x: 0, y: 0 };
 // Character highlighting system (for Discord integration)
 let highlightedTokens = new Map(); // Map of token_id -> {timestamp, duration, color, discordUsername}
 
+// HP bar animation tracking - store previous HP values for smooth animations
+let previousHpValues = new Map(); // Map of entity_id -> {hp, maxHp}
+
 const syncedCharacterIds = new Set();
 let techPowersCache = {};
 let techPowersLoaded = false;
@@ -83,7 +86,7 @@ window.addEventListener('DOMContentLoaded', () => {
     loadNPCs(); // Load NPCs from npc.json
 });
 
-// Connection
+// Connection - Define immediately so it's always available
 function connect() {
     const playerName = document.getElementById('playerName').value.trim();
     if (!playerName) {
@@ -108,20 +111,28 @@ function connect() {
     ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
+        console.log('✅ WebSocket opened, sending Connect message...');
         sendMessage({
             type: 'Connect',
             player_name: playerName,
             is_dm: isDM,
             style: selectedStyle
         });
+        console.log('📤 Connect message sent, waiting for Connected response...');
         
         // Apply theme based on style
         applyTheme(selectedStyle);
     };
     
     ws.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        handleServerMessage(message);
+        try {
+            const message = JSON.parse(event.data);
+            handleServerMessage(message);
+        } catch (e) {
+            console.error('❌ Error parsing server message:', e);
+            console.error('   Raw message:', event.data);
+            alert('Error receiving message from server. Please refresh the page.');
+        }
     };
     
     ws.onerror = (error) => {
@@ -134,6 +145,9 @@ function connect() {
         addLogEntry('Disconnected from server', 'info');
     };
 }
+
+// Also assign to window for global access
+window.connect = connect;
 
 function sendMessage(message) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -234,16 +248,40 @@ function normalizePowerLevel(rawLevel, category) {
 function handleServerMessage(message) {
     console.log('Received:', message);
     
+    // Safety check
+    if (!message || !message.type) {
+        console.error('❌ Invalid message received:', message);
+        return;
+    }
+    
     switch (message.type) {
         case 'Connected':
+            console.log('✅ Connected message received! Session ID:', message.session_id);
             sessionId = message.session_id;
             // DON'T overwrite isDM - it's already set correctly from connect()
             updateConnectionStatus(true);
-            document.getElementById('connectionModal').classList.remove('active');
-            document.getElementById('mainInterface').classList.remove('hidden');
+            
+            // Hide connection modal and show main interface - FORCE update
+            const connectionModal = document.getElementById('connectionModal');
+            const mainInterface = document.getElementById('mainInterface');
+            if (connectionModal) {
+                connectionModal.classList.remove('active');
+                connectionModal.style.display = 'none'; // Force hide
+                console.log('✅ Connection modal hidden');
+            } else {
+                console.error('❌ connectionModal element not found!');
+            }
+            if (mainInterface) {
+                mainInterface.classList.remove('hidden');
+                mainInterface.style.display = ''; // Ensure it's visible
+                console.log('✅ Main interface shown');
+            } else {
+                console.error('❌ mainInterface element not found!');
+            }
             
             // FIX: Initialize with myself first, then server will send others via PlayerJoined
             console.log('🔌 Connected! Adding self to players:', myPlayerName, 'isDM:', isDM);
+            console.log('⏳ Waiting for server to send initial game state (map, tokens, characters)...');
             
             // Start with just me
             connectedPlayers = [{
@@ -273,7 +311,7 @@ function handleServerMessage(message) {
             document.getElementById('playerInfo').textContent = 
                 `${myPlayerName} ${message.is_dm ? '(DM)' : ''}`;
             
-            addLogEntry('Connected to game!', 'info');
+            addLogEntry('Connected to game! Waiting for game state...', 'info');
             // Clear characters on connect to ensure fresh start
             characters = [];
             // Load data with current selected style
@@ -337,6 +375,51 @@ function handleServerMessage(message) {
             console.log('🗺️ MapLoaded - image_path:', message.map.image_path);
             loadMapImage(message.map.image_path);
             addLogEntry(`Map loaded: ${message.map.name}`, 'info');
+            break;
+            
+        case 'MapCleared':
+            console.log('🗑️ MapCleared message received - clearing map and tokens (same as local clear)');
+            
+            // EXACT SAME CLEARING LOGIC as clearCurrentMap() function
+            // This ensures DM and players clear identically
+            if (currentMap) {
+                currentMap.image = null;
+            }
+            currentMap = null;
+            tokens = [];
+            tokenImages = {};
+            selectedToken = null;
+            measurementShapes = [];
+            rulerStart = null;
+            rulerEnd = null;
+            
+            // Update UI
+            const mapNameElement = document.getElementById('currentMapName');
+            if (mapNameElement) {
+                mapNameElement.textContent = 'No map loaded';
+            }
+            updateTokenInfo();
+            
+            // Clear canvas completely - EXACT SAME as clearCurrentMap()
+            if (ctx && canvas) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Reset dimensions to force complete clear
+                const w = canvas.width;
+                const h = canvas.height;
+                canvas.width = 1;
+                canvas.height = 1;
+                canvas.width = w;
+                canvas.height = h;
+                ctx.fillStyle = '#1a1a1a';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+            
+            // Render immediately
+            renderCanvas();
+            
+            console.log('✅ Map and tokens cleared on client - map image removed');
+            addLogEntry('🗑️ Map and all tokens cleared', 'info');
             break;
             
         case 'MapList':
@@ -1054,46 +1137,79 @@ function handleServerMessage(message) {
             console.log('Damage:', message.damage);
             console.log('New HP:', message.new_hp);
             
-            // Update HP in combat participants
-            const damagedParticipant = combatState.participants.find(p => p.id === message.target_id);
-            if (damagedParticipant) {
-                console.log('✅ Found participant:', damagedParticipant.name);
-                console.log('   Old HP:', damagedParticipant.current_hp);
-                console.log('   New HP:', message.new_hp);
-                damagedParticipant.current_hp = message.new_hp;
-            }
-            
-            // Update character or enemy based on token type
+            // CRITICAL: Always update character or enemy data FIRST (source of truth)
+            // This ensures HP is synced across all clients
             const damagedToken = tokens.find(t => t.id === message.target_id);
+            let damagedParticipant = null; // Declare outside if blocks so it's accessible later
             if (damagedToken) {
                 if (damagedToken.entity_type === 'Player') {
                     const char = characters.find(c => c.id === damagedToken.entity_id);
                     if (char) {
                         console.log('✅ Updating character data:', char.name);
+                        console.log('   Old character HP:', char.current_hp);
+                        console.log('   New character HP:', message.new_hp);
                         char.current_hp = message.new_hp;
+                        console.log('   ✅ Character HP updated to:', char.current_hp);
+                        
+                        // CRITICAL: Also update participant HP to keep them in sync
+                        damagedParticipant = combatState.participants.find(p => p.id === message.target_id);
+                        if (damagedParticipant) {
+                            console.log('   ✅ Also updating participant HP to:', message.new_hp);
+                            damagedParticipant.current_hp = message.new_hp;
+                        }
                         
                         // If this is MY character, show alert to player
                         if (char.id === myCharacterId) {
                             console.log('🚨 THIS IS MY CHARACTER! Showing damage alert!');
                             alert(`💥 You took ${message.damage} damage!\n\nNew HP: ${message.new_hp}/${char.max_hp}`);
                         }
+                    } else {
+                        console.warn('⚠️ Character not found for token entity_id:', damagedToken.entity_id);
                     }
                 } else if (damagedToken.entity_type === 'Enemy') {
                     // Update enemy instance HP
                     const enemy = enemies.find(e => e.id === damagedToken.entity_id);
                     if (enemy) {
                         console.log('✅ Updating enemy data:', enemy.name);
-                        // Update the enemy's current HP (for NPC instances, this is stored in the enemy object)
-                        if (enemy.current_hp !== undefined) {
-                            enemy.current_hp = message.new_hp;
-                        }
+                        console.log('   Old enemy HP:', enemy.current_hp);
+                        console.log('   New enemy HP:', message.new_hp);
+                        // Always update enemy HP (don't check if undefined - set it)
+                        enemy.current_hp = message.new_hp;
+                        console.log('   ✅ Enemy HP updated to:', enemy.current_hp);
+                    } else {
+                        console.warn('⚠️ Enemy not found for token entity_id:', damagedToken.entity_id);
+                    }
+                    
+                    // Also update participant HP for enemies
+                    damagedParticipant = combatState.participants.find(p => p.id === message.target_id);
+                    if (damagedParticipant) {
+                        console.log('✅ Updating enemy participant HP:', damagedParticipant.name);
+                        damagedParticipant.current_hp = message.new_hp;
                     }
                 }
+            } else {
+                console.warn('⚠️ Token not found for target_id:', message.target_id);
             }
             
-            updateTokenInfo();
+            // Force UI update to reflect new HP
+            // CRITICAL: Always update token info if this token is currently selected
+            // Also update if this is the player's own character (even if not selected)
+            const shouldUpdateTokenInfo = selectedToken && selectedToken.id === message.target_id;
+            const isMyCharacter = damagedToken && damagedToken.entity_type === 'Player' && 
+                                 damagedToken.entity_id === myCharacterId;
+            
+            // ALWAYS update UI for any damage - ensure players see their HP update
+            // Update initiative list first (shows HP for players), then token info
             updateInitiativeList();
+            updateTokenInfo();
             renderCanvas();
+            
+            // If this is the player's character and they have the character sheet open, refresh it
+            if (isMyCharacter && currentViewingCharacter && 
+                currentViewingCharacter.id === damagedToken.entity_id) {
+                console.log('🔄 Refreshing character sheet for damaged character');
+                renderCharacterSheetContent();
+            }
             
             // Get target name for log
             const targetName = damagedParticipant ? damagedParticipant.name : (damagedToken ? 'Target' : 'Unknown');
@@ -1107,46 +1223,79 @@ function handleServerMessage(message) {
             console.log('Healing:', message.healing);
             console.log('New HP:', message.new_hp);
             
-            // Update HP in combat participants
-            const healedParticipant = combatState.participants.find(p => p.id === message.target_id);
-            if (healedParticipant) {
-                console.log('✅ Found participant:', healedParticipant.name);
-                console.log('   Old HP:', healedParticipant.current_hp);
-                console.log('   New HP:', message.new_hp);
-                healedParticipant.current_hp = message.new_hp;
-            }
-            
-            // Update character or enemy based on token type
+            // CRITICAL: Always update character or enemy data FIRST (source of truth)
+            // This ensures HP is synced across all clients
             const healedToken = tokens.find(t => t.id === message.target_id);
+            let healedParticipant = null; // Declare outside if blocks so it's accessible later
             if (healedToken) {
                 if (healedToken.entity_type === 'Player') {
                     const char = characters.find(c => c.id === healedToken.entity_id);
                     if (char) {
                         console.log('✅ Updating character data:', char.name);
+                        console.log('   Old character HP:', char.current_hp);
+                        console.log('   New character HP:', message.new_hp);
                         char.current_hp = message.new_hp;
+                        console.log('   ✅ Character HP updated to:', char.current_hp);
+                        
+                        // CRITICAL: Also update participant HP to keep them in sync
+                        healedParticipant = combatState.participants.find(p => p.id === message.target_id);
+                        if (healedParticipant) {
+                            console.log('   ✅ Also updating participant HP to:', message.new_hp);
+                            healedParticipant.current_hp = message.new_hp;
+                        }
                         
                         // If this is MY character, show alert to player
                         if (char.id === myCharacterId) {
                             console.log('🚨 THIS IS MY CHARACTER! Showing healing alert!');
                             alert(`💚 You were healed ${message.healing} HP!\n\nNew HP: ${message.new_hp}/${char.max_hp}`);
                         }
+                    } else {
+                        console.warn('⚠️ Character not found for token entity_id:', healedToken.entity_id);
                     }
                 } else if (healedToken.entity_type === 'Enemy') {
                     // Update enemy instance HP
                     const enemy = enemies.find(e => e.id === healedToken.entity_id);
                     if (enemy) {
                         console.log('✅ Updating enemy data:', enemy.name);
-                        // Update the enemy's current HP (for NPC instances, this is stored in the enemy object)
-                        if (enemy.current_hp !== undefined) {
-                            enemy.current_hp = message.new_hp;
-                        }
+                        console.log('   Old enemy HP:', enemy.current_hp);
+                        console.log('   New enemy HP:', message.new_hp);
+                        // Always update enemy HP (don't check if undefined - set it)
+                        enemy.current_hp = message.new_hp;
+                        console.log('   ✅ Enemy HP updated to:', enemy.current_hp);
+                    } else {
+                        console.warn('⚠️ Enemy not found for token entity_id:', healedToken.entity_id);
+                    }
+                    
+                    // Also update participant HP for enemies
+                    healedParticipant = combatState.participants.find(p => p.id === message.target_id);
+                    if (healedParticipant) {
+                        console.log('✅ Updating enemy participant HP:', healedParticipant.name);
+                        healedParticipant.current_hp = message.new_hp;
                     }
                 }
+            } else {
+                console.warn('⚠️ Token not found for target_id:', message.target_id);
             }
             
+            // Force UI update to reflect new HP
+            // ALWAYS update UI for any healing - ensure players see their HP update
             updateTokenInfo();
             updateInitiativeList();
             renderCanvas();
+            
+            // Get participant for logging (healedParticipant already declared above)
+            if (!healedParticipant) {
+                healedParticipant = combatState.participants.find(p => p.id === message.target_id);
+            }
+            const isMyCharacterHeal = healedToken && healedToken.entity_type === 'Player' && 
+                                     healedToken.entity_id === myCharacterId;
+            
+            // If this is the player's character and they have the character sheet open, refresh it
+            if (isMyCharacterHeal && currentViewingCharacter && 
+                currentViewingCharacter.id === healedToken.entity_id) {
+                console.log('🔄 Refreshing character sheet for healed character');
+                renderCharacterSheetContent();
+            }
             
             // Get target name for log
             const targetName = healedParticipant ? healedParticipant.name : (healedToken ? 'Target' : 'Unknown');
@@ -1462,8 +1611,16 @@ function renderCanvas() {
     ctx.scale(zoom, zoom);
     
     // Draw map image if loaded
-    if (currentMap && currentMap.image) {
-        ctx.drawImage(currentMap.image, 0, 0);
+    // CRITICAL: Double-check currentMap is not null and has an image before drawing
+    // This prevents drawing a cleared map
+    if (currentMap && currentMap.image && currentMap.id) {
+        try {
+            ctx.drawImage(currentMap.image, 0, 0);
+        } catch (e) {
+            console.error('Error drawing map image:', e);
+            // If image draw fails, clear the map reference
+            currentMap.image = null;
+        }
     }
     
     // Draw grid
@@ -2750,31 +2907,69 @@ function updateTokenInfo() {
     let info = '';
     let entityData = null;
     
+    // PERMISSION CHECK: Players can only see full details of their own token
+    // DM can see everything
+    const isOwnToken = selectedToken.entity_type === 'Player' && selectedToken.entity_id === myCharacterId;
+    const canViewFullDetails = isDM || isOwnToken || selectedToken.entity_type === 'Enemy';
+    
     // FIX: Find character or enemy data and get current HP from combat if active
     if (selectedToken.entity_type === 'Player') {
         entityData = characters.find(c => c.id === selectedToken.entity_id);
         if (entityData) {
-            // Get HP from combat participant if in combat (more up-to-date)
+            // CRITICAL: Character HP is the source of truth (updated by server on damage/healing)
+            // Only use participant HP as fallback if character data is missing
+            // This ensures players always see the correct HP after damage/healing
             const participant = combatState.participants.find(p => p.id === selectedToken.id);
-            const currentHp = participant ? participant.current_hp : entityData.current_hp;
-            const maxHp = participant ? participant.max_hp : entityData.max_hp;
+            // Prioritize character.current_hp - it's updated by server broadcasts
+            const currentHp = entityData.current_hp !== undefined && entityData.current_hp !== null ? 
+                             entityData.current_hp : 
+                             (participant ? participant.current_hp : entityData.max_hp);
+            const maxHp = entityData.max_hp !== undefined && entityData.max_hp !== null ? 
+                         entityData.max_hp : 
+                         (participant ? participant.max_hp : entityData.max_hp);
             
-            info += `<h4>⚔️ ${entityData.name}</h4>`;
-            info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
-            info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
-            info += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#44ff44'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
-            const hpPercent = (currentHp / maxHp) * 100;
-            info += `<div class="hp-bar"><div class="hp-fill" style="width: ${hpPercent}%"></div></div>`;
-            info += `<div class="token-stat"><span>AC:</span><span>${entityData.armor_class}</span></div>`;
-            info += `<div class="token-stat"><span>Initiative:</span><span>+${entityData.initiative_bonus}</span></div>`;
-            info += `<div class="token-stat"><span>Speed:</span><span>${entityData.speed} ft</span></div>`;
-            info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-            info += `<div class="token-stat"><span>STR:</span><span>${entityData.strength}</span></div>`;
-            info += `<div class="token-stat"><span>DEX:</span><span>${entityData.dexterity}</span></div>`;
-            info += `<div class="token-stat"><span>CON:</span><span>${entityData.constitution}</span></div>`;
-            info += `<div class="token-stat"><span>INT:</span><span>${entityData.intelligence}</span></div>`;
-            info += `<div class="token-stat"><span>WIS:</span><span>${entityData.wisdom}</span></div>`;
-            info += `<div class="token-stat"><span>CHA:</span><span>${entityData.charisma}</span></div>`;
+            if (canViewFullDetails) {
+                // DM or own token: Show full details
+                info += `<h4>⚔️ ${entityData.name}</h4>`;
+                info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
+                info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
+                info += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#44ff44'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
+                const hpPercent = (currentHp / maxHp) * 100;
+                const hpBarId = `hp-bar-${selectedToken.entity_id}`;
+                const previousHp = previousHpValues.get(selectedToken.entity_id);
+                const startPercent = previousHp ? (previousHp.hp / previousHp.maxHp) * 100 : hpPercent;
+                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%"></div></div>`;
+                // Animate to new value after a tiny delay to ensure DOM is ready
+                setTimeout(() => {
+                    const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
+                    if (fillElement) {
+                        fillElement.style.width = `${hpPercent}%`;
+                    }
+                }, 10);
+                // Store current HP for next update
+                previousHpValues.set(selectedToken.entity_id, { hp: currentHp, maxHp: maxHp });
+                info += `<div class="token-stat"><span>AC:</span><span>${entityData.armor_class}</span></div>`;
+                info += `<div class="token-stat"><span>Initiative:</span><span>+${entityData.initiative_bonus}</span></div>`;
+                info += `<div class="token-stat"><span>Speed:</span><span>${entityData.speed} ft</span></div>`;
+            } else {
+                // Another player's token: Show minimal info only (no HP, AC, stats)
+                info += `<h4>⚔️ ${entityData.name}</h4>`;
+                info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
+                info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
+                info += `<p style="font-size: 11px; color: #888; margin-top: 12px; font-style: italic;">(You can only view full details of your own character)</p>`;
+                // Don't show ability scores or other stats for other players' tokens
+            }
+            
+            // Only show ability scores for own token or DM
+            if (canViewFullDetails) {
+                info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                info += `<div class="token-stat"><span>STR:</span><span>${entityData.strength}</span></div>`;
+                info += `<div class="token-stat"><span>DEX:</span><span>${entityData.dexterity}</span></div>`;
+                info += `<div class="token-stat"><span>CON:</span><span>${entityData.constitution}</span></div>`;
+                info += `<div class="token-stat"><span>INT:</span><span>${entityData.intelligence}</span></div>`;
+                info += `<div class="token-stat"><span>WIS:</span><span>${entityData.wisdom}</span></div>`;
+                info += `<div class="token-stat"><span>CHA:</span><span>${entityData.charisma}</span></div>`;
+            }
         }
     } else if (selectedToken.entity_type === 'Enemy') {
         const enemy = enemies.find(e => e.id === selectedToken.entity_id);
@@ -2792,25 +2987,49 @@ function updateTokenInfo() {
             }
             info += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#ff8844'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
             const hpPercent = (currentHp / maxHp) * 100;
-            info += `<div class="hp-bar"><div class="hp-fill" style="width: ${hpPercent}%"></div></div>`;
+            const hpBarId = `hp-bar-enemy-${selectedToken.entity_id}`;
+            const previousHp = previousHpValues.get(`enemy-${selectedToken.entity_id}`);
+            const startPercent = previousHp ? (previousHp.hp / previousHp.maxHp) * 100 : hpPercent;
+            info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%"></div></div>`;
+            // Animate to new value after a tiny delay to ensure DOM is ready
+            setTimeout(() => {
+                const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
+                if (fillElement) {
+                    fillElement.style.width = `${hpPercent}%`;
+                }
+            }, 10);
+            // Store current HP for next update
+            previousHpValues.set(`enemy-${selectedToken.entity_id}`, { hp: currentHp, maxHp: maxHp });
             info += `<div class="token-stat"><span>AC:</span><span>${ac}</span></div>`;
             
             if (enemy) {
                 info += `<div class="token-stat"><span>Initiative:</span><span>+${enemy.initiative_bonus}</span></div>`;
                 info += `<div class="token-stat"><span>Speed:</span><span>${enemy.speed} ft</span></div>`;
-                info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                info += `<div class="token-stat"><span>STR:</span><span>${enemy.strength}</span></div>`;
-                info += `<div class="token-stat"><span>DEX:</span><span>${enemy.dexterity}</span></div>`;
-                info += `<div class="token-stat"><span>CON:</span><span>${enemy.constitution}</span></div>`;
-                info += `<div class="token-stat"><span>INT:</span><span>${enemy.intelligence}</span></div>`;
-                info += `<div class="token-stat"><span>WIS:</span><span>${enemy.wisdom}</span></div>`;
-                info += `<div class="token-stat"><span>CHA:</span><span>${enemy.charisma}</span></div>`;
+                
+                // Only show detailed ability scores for DM
+                // Players can see basic enemy info (HP, AC, Initiative, Speed) but not full stats
+                if (isDM) {
+                    info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                    info += `<div class="token-stat"><span>STR:</span><span>${enemy.strength}</span></div>`;
+                    info += `<div class="token-stat"><span>DEX:</span><span>${enemy.dexterity}</span></div>`;
+                    info += `<div class="token-stat"><span>CON:</span><span>${enemy.constitution}</span></div>`;
+                    info += `<div class="token-stat"><span>INT:</span><span>${enemy.intelligence}</span></div>`;
+                    info += `<div class="token-stat"><span>WIS:</span><span>${enemy.wisdom}</span></div>`;
+                    info += `<div class="token-stat"><span>CHA:</span><span>${enemy.charisma}</span></div>`;
+                }
+                
                 if (enemy.description) {
                     info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                    info += `<p style="font-size: 11px; margin-top: 8px;">${enemy.description.substring(0, 200)}${enemy.description.length > 200 ? '...' : ''}</p>`;
+                    // Show full description for DM, truncated for players
+                    if (isDM) {
+                        info += `<p style="font-size: 11px; margin-top: 8px;">${enemy.description.substring(0, 200)}${enemy.description.length > 200 ? '...' : ''}</p>`;
+                    } else {
+                        info += `<p style="font-size: 11px; margin-top: 8px; color: #888;">${enemy.description.substring(0, 100)}${enemy.description.length > 100 ? '...' : ''}</p>`;
+                    }
                 }
-                // Add button to view full character sheet if this is an NPC
-                if (enemy.isNPC && enemy.npcData) {
+                
+                // Add button to view full character sheet if this is an NPC (only for DM)
+                if (enemy.isNPC && enemy.npcData && isDM) {
                     info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
                     info += `<button onclick="showNPCCharacterSheet('${selectedToken.entity_id}')" style="width: 100%; padding: 8px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; margin-top: 10px;">📋 View Full Character Sheet</button>`;
                 }
@@ -2835,8 +3054,9 @@ function updateTokenInfo() {
     
     infoDiv.innerHTML = info;
     
-    // FIX: Always show damage/heal buttons for DM when token selected
-    if (isDM && selectedToken) {
+    // Show damage/heal buttons for DM (any token) or players (own token only)
+    const canModifyToken = isDM || (selectedToken && selectedToken.entity_type === 'Player' && selectedToken.entity_id === myCharacterId);
+    if (canModifyToken && selectedToken) {
         actionsDiv.classList.remove('hidden');
     } else {
         actionsDiv.classList.add('hidden');
@@ -3730,9 +3950,12 @@ function dealDamage() {
         return;
     }
     
+    // DM can damage any token, players can only damage their own token
     if (!isDM) {
-        alert('Only the DM can deal damage!');
-        return;
+        if (!myCharacterId || selectedToken.entity_id !== myCharacterId) {
+            alert('You can only damage your own character!');
+            return;
+        }
     }
     
     const damage = parseInt(document.getElementById('damageAmount').value);
@@ -3787,9 +4010,12 @@ function healTarget() {
         return;
     }
     
+    // DM can heal any token, players can only heal their own token
     if (!isDM) {
-        alert('Only the DM can heal!');
-        return;
+        if (!myCharacterId || selectedToken.entity_id !== myCharacterId) {
+            alert('You can only heal your own character!');
+            return;
+        }
     }
     
     const healing = parseInt(document.getElementById('healAmount').value);
@@ -3933,11 +4159,19 @@ function updateInitiativeList() {
         }
         
         if (myParticipant) {
+            // CRITICAL: Get HP from character data first (source of truth from server)
+            // Only use participant HP as fallback
+            const myChar = characters.find(c => c.id === myCharacterId);
+            const displayHp = myChar && myChar.current_hp !== undefined && myChar.current_hp !== null ? 
+                             myChar.current_hp : myParticipant.current_hp;
+            const displayMaxHp = myChar && myChar.max_hp !== undefined && myChar.max_hp !== null ? 
+                                myChar.max_hp : myParticipant.max_hp;
+            
             html += `
                 <div style="padding: 10px; background: rgba(68,255,68,0.2); border-radius: 5px;">
                     <div style="font-weight: bold;">Your Character:</div>
                     <div style="margin-top: 5px;">${myParticipant.name}</div>
-                    <div style="margin-top: 5px;">HP: ${myParticipant.current_hp}/${myParticipant.max_hp}</div>
+                    <div style="margin-top: 5px;">HP: ${displayHp}/${displayMaxHp}</div>
                     <div style="margin-top: 5px;">Initiative: ${myParticipant.initiative}</div>
                 </div>
             `;
@@ -4658,41 +4892,59 @@ async function deleteSavedStateFromServer(filename) {
 
 // Clear current map and all tokens
 function clearCurrentMap() {
-    if (!confirm('⚠️ Are you sure you want to clear the current map?\n\nThis will remove:\n- The current map\n- All tokens on the board\n\nThis action cannot be undone.')) {
+    if (!confirm('⚠️ Are you sure you want to clear the current map?\n\nThis will remove:\n- The current map\n- All tokens on the board\n- All measurement shapes\n\nThis action cannot be undone and will affect ALL players!')) {
         return;
     }
     
     console.log('🗑️ Clearing current map...');
     
-    // Notify server to remove all tokens before clearing locally
-    const tokensToRemove = [...tokens]; // Copy array before clearing
-    tokensToRemove.forEach(token => {
-        sendMessage({
-            type: 'RemoveToken',
-            token_id: token.id
-        });
-    });
-    
-    // Clear map
+    // CRITICAL: Clear locally IMMEDIATELY (same for DM and players)
+    // This ensures the UI updates instantly, then server broadcast confirms for everyone
+    if (currentMap) {
+        currentMap.image = null;
+    }
     currentMap = null;
-    
-    // Clear all tokens
     tokens = [];
-    
-    // Clear token images cache
     tokenImages = {};
-    
-    // Clear selected token
     selectedToken = null;
+    measurementShapes = [];
+    rulerStart = null;
+    rulerEnd = null;
     
-    // Clear canvas
+    // Update UI
+    const mapNameElement = document.getElementById('currentMapName');
+    if (mapNameElement) {
+        mapNameElement.textContent = 'No map loaded';
+    }
+    updateTokenInfo();
+    
+    // Clear canvas completely
+    if (ctx && canvas) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Reset dimensions to force complete clear
+        const w = canvas.width;
+        const h = canvas.height;
+        canvas.width = 1;
+        canvas.height = 1;
+        canvas.width = w;
+        canvas.height = h;
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    
+    // Render immediately
     renderCanvas();
     
-    console.log('✅ Map and tokens cleared');
+    // Send ClearMap message to server - server will broadcast to all clients
+    // This ensures everyone gets synced, but local clear already happened
+    sendMessage({
+        type: 'ClearMap'
+    });
+    
+    console.log('📤 ClearMap message sent to server, local clear complete');
     addLogEntry('🗑️ Map and all tokens cleared', 'info');
     closeModal('saveLoadModal');
-    
-    alert('✅ Map and all tokens have been cleared.');
 }
 
 function filterNPCList() {
@@ -5144,6 +5396,13 @@ function parseNPCRawBlock(rawBlock) {
 
 // Show NPC character sheet
 function showNPCCharacterSheet(entityId) {
+    // Only DM can view full NPC character sheets
+    if (!isDM) {
+        console.warn('Only DM can view full NPC character sheets');
+        alert('Only the DM can view full NPC character sheets.');
+        return;
+    }
+    
     const enemy = enemies.find(e => e.id === entityId);
     if (!enemy || !enemy.isNPC || !enemy.npcData) {
         console.error('NPC not found or invalid');
@@ -7483,6 +7742,18 @@ let currentSheetSelectionMode = false;
 let characterEditMode = false;
 
 function showCharacterSheet(char, isSelectionMode = false) {
+    // PERMISSION CHECK: Players can only view their own character sheet
+    // DM can view any character sheet
+    // isSelectionMode allows viewing for selection purposes (like choosing a character)
+    if (!isSelectionMode && !isDM) {
+        // Check if this is the player's own character
+        if (char.id !== myCharacterId) {
+            console.warn('Players can only view their own character sheet');
+            alert('You can only view your own character sheet. Ask the DM if you need to see another player\'s character.');
+            return;
+        }
+    }
+    
     currentViewingCharacter = char;
     currentSheetSelectionMode = isSelectionMode;
     characterEditMode = false;

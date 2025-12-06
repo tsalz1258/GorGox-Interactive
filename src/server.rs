@@ -285,7 +285,83 @@ async fn handle_client_message(
             info!("Player {} connected as {}", player_name_clone, if is_dm { "DM" } else { "Player" });
             game_state.write().await.add_player(session_id.to_string(), player_name, is_dm);
             
-            // Broadcast player joined
+            // IMPORTANT: Send current game state immediately to new player
+            // This ensures they see the map, tokens, and characters right away
+            let gs = game_state.read().await;
+            
+            // Send current map if loaded
+            if let Some(ref map) = gs.current_map {
+                let map_loaded = ServerMessage::MapLoaded { map: map.clone() };
+                send_to_client(clients, session_id, &map_loaded).await;
+                info!("📤 Sent current map to new player: {}", map.name);
+            }
+            
+            // Send current tokens
+            if !gs.tokens.is_empty() {
+                let token_update = ServerMessage::TokenUpdate { tokens: gs.tokens.clone() };
+                send_to_client(clients, session_id, &token_update).await;
+                info!("📤 Sent {} tokens to new player", gs.tokens.len());
+            }
+            
+            // Send current characters list
+            let characters: Vec<Character> = gs.characters.values().cloned().collect();
+            if !characters.is_empty() {
+                let character_list = ServerMessage::CharacterList { 
+                    characters: characters.clone(), 
+                    style: None 
+                };
+                send_to_client(clients, session_id, &character_list).await;
+                info!("📤 Sent {} characters to new player", characters.len());
+            }
+            
+            // Send combat state if active
+            if gs.combat.active {
+                let participants: Vec<CombatParticipant> = gs.tokens.iter()
+                    .filter_map(|token| {
+                        if let Some(character) = gs.characters.get(&token.entity_id) {
+                            Some(CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: character.name.clone(),
+                                initiative: gs.combat.participants.iter()
+                                    .find(|p| p.id == token.id)
+                                    .map(|p| p.initiative)
+                                    .unwrap_or(0),
+                                initiative_bonus: character.initiative_bonus,
+                                entity_type: crate::models::TokenType::Player,
+                                current_hp: character.current_hp,
+                                max_hp: character.max_hp,
+                                armor_class: character.armor_class,
+                            })
+                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            Some(CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: enemy.name.clone(),
+                                initiative: gs.combat.participants.iter()
+                                    .find(|p| p.id == token.id)
+                                    .map(|p| p.initiative)
+                                    .unwrap_or(0),
+                                initiative_bonus: enemy.initiative_bonus,
+                                entity_type: crate::models::TokenType::Enemy,
+                                current_hp: enemy.current_hp,
+                                max_hp: enemy.max_hp,
+                                armor_class: enemy.armor_class,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                
+                let combat_started = ServerMessage::CombatStarted { participants };
+                send_to_client(clients, session_id, &combat_started).await;
+                info!("📤 Sent combat state to new player");
+            }
+            
+            drop(gs); // Release read lock
+            
+            // Broadcast player joined to all other clients
             let player_joined = ServerMessage::PlayerJoined {
                 player_name: player_name_clone,
                 is_dm,
@@ -407,7 +483,7 @@ async fn handle_client_message(
             let mut links: std::collections::HashMap<String, String> = if links_file.exists() {
                 match fs::read_to_string(&links_file).await {
                     Ok(content) => {
-                        match serde_json::from_str(&content) {
+                        match serde_json::from_str::<std::collections::HashMap<String, String>>(&content) {
                             Ok(parsed) => {
                                 info!("✅ Loaded {} existing Discord link(s) from file", parsed.len());
                                 parsed
@@ -547,6 +623,31 @@ async fn handle_client_message(
         ClientMessage::DealDamage { target_id, damage } => {
             let mut gs = game_state.write().await;
             if let Some((dmg, new_hp)) = gs.combat.deal_damage(&target_id, damage) {
+                // CRITICAL: Also update the underlying character or enemy data
+                // Extract entity_id and entity_type first to avoid borrow conflicts
+                let (entity_id, entity_type) = if let Some(token) = gs.tokens.iter().find(|t| t.id == target_id) {
+                    (Some(token.entity_id.clone()), Some(token.entity_type.clone()))
+                } else {
+                    (None, None)
+                };
+                
+                // Now update character or enemy with mutable borrow
+                if let (Some(eid), Some(etype)) = (entity_id, entity_type) {
+                    if etype == crate::models::TokenType::Player {
+                        // Update character HP
+                        if let Some(character) = gs.characters.get_mut(&eid) {
+                            character.current_hp = new_hp;
+                            info!("Updated character {} HP to {}", character.name, new_hp);
+                        }
+                    } else if etype == crate::models::TokenType::Enemy {
+                        // Update enemy instance HP
+                        if let Some(enemy) = gs.enemy_instances.get_mut(&eid) {
+                            enemy.current_hp = new_hp;
+                            info!("Updated enemy {} HP to {}", enemy.name, new_hp);
+                        }
+                    }
+                }
+                
                 let damage_dealt = ServerMessage::DamageDealt { target_id, damage: dmg, new_hp };
                 broadcast_message(clients, &damage_dealt).await;
             }
@@ -555,6 +656,31 @@ async fn handle_client_message(
         ClientMessage::HealTarget { target_id, healing } => {
             let mut gs = game_state.write().await;
             if let Some((heal, new_hp)) = gs.combat.heal_target(&target_id, healing) {
+                // CRITICAL: Also update the underlying character or enemy data
+                // Extract entity_id and entity_type first to avoid borrow conflicts
+                let (entity_id, entity_type) = if let Some(token) = gs.tokens.iter().find(|t| t.id == target_id) {
+                    (Some(token.entity_id.clone()), Some(token.entity_type.clone()))
+                } else {
+                    (None, None)
+                };
+                
+                // Now update character or enemy with mutable borrow
+                if let (Some(eid), Some(etype)) = (entity_id, entity_type) {
+                    if etype == crate::models::TokenType::Player {
+                        // Update character HP
+                        if let Some(character) = gs.characters.get_mut(&eid) {
+                            character.current_hp = new_hp;
+                            info!("Updated character {} HP to {}", character.name, new_hp);
+                        }
+                    } else if etype == crate::models::TokenType::Enemy {
+                        // Update enemy instance HP
+                        if let Some(enemy) = gs.enemy_instances.get_mut(&eid) {
+                            enemy.current_hp = new_hp;
+                            info!("Updated enemy {} HP to {}", enemy.name, new_hp);
+                        }
+                    }
+                }
+                
                 let healing_applied = ServerMessage::HealingApplied { target_id, healing: heal, new_hp };
                 broadcast_message(clients, &healing_applied).await;
             }
@@ -739,6 +865,28 @@ async fn handle_client_message(
                 let error = ServerMessage::Error { message: format!("Map not found: {}", map_id) };
                 broadcast_message(clients, &error).await;
             }
+        }
+        
+        ClientMessage::ClearMap => {
+            info!("🗑️ Clearing map and all tokens");
+            let mut gs = game_state.write().await;
+            
+            // Clear map
+            gs.current_map = None;
+            
+            // Clear all tokens
+            gs.tokens.clear();
+            
+            // Clear token update (empty tokens array)
+            let token_update = ServerMessage::TokenUpdate { tokens: Vec::new() };
+            drop(gs); // Release write lock before broadcasting
+            
+            // Broadcast map cleared and empty token update to all clients
+            let map_cleared = ServerMessage::MapCleared;
+            broadcast_message(clients, &map_cleared).await;
+            broadcast_message(clients, &token_update).await;
+            
+            info!("✅ Map and tokens cleared, broadcast to all clients");
         }
         
         ClientMessage::MapSettingsChanged { grid_size, width, height } => {
@@ -1207,6 +1355,25 @@ async fn handle_client_message(
         ClientMessage::DeleteCustomSpell { .. } => {
             warn!("DeleteCustomSpell needs database implementation");
         }
+    }
+}
+
+async fn send_to_client(clients: &Clients, session_id: &str, message: &ServerMessage) {
+    let json = match serde_json::to_string(message) {
+        Ok(json) => json,
+        Err(e) => {
+            error!("Failed to serialize message: {}", e);
+            return;
+        }
+    };
+
+    let clients_read = clients.read().await;
+    if let Some(sender) = clients_read.get(session_id) {
+        if sender.send(json).is_err() {
+            warn!("Failed to send message to client {}", session_id);
+        }
+    } else {
+        warn!("Client {} not found in clients list", session_id);
     }
 }
 

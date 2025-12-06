@@ -121,6 +121,7 @@ pub enum ClientMessage {
     ListMaps,
     LoadMap { map_id: String, clear_tokens: Option<bool> },
     DeleteMap { map_id: String },
+    ClearMap, // Clear current map and all tokens
     
     // Token management
     PlaceToken { entity_id: String, entity_type: TokenType, x: f32, y: f32 },
@@ -215,6 +216,7 @@ pub enum ServerMessage {
     // State updates
     GameStateUpdate { state: String },
     MapLoaded { map: Map },
+    MapCleared, // Map and tokens cleared
     TokenUpdate { tokens: Vec<Token> },
     
     // Combat updates

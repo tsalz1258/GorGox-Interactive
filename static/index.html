@@ -839,7 +839,21 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
-    <script src="/static/app.js?v=13.2"></script>
+    <script src="/static/app.js?v=13.3"></script>
+    <script>
+        // Verify connect function is available
+        window.addEventListener('DOMContentLoaded', () => {
+            console.log('✅ DOM loaded');
+            console.log('✅ connect function available:', typeof window.connect);
+            console.log('✅ connect function available:', typeof connect);
+            if (typeof connect === 'undefined' && typeof window.connect === 'undefined') {
+                console.error('❌ CRITICAL: connect function is NOT defined!');
+                alert('ERROR: Connection function not loaded. Please refresh the page (Ctrl+F5 to clear cache).');
+            } else {
+                console.log('✅ Connection function is ready');
+            }
+        });
+    </script>
 </body>
 </html>
 
