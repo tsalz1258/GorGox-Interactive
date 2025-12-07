@@ -59,6 +59,7 @@
                             <button onclick="showSaveLoadModal()" style="background: #4a9eff; color: white; font-weight: bold;">💾 Save/Load Game</button>
                             <button onclick="showSoundBoard()" style="background: #aa44ff; color: white; font-weight: bold;">🔊 Sound Board</button>
                             <button onclick="showSettings()" style="background: #ffaa44; color: white; font-weight: bold;">⚙️ Settings</button>
+                            <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
                             <button onclick="showPlaceCharacter()">🎭 Place Character</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                             <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
@@ -68,6 +69,7 @@
                             <button onclick="showCharacterSelect()">Select Character</button>
                             <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
+                            <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                         </div>
                     </div>
@@ -474,6 +476,29 @@
                     </div>
                 </div>
                 
+                <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #444;">
+                    <h3 style="color: #ff6b6b; margin-bottom: 15px;">💥 HP Damage Sound</h3>
+                    <p style="margin-bottom: 15px; opacity: 0.8;">Play a sound when someone takes damage (HP decreases):</p>
+                    
+                    <div style="margin-bottom: 20px; padding: 15px; background: rgba(255, 107, 107, 0.1); border: 2px solid #ff6b6b; border-radius: 5px;">
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: bold; color: #ff6b6b; cursor: pointer;">
+                                <input type="checkbox" id="hpDamageSoundEnabled" onchange="toggleHpDamageSound()" style="width: 20px; height: 20px; cursor: pointer;">
+                                <span>Enable HP Damage Sound</span>
+                            </label>
+                        </div>
+                        
+                        <h4 style="color: #ff6b6b; margin-bottom: 10px; margin-top: 15px;">🔊 Damage Sound</h4>
+                        <p style="font-size: 12px; opacity: 0.8; margin-bottom: 10px;">Played when any character or enemy takes damage:</p>
+                        <input type="file" id="hpDamageSoundFile" accept="audio/*" style="width: 100%; margin-bottom: 10px;">
+                        <div id="hpDamageSoundDisplay" style="margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 5px; font-size: 12px;">
+                            <div id="hpDamageSoundInfo" style="opacity: 0.7;">No sound configured</div>
+                            <audio id="hpDamageSoundPreview" controls style="width: 100%; margin-top: 5px; display: none;"></audio>
+                        </div>
+                        <button onclick="uploadHpDamageSound()" style="width: 100%; margin-top: 10px; background: #ff6b6b; color: white; font-weight: bold;">📤 Upload HP Damage Sound</button>
+                    </div>
+                </div>
+                
                 <div class="modal-actions">
                     <button onclick="closeModal('settingsModal')">Close</button>
                 </div>
@@ -571,6 +596,28 @@
                 <div id="customSpellsList" style="max-height: 400px; overflow-y: auto; margin-bottom: 15px;"></div>
                 <div class="modal-actions">
                     <button onclick="closeModal('customSpellsModal')">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Panel Modal -->
+        <div id="infoPanelModal" class="modal">
+            <div class="modal-content large">
+                <h2>ℹ️ Information</h2>
+                
+                <!-- Info Type Navigation Buttons -->
+                <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; border-bottom: 2px solid #444; padding-bottom: 15px;">
+                    <button id="infoBtnConditions" onclick="showInfoSection('conditions')" style="background: #4a9eff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#5ab0ff'" onmouseout="this.style.background='#4a9eff'">⚡ Conditions</button>
+                    <!-- Future info buttons can be added here -->
+                </div>
+                
+                <!-- Info Content Area -->
+                <div id="infoContent" style="min-height: 400px; max-height: 60vh; overflow-y: auto;">
+                    <!-- Content will be loaded dynamically -->
+                </div>
+                
+                <div class="modal-actions" style="margin-top: 20px;">
+                    <button onclick="closeModal('infoPanelModal')">Close</button>
                 </div>
             </div>
         </div>

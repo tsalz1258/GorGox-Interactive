@@ -70,6 +70,22 @@ let techPowersLoaded = false;
 let forcePowersCache = {};
 let forcePowersLoaded = false;
 
+// Equipment and item caches
+let weaponsCache = {};
+let weaponsLoaded = false;
+let armorCache = {};
+let armorLoaded = false;
+let featsCache = {};
+let featsLoaded = false;
+let gearCache = {};
+let gearLoaded = false;
+let itemsCache = {};
+let itemsLoaded = false;
+let maneuversCache = {};
+let maneuversLoaded = false;
+let conditionsCache = {};
+let conditionsLoaded = false;
+
 // Initialize on page load
 window.addEventListener('DOMContentLoaded', () => {
     canvas = document.getElementById('mapCanvas');
@@ -301,11 +317,14 @@ function handleServerMessage(message) {
             } else {
                 // Show character selection for players (not DM)
                 document.getElementById('playerControls').classList.remove('hidden');
+                // Automatically show character selection modal when player connects
+                // Wait a bit for characters to load from server
                 setTimeout(() => {
-                    if (!myCharacterId) { // Only show if not already selected
-                        showCharacterSelect();
+                    if (!myCharacterId) { // Only show if no character selected yet
+                        console.log('🎭 Auto-opening character selection for player');
+                        showCharacterManager();
                     }
-                }, 500);
+                }, 1000);
             }
             
             document.getElementById('playerInfo').textContent = 
@@ -562,17 +581,34 @@ function handleServerMessage(message) {
         case 'AbilityCheckRolled':
             console.log('🎲 Ability check rolled:', message);
             const abilityName = message.ability.toUpperCase();
-            const rollDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
-            const isAbilityNat20 = message.roll === 20;
-            const isAbilityNat1 = message.roll === 1;
-            const abilityNatText = isAbilityNat20 ? ' ✨ NATURAL 20!' : (isAbilityNat1 ? ' ❌ NATURAL 1!' : '');
-            addRollEntry(`🎲 ${message.character_name} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
             
-            // Play sounds for nat 20/1
-            if (isAbilityNat20) {
-                playNat20Sound();
-            } else if (isAbilityNat1) {
-                playNat1Sound();
+            // Check if this is a dice roll (starts with "D")
+            const isDiceRoll = abilityName.startsWith('D');
+            
+            if (isDiceRoll) {
+                // This is a flat dice roll
+                // Check if this is our own roll to prevent duplicates
+                const currentChar = currentViewingCharacter || characters.find(c => c.id === myCharacterId);
+                const isMyRoll = currentChar && message.character_name === currentChar.name;
+                if (!isMyRoll) {
+                    // Only add if it's from another player (we already added our own locally)
+                    const diceType = abilityName;
+                    addRollEntry(`🎲 ${message.character_name} rolled ${diceType}: ${message.roll}`, false, false);
+                }
+            } else {
+                // This is an ability check
+                const rollDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
+                const isAbilityNat20 = message.roll === 20;
+                const isAbilityNat1 = message.roll === 1;
+                const abilityNatText = isAbilityNat20 ? ' ✨ NATURAL 20!' : (isAbilityNat1 ? ' ❌ NATURAL 1!' : '');
+                addRollEntry(`🎲 ${message.character_name} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
+                
+                // Play sounds for nat 20/1
+                if (isAbilityNat20) {
+                    playNat20Sound();
+                } else if (isAbilityNat1) {
+                    playNat1Sound();
+                }
             }
             break;
             
@@ -912,22 +948,17 @@ function handleServerMessage(message) {
                         console.log('🎲 PROMPTING FOR:', myParticipant.name, '(entity_id:', myParticipant.entity_id, ')');
                         setTimeout(() => promptMyInitiative(), 100);
                     } else {
-                        // Multiple players and no match - let user choose
-                        console.log('⚠️ Multiple players, need to choose');
-                        setTimeout(() => {
-                            const names = playerParticipants.map(p => p.name).join(', ');
-                            const choice = prompt(`Which character are you playing?\n\nPlayers in combat: ${names}\n\nEnter character name:`);
-                            if (choice) {
-                                const chosen = playerParticipants.find(p => p.name.toLowerCase().includes(choice.toLowerCase()));
-                                if (chosen) {
-                                    myCharacterId = chosen.entity_id;
-                                    console.log('✅ User chose:', chosen.name);
-                                    promptMyInitiative();
-                                } else {
-                                    alert('Character not found. Ask DM to restart combat.');
-                                }
-                            }
-                        }, 500);
+                        // Multiple players and no match - use first player or let them select character manually
+                        console.log('⚠️ Multiple players, using first participant or manual selection');
+                        if (playerParticipants.length > 0) {
+                            // Use first player participant as default
+                            const firstParticipant = playerParticipants[0];
+                            myCharacterId = firstParticipant.entity_id;
+                            console.log('✅ Using first participant:', firstParticipant.name);
+                            setTimeout(() => promptMyInitiative(), 100);
+                        } else {
+                            console.log('⚠️ No player participants found - player should select character manually');
+                        }
                     }
                 } else {
                     console.error('❌ NO PLAYER PARTICIPANTS IN COMBAT!');
@@ -1158,10 +1189,9 @@ function handleServerMessage(message) {
                             damagedParticipant.current_hp = message.new_hp;
                         }
                         
-                        // If this is MY character, show alert to player
+                        // If this is MY character, just log it (no alert - animations handle the visual feedback)
                         if (char.id === myCharacterId) {
-                            console.log('🚨 THIS IS MY CHARACTER! Showing damage alert!');
-                            alert(`💥 You took ${message.damage} damage!\n\nNew HP: ${message.new_hp}/${char.max_hp}`);
+                            console.log('🚨 THIS IS MY CHARACTER! Took damage:', message.damage, 'New HP:', message.new_hp);
                         }
                     } else {
                         console.warn('⚠️ Character not found for token entity_id:', damagedToken.entity_id);
@@ -1214,6 +1244,10 @@ function handleServerMessage(message) {
             // Get target name for log
             const targetName = damagedParticipant ? damagedParticipant.name : (damagedToken ? 'Target' : 'Unknown');
             addLogEntry(`💥 ${targetName} took ${message.damage} damage! New HP: ${message.new_hp}`, 'damage');
+            
+            // Play HP damage sound if enabled
+            playHpDamageSound();
+            
             break;
         }
             
@@ -1244,10 +1278,9 @@ function handleServerMessage(message) {
                             healedParticipant.current_hp = message.new_hp;
                         }
                         
-                        // If this is MY character, show alert to player
+                        // If this is MY character, just log it (no alert - animations handle the visual feedback)
                         if (char.id === myCharacterId) {
-                            console.log('🚨 THIS IS MY CHARACTER! Showing healing alert!');
-                            alert(`💚 You were healed ${message.healing} HP!\n\nNew HP: ${message.new_hp}/${char.max_hp}`);
+                            console.log('🚨 THIS IS MY CHARACTER! Was healed:', message.healing, 'New HP:', message.new_hp);
                         }
                     } else {
                         console.warn('⚠️ Character not found for token entity_id:', healedToken.entity_id);
@@ -1319,6 +1352,15 @@ function handleServerMessage(message) {
                 characters = message.characters || [];
                 renderCharacterList();
                 syncCharactersWithServer();
+                
+                // Auto-show character selection for players who haven't selected yet
+                if (!isDM && !myCharacterId && characters.length > 0) {
+                    const modal = document.getElementById('characterManagerModal');
+                    if (modal && !modal.classList.contains('active')) {
+                        console.log('🎭 Auto-opening character selection - characters loaded');
+                        setTimeout(() => showCharacterManager(), 100);
+                    }
+                }
             }
             break;
             
@@ -1373,10 +1415,27 @@ function handleServerMessage(message) {
             
         case 'SoundPlayed':
             console.log('🔊 Sound received:', message.sound_name);
-            // Check if this is a critical roll sound (don't log it as a regular sound)
+            // Check if this is a critical roll sound or HP damage sound (don't log it as a regular sound)
             const isCriticalSound = message.sound_name === 'Natural 20!' || message.sound_name === 'Natural 1!';
-            if (!isCriticalSound) {
+            const isHpDamageSound = message.sound_name === 'HP Damage' || message.sound_id?.startsWith('hpdamage_');
+            if (!isCriticalSound && !isHpDamageSound) {
                 playSoundFromServer(message.sound_id, message.sound_name, message.sound_data, message.sound_type);
+            } else if (isHpDamageSound) {
+                // Play HP damage sound (only if enabled)
+                // Check localStorage in case variable hasn't been loaded yet
+                const enabled = hpDamageSoundEnabled !== undefined ? hpDamageSoundEnabled : (localStorage.getItem('hpDamageSoundEnabled') !== 'false');
+                if (enabled) {
+                    try {
+                        const audio = new Audio(`data:audio/${message.sound_type};base64,${message.sound_data}`);
+                        audio.volume = 0.5; // Slightly quieter than critical rolls
+                        audio.play().catch(e => {
+                            console.warn('⚠️ Could not play HP damage sound:', e);
+                        });
+                        console.log('🎵 Playing HP damage sound from server');
+                    } catch (e) {
+                        console.error('❌ Error playing HP damage sound:', e);
+                    }
+                }
             } else {
                 // Play critical roll sound silently (no log entry, just play)
                 try {
@@ -5666,6 +5725,144 @@ function showCustomSpellsManager() {
     loadCustomSpells();
 }
 
+// ==================== INFO PANEL ====================
+
+function showInfoPanel() {
+    const modal = document.getElementById('infoPanelModal');
+    if (!modal) {
+        console.error('❌ infoPanelModal not found!');
+        return;
+    }
+    
+    modal.classList.add('active');
+    
+    // Load conditions data
+    loadConditions();
+    
+    // Show conditions section by default
+    showInfoSection('conditions');
+}
+
+function showInfoSection(section) {
+    const content = document.getElementById('infoContent');
+    if (!content) return;
+    
+    // Update button styles
+    const buttons = document.querySelectorAll('[id^="infoBtn"]');
+    buttons.forEach(btn => {
+        btn.style.background = '#4a9eff';
+        btn.style.opacity = '1';
+    });
+    
+    const sectionName = section.charAt(0).toUpperCase() + section.slice(1);
+    const activeBtn = document.getElementById(`infoBtn${sectionName}`);
+    if (activeBtn) {
+        activeBtn.style.background = '#2a7acc';
+        activeBtn.style.opacity = '1';
+    }
+    
+    // Load and display the selected section
+    switch(section) {
+        case 'conditions':
+            renderConditionsSection();
+            break;
+        // Future sections can be added here
+        default:
+            content.innerHTML = `<div style="text-align: center; padding: 40px; opacity: 0.7;">Section "${section}" coming soon!</div>`;
+    }
+}
+
+function renderConditionsSection() {
+    const content = document.getElementById('infoContent');
+    if (!content) return;
+    
+    // Ensure conditions are loaded
+    if (!conditionsLoaded) {
+        loadConditions().then(() => renderConditionsSection());
+        content.innerHTML = `<div style="text-align: center; padding: 40px; opacity: 0.7;">⏳ Loading conditions...</div>`;
+        return;
+    }
+    
+    const conditions = Object.values(conditionsCache);
+    
+    if (conditions.length === 0) {
+        content.innerHTML = `<div style="text-align: center; padding: 40px; opacity: 0.7;">No conditions found in database.</div>`;
+        return;
+    }
+    
+    // Sort conditions alphabetically
+    conditions.sort((a, b) => {
+        const nameA = (a.Name || a.name || '').toLowerCase();
+        const nameB = (b.Name || b.name || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+    });
+    
+    let html = `
+        <div style="margin-bottom: 20px;">
+            <h3 style="color: #4a9eff; margin-bottom: 15px;">⚡ Conditions</h3>
+            <p style="opacity: 0.8; margin-bottom: 15px; font-size: 13px;">Hover over a condition to see its full description.</p>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px;">`;
+    
+    conditions.forEach(condition => {
+        const name = condition.Name || condition.name || 'Unknown';
+        const description = condition.Description || condition.description || 'No description available.';
+        const escapedName = escapeJs(name);
+        const escapedDesc = escapeHtml(description);
+        
+        html += `
+            <div 
+                onmouseover="showConditionTooltip('${escapedName}', '${escapedDesc}', event)" 
+                onmouseout="hideSpellTooltip()" 
+                style="
+                    padding: 10px 15px; 
+                    background: rgba(74,158,255,0.15); 
+                    border: 2px solid rgba(74,158,255,0.3); 
+                    border-radius: 5px; 
+                    font-size: 13px; 
+                    cursor: help; 
+                    transition: all 0.2s;
+                    font-weight: 500;
+                " 
+                onmouseenter="this.style.background='rgba(74,158,255,0.3)'; this.style.borderColor='#4a9eff'; this.style.transform='scale(1.05)'" 
+                onmouseleave="this.style.background='rgba(74,158,255,0.15)'; this.style.borderColor='rgba(74,158,255,0.3)'; this.style.transform='scale(1)'"
+            >
+                ${escapeHtml(name)}
+            </div>`;
+    });
+    
+    html += `</div></div>`;
+    
+    content.innerHTML = html;
+}
+
+function showConditionTooltip(conditionName, description, event) {
+    const tooltip = document.getElementById('spellTooltip');
+    const tooltipContent = document.getElementById('spellTooltipContent');
+    
+    if (!tooltip || !tooltipContent) return;
+    
+    if (spellTooltipTimeout) {
+        clearTimeout(spellTooltipTimeout);
+        spellTooltipTimeout = null;
+    }
+    
+    // Format condition tooltip
+    let html = `
+        <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #4a9eff; padding-bottom: 8px;">
+            <div style="font-size: 18px; font-weight: bold; color: #4a9eff;">⚡ ${escapeHtml(conditionName)}</div>
+        </div>
+        <div style="font-size: 13px; line-height: 1.6; white-space: pre-line;">${description}</div>
+    `;
+    
+    tooltipContent.innerHTML = html;
+    tooltip.style.display = 'block';
+    tooltip.style.zIndex = '99999';
+    tooltip.style.left = (event.clientX + 15) + 'px';
+    tooltip.style.top = (event.clientY + 15) + 'px';
+    
+    adjustTooltipPosition(tooltip, event);
+}
+
 function showCreateCustomSpell() {
     // Update title based on selected style
     const title = document.getElementById('createSpellTitle');
@@ -7263,6 +7460,299 @@ function getOrdinalSuffix(num) {
     return 'th';
 }
 
+// ==================== EQUIPMENT TOOLTIPS ====================
+
+function showItemTooltip(itemName, itemType, event) {
+    const tooltip = document.getElementById('spellTooltip');
+    const content = document.getElementById('spellTooltipContent');
+    
+    if (!tooltip || !content) return;
+    
+    if (spellTooltipTimeout) {
+        clearTimeout(spellTooltipTimeout);
+        spellTooltipTimeout = null;
+    }
+    
+    // Show loading state
+    content.innerHTML = `<div style="text-align: center; opacity: 0.7; padding: 20px;">⏳ Loading ${itemName}...</div>`;
+    tooltip.style.display = 'block';
+    tooltip.style.zIndex = '99999';
+    tooltip.style.left = (event.clientX + 15) + 'px';
+    tooltip.style.top = (event.clientY + 15) + 'px';
+    
+    // Load item data and display
+    const cacheKey = itemName.toLowerCase().trim();
+    let item = null;
+    
+    switch(itemType) {
+        case 'weapon':
+            if (!weaponsLoaded) loadWeapons();
+            item = weaponsCache[cacheKey];
+            if (item) {
+                content.innerHTML = formatWeaponTooltip(item);
+                adjustTooltipPosition(tooltip, event);
+            } else {
+                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">⚔️ ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
+            }
+            break;
+        case 'armor':
+            if (!armorLoaded) loadArmor();
+            item = armorCache[cacheKey];
+            if (item) {
+                content.innerHTML = formatArmorTooltip(item);
+                adjustTooltipPosition(tooltip, event);
+            } else {
+                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">🛡️ ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
+            }
+            break;
+        case 'feat':
+            if (!featsLoaded) loadFeats();
+            item = featsCache[cacheKey];
+            if (item) {
+                content.innerHTML = formatFeatTooltip(item);
+                adjustTooltipPosition(tooltip, event);
+            } else {
+                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">⭐ ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
+            }
+            break;
+        case 'gear':
+            if (!gearLoaded) loadGear();
+            item = gearCache[cacheKey];
+            if (item) {
+                content.innerHTML = formatGearTooltip(item);
+                adjustTooltipPosition(tooltip, event);
+            } else {
+                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">🎒 ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
+            }
+            break;
+        case 'item':
+            if (!itemsLoaded) loadItems();
+            item = itemsCache[cacheKey];
+            if (item) {
+                content.innerHTML = formatItemTooltip(item);
+                adjustTooltipPosition(tooltip, event);
+            } else {
+                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">📦 ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
+            }
+            break;
+        case 'maneuver':
+            if (!maneuversLoaded) loadManeuvers();
+            item = maneuversCache[cacheKey];
+            if (item) {
+                content.innerHTML = formatManeuverTooltip(item);
+                adjustTooltipPosition(tooltip, event);
+            } else {
+                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">🎯 ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
+            }
+            break;
+    }
+}
+
+function formatWeaponTooltip(weapon) {
+    const name = weapon.name || '';
+    const type = weapon.type || '';
+    const damage = weapon.damage || '';
+    const properties = weapon.properties || '';
+    const cost = weapon.cost || '';
+    const weight = weapon.weight || '';
+    const description = weapon.description || '';
+    
+    let html = `
+        <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #ff4444; padding-bottom: 8px;">
+            <div style="font-size: 18px; font-weight: bold; color: #ff4444;">⚔️ ${escapeHtml(name)}</div>
+            ${type ? `<div style="font-size: 12px; opacity: 0.8;">${escapeHtml(type)}</div>` : ''}
+        </div>
+    `;
+    
+    if (damage) {
+        html += `<div style="padding: 8px; margin-bottom: 8px; background: rgba(255,68,68,0.15); border-left: 3px solid #ff4444; border-radius: 5px;">
+            <strong>Damage:</strong> ${escapeHtml(damage)}
+        </div>`;
+    }
+    
+    const details = [];
+    if (properties) details.push(`<strong>Properties:</strong> ${escapeHtml(properties)}`);
+    if (cost) details.push(`<strong>Cost:</strong> ${cost} credits`);
+    if (weight) details.push(`<strong>Weight:</strong> ${weight} lbs`);
+    
+    if (details.length > 0) {
+        html += `<div style="font-size: 12px; margin-bottom: 8px; line-height: 1.4;">${details.join('<br>')}</div>`;
+    }
+    
+    if (description) {
+        html += `<div style="font-size: 12px; margin-top: 8px; line-height: 1.6; white-space: pre-line;">${escapeHtml(description)}</div>`;
+    }
+    
+    return html;
+}
+
+function formatArmorTooltip(armor) {
+    const name = armor.name || '';
+    const type = armor.type || '';
+    const ac = armor.ac || '';
+    const properties = armor.properties || '';
+    const cost = armor.cost || '';
+    const weight = armor.weight || '';
+    const stealth = armor.stealth || '';
+    const description = armor.description || '';
+    
+    let html = `
+        <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #4a9eff; padding-bottom: 8px;">
+            <div style="font-size: 18px; font-weight: bold; color: #4a9eff;">🛡️ ${escapeHtml(name)}</div>
+            ${type ? `<div style="font-size: 12px; opacity: 0.8;">${escapeHtml(type)}</div>` : ''}
+        </div>
+    `;
+    
+    if (ac) {
+        html += `<div style="padding: 8px; margin-bottom: 8px; background: rgba(74,158,255,0.15); border-left: 3px solid #4a9eff; border-radius: 5px;">
+            <strong>Armor Class:</strong> ${escapeHtml(ac)}
+        </div>`;
+    }
+    
+    const details = [];
+    if (properties) details.push(`<strong>Properties:</strong> ${escapeHtml(properties)}`);
+    if (stealth && stealth !== '-') details.push(`<strong>Stealth:</strong> ${escapeHtml(stealth)}`);
+    if (cost) details.push(`<strong>Cost:</strong> ${cost} credits`);
+    if (weight) details.push(`<strong>Weight:</strong> ${weight} lbs`);
+    
+    if (details.length > 0) {
+        html += `<div style="font-size: 12px; margin-bottom: 8px; line-height: 1.4;">${details.join('<br>')}</div>`;
+    }
+    
+    if (description) {
+        html += `<div style="font-size: 12px; margin-top: 8px; line-height: 1.6; white-space: pre-line;">${escapeHtml(description)}</div>`;
+    }
+    
+    return html;
+}
+
+function formatFeatTooltip(feat) {
+    const name = feat.Name || feat.name || '';
+    const abilityIncrease = feat.AbilityScoreIncrease || feat.abilityScoreIncrease || '';
+    const prerequisite = feat.Prerequisite || feat.prerequisite || '';
+    const description = feat.Description || feat.description || '';
+    const source = feat.Source || feat.source || '';
+    
+    let html = `
+        <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #ffaa44; padding-bottom: 8px;">
+            <div style="font-size: 18px; font-weight: bold; color: #ffaa44;">⭐ ${escapeHtml(name)}</div>
+        </div>
+    `;
+    
+    const details = [];
+    if (abilityIncrease && abilityIncrease !== '-') {
+        details.push(`<strong>Ability Score Increase:</strong> ${escapeHtml(abilityIncrease)}`);
+    }
+    if (prerequisite) {
+        details.push(`<strong>Prerequisite:</strong> ${escapeHtml(prerequisite)}`);
+    }
+    if (source) {
+        details.push(`<strong>Source:</strong> ${escapeHtml(source)}`);
+    }
+    
+    if (details.length > 0) {
+        html += `<div style="font-size: 12px; margin-bottom: 8px; line-height: 1.4;">${details.join('<br>')}</div>`;
+    }
+    
+    if (description) {
+        html += `<div style="font-size: 12px; margin-top: 8px; line-height: 1.6; white-space: pre-line;">${escapeHtml(description)}</div>`;
+    }
+    
+    return html;
+}
+
+function formatGearTooltip(gear) {
+    const name = gear.Name || gear.name || '';
+    const category = gear.Category || gear.category || '';
+    const cost = gear.Cost || gear.cost || '';
+    const weight = gear['Weight(lb)'] || gear.weight || '';
+    const description = gear.Description || gear.description || '';
+    const source = gear.Source || gear.source || '';
+    
+    let html = `
+        <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #44ff44; padding-bottom: 8px;">
+            <div style="font-size: 18px; font-weight: bold; color: #44ff44;">🎒 ${escapeHtml(name)}</div>
+            ${category ? `<div style="font-size: 12px; opacity: 0.8;">${escapeHtml(category)}</div>` : ''}
+        </div>
+    `;
+    
+    const details = [];
+    if (cost) details.push(`<strong>Cost:</strong> ${cost} credits`);
+    if (weight) details.push(`<strong>Weight:</strong> ${weight} lbs`);
+    if (source) details.push(`<strong>Source:</strong> ${escapeHtml(source)}`);
+    
+    if (details.length > 0) {
+        html += `<div style="font-size: 12px; margin-bottom: 8px; line-height: 1.4;">${details.join('<br>')}</div>`;
+    }
+    
+    if (description) {
+        html += `<div style="font-size: 12px; margin-top: 8px; line-height: 1.6; white-space: pre-line;">${escapeHtml(description)}</div>`;
+    }
+    
+    return html;
+}
+
+function formatItemTooltip(item) {
+    const name = item.Name || item.name || '';
+    const type = item.Type || item.type || '';
+    const subtype = item.Subtype || item.subtype || '';
+    const rarity = item.Rarity || item.rarity || '';
+    const description = item.Descrption || item.Description || item.description || '';
+    const source = item.source || item.Source || '';
+    
+    let html = `
+        <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #aa88ff; padding-bottom: 8px;">
+            <div style="font-size: 18px; font-weight: bold; color: #aa88ff;">📦 ${escapeHtml(name)}</div>
+            ${type ? `<div style="font-size: 12px; opacity: 0.8;">${escapeHtml(type)}${subtype ? ` - ${escapeHtml(subtype)}` : ''}</div>` : ''}
+        </div>
+    `;
+    
+    const details = [];
+    if (rarity) details.push(`<strong>Rarity:</strong> ${escapeHtml(rarity)}`);
+    if (source) details.push(`<strong>Source:</strong> ${escapeHtml(source)}`);
+    
+    if (details.length > 0) {
+        html += `<div style="font-size: 12px; margin-bottom: 8px; line-height: 1.4;">${details.join('<br>')}</div>`;
+    }
+    
+    if (description) {
+        html += `<div style="font-size: 12px; margin-top: 8px; line-height: 1.6; white-space: pre-line;">${escapeHtml(description)}</div>`;
+    }
+    
+    return html;
+}
+
+function formatManeuverTooltip(maneuver) {
+    const name = maneuver.Name || maneuver.name || '';
+    const prerequisite = maneuver.Prerequisite || maneuver.prerequisite || '';
+    const description = maneuver.Description || maneuver.description || '';
+    const source = maneuver.Source || maneuver.source || '';
+    
+    let html = `
+        <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid #ff6b6b; padding-bottom: 8px;">
+            <div style="font-size: 18px; font-weight: bold; color: #ff6b6b;">🎯 ${escapeHtml(name)}</div>
+        </div>
+    `;
+    
+    const details = [];
+    if (prerequisite) {
+        details.push(`<strong>Prerequisite:</strong> ${escapeHtml(prerequisite)}`);
+    }
+    if (source) {
+        details.push(`<strong>Source:</strong> ${escapeHtml(source)}`);
+    }
+    
+    if (details.length > 0) {
+        html += `<div style="font-size: 12px; margin-bottom: 8px; line-height: 1.4;">${details.join('<br>')}</div>`;
+    }
+    
+    if (description) {
+        html += `<div style="font-size: 12px; margin-top: 8px; line-height: 1.6; white-space: pre-line;">${escapeHtml(description)}</div>`;
+    }
+    
+    return html;
+}
+
 // Ability Check Rolling
 function rollAbilityCheck(ability, modifier, characterName) {
     console.log(`🎲 Rolling ${ability.toUpperCase()} check for ${characterName}`);
@@ -7311,6 +7801,88 @@ function rollSavingThrow(ability, modifier, characterName) {
     
     // Visual feedback
     addLogEntry(`Rolling ${ability.toUpperCase()} save...`, 'info');
+}
+
+// Setup event delegation for dice roll buttons
+function setupDiceRollButtons(container) {
+    console.log('🔧 Setting up dice roll buttons...');
+    const diceContainer = container.querySelector('.dice-roll-container');
+    if (!diceContainer) {
+        console.warn('⚠️ Dice roll container not found!');
+        return;
+    }
+    
+    console.log('✅ Found dice roll container:', diceContainer);
+    const characterName = diceContainer.getAttribute('data-character-name');
+    console.log('📝 Character name:', characterName);
+    
+    // Remove any existing listeners to prevent duplicates
+    const newContainer = diceContainer.cloneNode(true);
+    diceContainer.parentNode.replaceChild(newContainer, diceContainer);
+    
+    // Use event delegation - listen for clicks on dice buttons
+    newContainer.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const button = e.target.closest('.dice-roll-button');
+        if (!button) {
+            console.log('❌ Clicked element is not a dice button');
+            return;
+        }
+        
+        const sides = parseInt(button.getAttribute('data-sides'));
+        const charName = newContainer.getAttribute('data-character-name');
+        
+        console.log(`🎲 Dice button clicked: D${sides} for ${charName}`);
+        
+        if (sides && charName) {
+            rollFlatDice(sides, charName);
+        } else {
+            console.error('❌ Missing sides or character name:', { sides, charName });
+        }
+    });
+    
+    console.log('✅ Dice roll buttons setup complete');
+}
+
+// Roll a flat dice (D4, D6, D8, D10, D12, D20, D100)
+function rollFlatDice(sides, characterName) {
+    console.log(`🎲 Rolling D${sides} for ${characterName}`);
+    
+    if (!sides || !characterName) {
+        console.error('❌ Invalid parameters:', { sides, characterName });
+        return;
+    }
+    
+    // Roll the dice
+    const roll = Math.floor(Math.random() * sides) + 1;
+    
+    console.log(`   Roll: ${roll} (D${sides})`);
+    
+    // Always add to local log immediately for instant feedback
+    addRollEntry(`🎲 ${characterName} rolled D${sides}: ${roll}`, false, false);
+    
+    // Broadcast to all players via WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            // Use RollAbilityCheck format to broadcast (it will show in rolls log)
+            // The server will broadcast it back as AbilityCheckRolled, which we handle specially for dice
+            sendMessage({
+                type: 'RollAbilityCheck',
+                character_name: characterName,
+                ability: `D${sides}`,
+                roll: roll,
+                modifier: 0,
+                total: roll
+            });
+            console.log(`✅ Dice roll sent to server: D${sides} = ${roll}`);
+        } catch (e) {
+            console.error('❌ Error sending dice roll to server:', e);
+        }
+    } else {
+        console.warn('⚠️ WebSocket not available, roll only shown locally');
+    }
 }
 
 // Skill Check Rolling
@@ -7470,42 +8042,232 @@ function rollAttack(weaponName, toHitMod, damageNotation, damageType, characterN
     addLogEntry(`Attacking with ${weaponName}...`, 'info');
 }
 
+// Build dice roll section for character sheet
+function buildDiceRollSection(char, charData) {
+    const charName = charData?.name || char.name;
+    const escapedName = escapeJs(charName);
+    
+    let html = `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+        <h4 style="color: #aa88ff;">🎲 Dice Rolls <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
+        <div class="dice-roll-container" data-character-name="${escapedName}" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">`;
+    
+    const diceTypes = [
+        { sides: 4, label: 'D4', color: '#4a9eff' },
+        { sides: 6, label: 'D6', color: '#44ff44' },
+        { sides: 8, label: 'D8', color: '#ffaa44' },
+        { sides: 10, label: 'D10', color: '#ff4444' },
+        { sides: 12, label: 'D12', color: '#aa88ff' },
+        { sides: 20, label: 'D20', color: '#ff6b6b' },
+        { sides: 100, label: 'D100', color: '#00d4ff' }
+    ];
+    
+    diceTypes.forEach(die => {
+        const colorRgb = die.sides === 4 ? '74,158,255' : 
+                        die.sides === 6 ? '68,255,68' : 
+                        die.sides === 8 ? '255,170,68' : 
+                        die.sides === 10 ? '255,68,68' : 
+                        die.sides === 12 ? '170,136,255' : 
+                        die.sides === 20 ? '255,107,107' : '0,212,255';
+        
+        html += `<div class="dice-roll-button" data-sides="${die.sides}" style="
+            padding: 12px; 
+            background: rgba(${colorRgb},0.15); 
+            border: 2px solid ${die.color}; 
+            border-radius: 5px; 
+            text-align: center; 
+            cursor: pointer; 
+            transition: all 0.2s;
+            font-weight: bold;
+            font-size: 14px;
+        " onmouseover="this.style.background='rgba(${colorRgb},0.3)'; this.style.transform='scale(1.05)'" onmouseleave="this.style.background='rgba(${colorRgb},0.15)'; this.style.transform='scale(1)'">
+            ${die.label}
+        </div>`;
+    });
+    
+    html += `</div></div>`;
+    
+    return html;
+}
+
+// Build saving throws section for character sheet
+function buildSavingThrowsSection(char, charData) {
+    const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
+    const calcMod = (score) => Math.floor((score - 10) / 2);
+    
+    // Detect if this is a Star Wars character
+    const isStarWars = charData && (charData.species || (Array.isArray(charData.classes) && charData.baseAbilityScores));
+    
+    // Get ability modifiers and proficiency bonus
+    let abilityMods = {};
+    let profBonus = 0;
+    
+    if (isStarWars && charData.baseAbilityScores) {
+        // Star Wars format
+        const abilityNames = { Strength: 'str', Dexterity: 'dex', Constitution: 'con', Intelligence: 'int', Wisdom: 'wis', Charisma: 'cha' };
+        Object.entries(charData.baseAbilityScores).forEach(([name, score]) => {
+            const ab = abilityNames[name];
+            if (ab) {
+                abilityMods[ab] = calcMod(score);
+            }
+        });
+        profBonus = charData.proficiency_bonus || char.proficiency_bonus || 2;
+    } else if (charData.abilities) {
+        // D&D format
+        ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
+            if (charData.abilities[ab]) {
+                abilityMods[ab] = charData.abilities[ab].mod;
+            }
+        });
+        profBonus = charData.proficiency_bonus || char.proficiency_bonus || 2;
+    } else {
+        // Fallback to basic character data
+        abilityMods = {
+            str: calcMod(char.strength),
+            dex: calcMod(char.dexterity),
+            con: calcMod(char.constitution),
+            int: calcMod(char.intelligence),
+            wis: calcMod(char.wisdom),
+            cha: calcMod(char.charisma)
+        };
+        profBonus = char.proficiency_bonus || 2;
+    }
+    
+    // Get saving throw proficiencies
+    const savingThrowProficiencies = {};
+    if (charData.saving_throw_proficiencies) {
+        // If explicitly defined
+        charData.saving_throw_proficiencies.forEach(ab => {
+            savingThrowProficiencies[ab.toLowerCase()] = true;
+        });
+    } else if (charData.abilities) {
+        // D&D format - check each ability
+        ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
+            if (charData.abilities[ab] && charData.abilities[ab].save_proficient) {
+                savingThrowProficiencies[ab] = true;
+            }
+        });
+    }
+    
+    const abilityLabels = {
+        str: 'Strength',
+        dex: 'Dexterity',
+        con: 'Constitution',
+        int: 'Intelligence',
+        wis: 'Wisdom',
+        cha: 'Charisma'
+    };
+    
+    let html = `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+        <h4 style="color: #ffaa44;">🛡️ Saving Throws <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">`;
+    
+    ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
+        const baseMod = abilityMods[ab] || 0;
+        const isProficient = savingThrowProficiencies[ab] || false;
+        const saveMod = isProficient ? baseMod + profBonus : baseMod;
+        
+        const profSymbol = isProficient ? '●' : '○';
+        const profColor = isProficient ? '#44ff44' : '#888';
+        
+        const charName = charData?.name || char.name;
+        const escapedName = escapeJs(charName);
+        const abilityName = abilityLabels[ab];
+        
+        html += `<div onclick="rollSavingThrow('${ab}', ${saveMod}, '${escapedName}')" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(255,170,68,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
+            <span style="font-size: 13px;">
+                <span style="color: ${profColor}; margin-right: 5px;">${profSymbol}</span>
+                ${abilityName}
+            </span>
+            <span style="font-weight: bold; color: #ffaa44;">${formatMod(saveMod)}</span>
+        </div>`;
+    });
+    
+    html += `</div>
+        <div style="font-size: 11px; opacity: 0.6; margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 3px;">
+            <strong>Legend:</strong> 
+            <span style="color: #44ff44;">● Proficient</span> | 
+            <span style="color: #888;">○ Not Proficient</span>
+        </div>
+    </div>`;
+    
+    return html;
+}
+
 // Build skills section for character sheet
 function buildSkillsSection(char, charData) {
     const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
     const calcMod = (score) => Math.floor((score - 10) / 2);
     
-    // Define all 18 D&D skills with their associated abilities
-    const skillsByAbility = {
-        str: [
-            { key: 'athletics', name: 'Athletics' }
-        ],
-        dex: [
-            { key: 'acrobatics', name: 'Acrobatics' },
-            { key: 'sleight_of_hand', name: 'Sleight of Hand' },
-            { key: 'stealth', name: 'Stealth' }
-        ],
-        int: [
-            { key: 'arcana', name: 'Arcana' },
-            { key: 'history', name: 'History' },
-            { key: 'investigation', name: 'Investigation' },
-            { key: 'nature', name: 'Nature' },
-            { key: 'religion', name: 'Religion' }
-        ],
-        wis: [
-            { key: 'animal_handling', name: 'Animal Handling' },
-            { key: 'insight', name: 'Insight' },
-            { key: 'medicine', name: 'Medicine' },
-            { key: 'perception', name: 'Perception' },
-            { key: 'survival', name: 'Survival' }
-        ],
-        cha: [
-            { key: 'deception', name: 'Deception' },
-            { key: 'intimidation', name: 'Intimidation' },
-            { key: 'performance', name: 'Performance' },
-            { key: 'persuasion', name: 'Persuasion' }
-        ]
-    };
+    // Detect if this is a Star Wars character
+    const isStarWars = charData && (charData.species || (Array.isArray(charData.classes) && charData.baseAbilityScores));
+    
+    // Define skills based on game system
+    let skillsByAbility;
+    if (isStarWars) {
+        // Star Wars 5e skills
+        skillsByAbility = {
+            str: [
+                { key: 'athletics', name: 'Athletics' }
+            ],
+            dex: [
+                { key: 'acrobatics', name: 'Acrobatics' },
+                { key: 'sleight_of_hand', name: 'Sleight of Hand' },
+                { key: 'stealth', name: 'Stealth' }
+            ],
+            int: [
+                { key: 'investigation', name: 'Investigation' },
+                { key: 'lore', name: 'Lore' },
+                { key: 'nature', name: 'Nature' },
+                { key: 'piloting', name: 'Piloting' },
+                { key: 'technology', name: 'Technology' }
+            ],
+            wis: [
+                { key: 'animal_handling', name: 'Animal Handling' },
+                { key: 'insight', name: 'Insight' },
+                { key: 'medicine', name: 'Medicine' },
+                { key: 'perception', name: 'Perception' },
+                { key: 'survival', name: 'Survival' }
+            ],
+            cha: [
+                { key: 'deception', name: 'Deception' },
+                { key: 'intimidation', name: 'Intimidation' },
+                { key: 'performance', name: 'Performance' },
+                { key: 'persuasion', name: 'Persuasion' }
+            ]
+        };
+    } else {
+        // D&D 5e skills
+        skillsByAbility = {
+            str: [
+                { key: 'athletics', name: 'Athletics' }
+            ],
+            dex: [
+                { key: 'acrobatics', name: 'Acrobatics' },
+                { key: 'sleight_of_hand', name: 'Sleight of Hand' },
+                { key: 'stealth', name: 'Stealth' }
+            ],
+            int: [
+                { key: 'arcana', name: 'Arcana' },
+                { key: 'history', name: 'History' },
+                { key: 'investigation', name: 'Investigation' },
+                { key: 'nature', name: 'Nature' },
+                { key: 'religion', name: 'Religion' }
+            ],
+            wis: [
+                { key: 'animal_handling', name: 'Animal Handling' },
+                { key: 'insight', name: 'Insight' },
+                { key: 'medicine', name: 'Medicine' },
+                { key: 'perception', name: 'Perception' },
+                { key: 'survival', name: 'Survival' }
+            ],
+            cha: [
+                { key: 'deception', name: 'Deception' },
+                { key: 'intimidation', name: 'Intimidation' },
+                { key: 'performance', name: 'Performance' },
+                { key: 'persuasion', name: 'Persuasion' }
+            ]
+        };
+    }
     
     let html = `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
         <h4 style="color: #ffaa44;">🎯 Skills <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
@@ -7920,6 +8682,8 @@ function renderCharacterSheetContent() {
         if (looksStarWars && (!forcePowersLoaded || !forcePowersCache || Object.keys(forcePowersCache).length === 0)) {
             loadForcePowers();
         }
+        // Load equipment data
+        loadAllEquipment();
     }
     
     if (characterEditMode) {
@@ -7930,6 +8694,12 @@ function renderCharacterSheetContent() {
     if (charData) {
             const html = buildDetailedCharacterSheet(char, charData);
             contentEl.innerHTML = html;
+            
+            // Add event delegation for dice roll buttons
+            // Use setTimeout to ensure DOM is fully updated
+            setTimeout(() => {
+                setupDiceRollButtons(contentEl);
+            }, 100);
             
             // Update sessionStorage for standalone window (if it exists)
             updateStandaloneCharacterSheet(char, charData, html);
@@ -8530,6 +9300,9 @@ function buildDetailedCharacterSheet(char, charData) {
         html += `</div></div>`;
     }
     
+    // Dice Roll Section
+    html += buildDiceRollSection(char, charData);
+    
     // Combat Stats
     html += `<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
         <div class="panel" style="padding: 15px; text-align: center;">
@@ -8550,6 +9323,9 @@ function buildDetailedCharacterSheet(char, charData) {
             <div style="font-size: 28px; font-weight: bold; color: #aa88ff;">${formatMod(charData.proficiency_bonus)}</div>
         </div>
     </div>`;
+    
+    // Saving Throws Section
+    html += buildSavingThrowsSection(char, charData);
     
     // Skills Section
     html += buildSkillsSection(char, charData);
@@ -8668,16 +9444,84 @@ function buildDetailedCharacterSheet(char, charData) {
             html += `</div></div>`;
         }
         
-        // Equipment
+        // Equipment with tooltips
         if (charData.equipment && charData.equipment.length > 0) {
             html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
-                <h4 style="color: #ffaa44;">🎒 Equipment</h4>
-                <div style="display: flex; flex-direction: column; gap: 5px;">`;
+                <h4 style="color: #ffaa44;">🎒 Equipment <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
             charData.equipment.forEach(item => {
+                const itemName = item.name || item;
+                const escapedName = escapeJs(itemName);
                 const equipped = item.equipped ? ' ⭐' : '';
-                html += `<div style="padding: 5px 10px; background: rgba(255,170,68,0.1); border-radius: 3px; font-size: 12px; border-left: 3px solid ${item.equipped ? '#ffaa44' : 'transparent'};">
-                    ${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ''}${equipped}
+                const quantity = item.quantity > 1 ? ` x${item.quantity}` : '';
+                
+                // Try to determine item type for tooltip
+                let itemType = 'gear'; // default
+                const nameLower = itemName.toLowerCase();
+                if (weaponsCache[nameLower]) itemType = 'weapon';
+                else if (armorCache[nameLower]) itemType = 'armor';
+                else if (gearCache[nameLower]) itemType = 'gear';
+                else if (itemsCache[nameLower]) itemType = 'item';
+                
+                html += `<div onmouseover="showItemTooltip('${escapedName}', '${itemType}', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,170,68,0.1); border-radius: 3px; font-size: 12px; border-left: 3px solid ${item.equipped ? '#ffaa44' : 'transparent'}; cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,170,68,0.25)'; this.style.borderColor='#ffaa44'" onmouseleave="this.style.background='rgba(255,170,68,0.1)'; this.style.borderColor='${item.equipped ? '#ffaa44' : 'transparent'}'">
+                    ${escapeHtml(itemName)}${quantity}${equipped}
                 </div>`;
+            });
+            html += `</div></div>`;
+        }
+        
+        // Feats with tooltips
+        if (charData.feats && Array.isArray(charData.feats) && charData.feats.length > 0) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+                <h4 style="color: #ffaa44;">⭐ Feats <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
+            charData.feats.forEach(feat => {
+                const featName = typeof feat === 'string' ? feat : (feat.name || feat.Name || '');
+                if (!featName) return;
+                const escapedName = escapeJs(featName);
+                html += `<div onmouseover="showItemTooltip('${escapedName}', 'feat', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,170,68,0.2); border-radius: 3px; font-size: 12px; cursor: help; transition: all 0.2s; border: 1px solid transparent;" onmouseenter="this.style.background='rgba(255,170,68,0.4)'; this.style.borderColor='#ffaa44'" onmouseleave="this.style.background='rgba(255,170,68,0.2)'; this.style.borderColor='transparent'">${escapeHtml(featName)}</div>`;
+            });
+            html += `</div></div>`;
+        }
+        
+        // Maneuvers with tooltips
+        if (charData.maneuvers && Array.isArray(charData.maneuvers) && charData.maneuvers.length > 0) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+                <h4 style="color: #ff6b6b;">🎯 Maneuvers <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
+            charData.maneuvers.forEach(maneuver => {
+                const maneuverName = typeof maneuver === 'string' ? maneuver : (maneuver.name || maneuver.Name || '');
+                if (!maneuverName) return;
+                const escapedName = escapeJs(maneuverName);
+                html += `<div onmouseover="showItemTooltip('${escapedName}', 'maneuver', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,107,107,0.2); border-radius: 3px; font-size: 12px; cursor: help; transition: all 0.2s; border: 1px solid transparent;" onmouseenter="this.style.background='rgba(255,107,107,0.4)'; this.style.borderColor='#ff6b6b'" onmouseleave="this.style.background='rgba(255,107,107,0.2)'; this.style.borderColor='transparent'">${escapeHtml(maneuverName)}</div>`;
+            });
+            html += `</div></div>`;
+        }
+        
+        // Weapons (if listed separately)
+        if (charData.weapons && Array.isArray(charData.weapons) && charData.weapons.length > 0) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+                <h4 style="color: #ff4444;">⚔️ Weapons <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
+            charData.weapons.forEach(weapon => {
+                const weaponName = typeof weapon === 'string' ? weapon : (weapon.name || '');
+                if (!weaponName) return;
+                const escapedName = escapeJs(weaponName);
+                html += `<div onmouseover="showItemTooltip('${escapedName}', 'weapon', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,68,68,0.2); border-radius: 3px; font-size: 12px; cursor: help; transition: all 0.2s; border: 1px solid transparent;" onmouseenter="this.style.background='rgba(255,68,68,0.4)'; this.style.borderColor='#ff4444'" onmouseleave="this.style.background='rgba(255,68,68,0.2)'; this.style.borderColor='transparent'">${escapeHtml(weaponName)}</div>`;
+            });
+            html += `</div></div>`;
+        }
+        
+        // Armor (if listed separately)
+        if (charData.armor && Array.isArray(charData.armor) && charData.armor.length > 0) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+                <h4 style="color: #4a9eff;">🛡️ Armor <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
+                <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
+            charData.armor.forEach(armor => {
+                const armorName = typeof armor === 'string' ? armor : (armor.name || '');
+                if (!armorName) return;
+                const escapedName = escapeJs(armorName);
+                html += `<div onmouseover="showItemTooltip('${escapedName}', 'armor', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(74,158,255,0.2); border-radius: 3px; font-size: 12px; cursor: help; transition: all 0.2s; border: 1px solid transparent;" onmouseenter="this.style.background='rgba(74,158,255,0.4)'; this.style.borderColor='#4a9eff'" onmouseleave="this.style.background='rgba(74,158,255,0.2)'; this.style.borderColor='transparent'">${escapeHtml(armorName)}</div>`;
             });
             html += `</div></div>`;
         }
@@ -9516,6 +10360,228 @@ async function loadForcePowers(force = false) {
     if (lastError) {
         console.warn('⚠️ No force power sources succeeded:', lastError.message || lastError);
     }
+}
+
+// ==================== EQUIPMENT & ITEMS LOADING ====================
+
+async function loadWeapons(force = false) {
+    if (weaponsLoaded && !force) return;
+    
+    try {
+        const url = '/static/data/weapons.json';
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load weapons: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        weaponsCache = {};
+        
+        if (Array.isArray(data)) {
+            data.forEach(weapon => {
+                if (weapon && weapon.name) {
+                    const key = weapon.name.toLowerCase().trim();
+                    weaponsCache[key] = weapon;
+                }
+            });
+        }
+        
+        weaponsLoaded = true;
+        console.log(`✅ Loaded ${Object.keys(weaponsCache).length} weapons`);
+    } catch (e) {
+        console.error('❌ Error loading weapons:', e);
+    }
+}
+
+async function loadArmor(force = false) {
+    if (armorLoaded && !force) return;
+    
+    try {
+        const url = '/static/data/Armor.json';
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load armor: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        armorCache = {};
+        
+        if (Array.isArray(data)) {
+            data.forEach(armor => {
+                if (armor && armor.name) {
+                    const key = armor.name.toLowerCase().trim();
+                    armorCache[key] = armor;
+                }
+            });
+        }
+        
+        armorLoaded = true;
+        console.log(`✅ Loaded ${Object.keys(armorCache).length} armor items`);
+    } catch (e) {
+        console.error('❌ Error loading armor:', e);
+    }
+}
+
+async function loadFeats(force = false) {
+    if (featsLoaded && !force) return;
+    
+    try {
+        const url = '/static/data/feats.json';
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load feats: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        featsCache = {};
+        
+        if (Array.isArray(data)) {
+            data.forEach(feat => {
+                if (feat && (feat.Name || feat.name)) {
+                    const name = feat.Name || feat.name;
+                    const key = name.toLowerCase().trim();
+                    featsCache[key] = feat;
+                }
+            });
+        }
+        
+        featsLoaded = true;
+        console.log(`✅ Loaded ${Object.keys(featsCache).length} feats`);
+    } catch (e) {
+        console.error('❌ Error loading feats:', e);
+    }
+}
+
+async function loadGear(force = false) {
+    if (gearLoaded && !force) return;
+    
+    try {
+        const url = '/static/data/gear.json';
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load gear: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        gearCache = {};
+        
+        if (Array.isArray(data)) {
+            data.forEach(gear => {
+                if (gear && (gear.Name || gear.name)) {
+                    const name = gear.Name || gear.name;
+                    const key = name.toLowerCase().trim();
+                    gearCache[key] = gear;
+                }
+            });
+        }
+        
+        gearLoaded = true;
+        console.log(`✅ Loaded ${Object.keys(gearCache).length} gear items`);
+    } catch (e) {
+        console.error('❌ Error loading gear:', e);
+    }
+}
+
+async function loadItems(force = false) {
+    if (itemsLoaded && !force) return;
+    
+    try {
+        const url = '/static/data/items.json';
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load items: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        itemsCache = {};
+        
+        if (Array.isArray(data)) {
+            data.forEach(item => {
+                if (item && (item.Name || item.name)) {
+                    const name = item.Name || item.name;
+                    const key = name.toLowerCase().trim();
+                    itemsCache[key] = item;
+                }
+            });
+        }
+        
+        itemsLoaded = true;
+        console.log(`✅ Loaded ${Object.keys(itemsCache).length} items`);
+    } catch (e) {
+        console.error('❌ Error loading items:', e);
+    }
+}
+
+async function loadManeuvers(force = false) {
+    if (maneuversLoaded && !force) return;
+    
+    try {
+        const url = '/static/data/maneuvers.json';
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load maneuvers: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        maneuversCache = {};
+        
+        if (Array.isArray(data)) {
+            data.forEach(maneuver => {
+                if (maneuver && (maneuver.Name || maneuver.name)) {
+                    const name = maneuver.Name || maneuver.name;
+                    const key = name.toLowerCase().trim();
+                    maneuversCache[key] = maneuver;
+                }
+            });
+        }
+        
+        maneuversLoaded = true;
+        console.log(`✅ Loaded ${Object.keys(maneuversCache).length} maneuvers`);
+    } catch (e) {
+        console.error('❌ Error loading maneuvers:', e);
+    }
+}
+
+async function loadConditions(force = false) {
+    if (conditionsLoaded && !force) return;
+    
+    try {
+        const url = '/static/data/conditions.json';
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load conditions: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        conditionsCache = {};
+        
+        if (Array.isArray(data)) {
+            data.forEach(condition => {
+                if (condition && (condition.Name || condition.name)) {
+                    const name = condition.Name || condition.name;
+                    const key = name.toLowerCase().trim();
+                    conditionsCache[key] = condition;
+                }
+            });
+        }
+        
+        conditionsLoaded = true;
+        console.log(`✅ Loaded ${Object.keys(conditionsCache).length} conditions`);
+    } catch (e) {
+        console.error('❌ Error loading conditions:', e);
+    }
+}
+
+// Load all equipment data
+async function loadAllEquipment() {
+    await Promise.all([
+        loadWeapons(),
+        loadArmor(),
+        loadFeats(),
+        loadGear(),
+        loadItems(),
+        loadManeuvers()
+    ]);
 }
 function adjustTooltipPosition(tooltip, event) {
     const rect = tooltip.getBoundingClientRect();
@@ -10557,13 +11623,18 @@ async function deleteSound(filename) {
 
 let nat20SoundFile = null; // Store the sound filename
 let nat1SoundFile = null;
+let hpDamageSoundFile = null; // Store the HP damage sound filename
+let hpDamageSoundEnabled = true; // Enable/disable HP damage sound
 
 // Load saved sound preferences from localStorage
 function loadCriticalRollSounds() {
     nat20SoundFile = localStorage.getItem('nat20SoundFile') || null;
     nat1SoundFile = localStorage.getItem('nat1SoundFile') || null;
+    hpDamageSoundFile = localStorage.getItem('hpDamageSoundFile') || null;
+    hpDamageSoundEnabled = localStorage.getItem('hpDamageSoundEnabled') !== 'false'; // Default to true
     
     console.log('🔊 Loaded critical roll sounds - Nat 20:', nat20SoundFile, 'Nat 1:', nat1SoundFile);
+    console.log('💥 Loaded HP damage sound - File:', hpDamageSoundFile, 'Enabled:', hpDamageSoundEnabled);
     
     // Update display if settings modal is open
     const settingsModal = document.getElementById('settingsModal');
@@ -10573,6 +11644,14 @@ function loadCriticalRollSounds() {
         }
         if (nat1SoundFile) {
             updateNat1SoundDisplay(nat1SoundFile);
+        }
+        if (hpDamageSoundFile) {
+            updateHpDamageSoundDisplay(hpDamageSoundFile);
+        }
+        // Update checkbox state
+        const checkbox = document.getElementById('hpDamageSoundEnabled');
+        if (checkbox) {
+            checkbox.checked = hpDamageSoundEnabled;
         }
     }
 }
@@ -10603,6 +11682,12 @@ function showSettings() {
     
     modal.classList.add('active');
     loadCriticalRollSounds(); // Refresh display
+    
+    // Update HP damage sound checkbox
+    const checkbox = document.getElementById('hpDamageSoundEnabled');
+    if (checkbox) {
+        checkbox.checked = hpDamageSoundEnabled;
+    }
 }
 
 function updateNat20SoundDisplay(filename) {
@@ -10873,6 +11958,213 @@ function playNat1SoundLocal() {
         console.log('🎵 Playing nat 1 sound locally:', nat1SoundFile);
     } catch (e) {
         console.error('❌ Error playing nat 1 sound:', e);
+    }
+}
+
+// ==================== HP DAMAGE SOUND ====================
+
+function updateHpDamageSoundDisplay(filename) {
+    const infoDiv = document.getElementById('hpDamageSoundInfo');
+    const previewAudio = document.getElementById('hpDamageSoundPreview');
+    
+    if (infoDiv && filename) {
+        infoDiv.textContent = `Current: ${filename}`;
+        infoDiv.style.opacity = '1';
+        infoDiv.style.color = '#ff6b6b';
+        
+        if (previewAudio) {
+            previewAudio.src = `/static/sounds/${encodeURIComponent(filename)}`;
+            previewAudio.style.display = 'block';
+        }
+    }
+}
+
+function toggleHpDamageSound() {
+    const checkbox = document.getElementById('hpDamageSoundEnabled');
+    if (checkbox) {
+        hpDamageSoundEnabled = checkbox.checked;
+        localStorage.setItem('hpDamageSoundEnabled', hpDamageSoundEnabled.toString());
+        console.log('💥 HP damage sound', hpDamageSoundEnabled ? 'enabled' : 'disabled');
+    }
+}
+
+async function uploadHpDamageSound() {
+    if (!isDM) {
+        alert('Only the DM can upload sounds!');
+        return;
+    }
+    
+    const fileInput = document.getElementById('hpDamageSoundFile');
+    const file = fileInput?.files[0];
+    
+    if (!file) {
+        alert('Please select a sound file first!');
+        return;
+    }
+    
+    // Check file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+        alert('File too large! Maximum size is 5MB.');
+        return;
+    }
+    
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch('/api/sounds', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
+        
+        const result = await response.json();
+        const filename = result.filename || file.name;
+        
+        // Save to localStorage (for this client)
+        hpDamageSoundFile = filename;
+        localStorage.setItem('hpDamageSoundFile', filename);
+        
+        console.log('✅ HP damage sound uploaded:', filename);
+        updateHpDamageSoundDisplay(filename);
+        
+        // Clear file input
+        fileInput.value = '';
+        
+        alert(`✅ HP damage sound uploaded successfully!\n\n${filename}\n\nNote: This sound will play when any character or enemy takes damage!`);
+    } catch (e) {
+        console.error('❌ Error uploading HP damage sound:', e);
+        alert('Error uploading sound: ' + e.message);
+    }
+}
+
+// Play HP damage sound - broadcasts to all clients if DM, or plays locally if player
+async function playHpDamageSound() {
+    console.log('💥 playHpDamageSound() called');
+    
+    // Ensure settings are loaded from localStorage (in case loadCriticalRollSounds hasn't run yet)
+    if (hpDamageSoundFile === null || hpDamageSoundFile === undefined) {
+        hpDamageSoundFile = localStorage.getItem('hpDamageSoundFile') || null;
+    }
+    if (hpDamageSoundEnabled === undefined) {
+        const stored = localStorage.getItem('hpDamageSoundEnabled');
+        hpDamageSoundEnabled = stored === null ? true : (stored !== 'false');
+    }
+    
+    // Check if enabled
+    if (!hpDamageSoundEnabled) {
+        console.log('💥 HP damage sound is disabled, skipping');
+        return;
+    }
+    
+    // Check if sound file is configured
+    if (!hpDamageSoundFile) {
+        console.log('💥 No HP damage sound file configured, skipping');
+        return;
+    }
+    
+    console.log('💥 Playing HP damage sound:', hpDamageSoundFile, 'Enabled:', hpDamageSoundEnabled);
+    
+    // If DM, broadcast to all clients via WebSocket
+    if (isDM && ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            console.log('📤 DM broadcasting HP damage sound to all clients:', hpDamageSoundFile);
+            
+            // Load sound file and convert to base64
+            const response = await fetch(`/static/sounds/${encodeURIComponent(hpDamageSoundFile)}`);
+            if (!response.ok) {
+                throw new Error(`Failed to load sound: ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            const reader = new FileReader();
+            
+            reader.onloadend = () => {
+                const base64 = reader.result.split(',')[1];
+                const soundType = hpDamageSoundFile.split('.').pop() || 'mp3';
+                
+                // Broadcast to all clients via WebSocket
+                sendMessage({
+                    type: 'PlaySound',
+                    sound_id: `hpdamage_${Date.now()}`,
+                    sound_name: 'HP Damage',
+                    sound_data: base64,
+                    sound_type: soundType
+                });
+                
+                console.log('✅ HP damage sound broadcast sent');
+            };
+            
+            reader.readAsDataURL(blob);
+        } catch (e) {
+            console.error('❌ Error broadcasting HP damage sound:', e);
+            // Fallback to local playback
+            playHpDamageSoundLocally();
+        }
+    } else {
+        // Not DM or WebSocket not open - play locally
+        playHpDamageSoundLocally();
+    }
+}
+
+function playHpDamageSoundLocally() {
+    // Load from localStorage if not set
+    const soundFile = hpDamageSoundFile || localStorage.getItem('hpDamageSoundFile');
+    if (!soundFile) {
+        console.log('💥 No HP damage sound file available for local playback');
+        console.log('   💡 Tip: Go to Settings → HP Damage Sound and upload a sound file');
+        return;
+    }
+    
+    // Check if enabled
+    const enabled = hpDamageSoundEnabled !== undefined ? hpDamageSoundEnabled : (localStorage.getItem('hpDamageSoundEnabled') !== 'false');
+    if (!enabled) {
+        console.log('💥 HP damage sound is disabled, skipping local playback');
+        console.log('   💡 Tip: Go to Settings → HP Damage Sound and enable the checkbox');
+        return;
+    }
+    
+    const soundPath = `/static/sounds/${encodeURIComponent(soundFile)}`;
+    console.log('💥 Attempting to play HP damage sound:', soundFile);
+    console.log('   Full path:', soundPath);
+    
+    try {
+        const audio = new Audio(soundPath);
+        audio.volume = 0.5; // Slightly quieter than critical rolls
+        
+        // Add error handlers for better debugging
+        audio.onerror = (e) => {
+            console.error('❌ Audio element error:', e);
+            console.error('   Sound file may not exist or path is incorrect');
+            console.error('   Attempted path:', soundPath);
+        };
+        
+        audio.onloadstart = () => {
+            console.log('✅ Audio element started loading:', soundFile);
+        };
+        
+        audio.oncanplay = () => {
+            console.log('✅ Audio can play:', soundFile);
+        };
+        
+        console.log('🎵 Playing HP damage sound locally:', soundFile);
+        audio.play().then(() => {
+            console.log('✅ HP damage sound started playing successfully');
+        }).catch(e => {
+            console.error('❌ Error playing HP damage sound:', e);
+            console.error('   Error name:', e.name);
+            console.error('   Error message:', e.message);
+            console.error('   Sound file path:', soundPath);
+            console.error('   💡 Tip: Check browser console for CORS or file not found errors');
+        });
+    } catch (e) {
+        console.error('❌ Error creating HP damage sound audio:', e);
+        console.error('   Sound file:', soundFile);
+        console.error('   Sound path:', soundPath);
     }
 }
 

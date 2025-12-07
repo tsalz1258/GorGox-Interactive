@@ -1,0 +1,2172 @@
+[
+  {
+    "name": "Assault cannon",
+    "type": "Martial Blaster",
+    "properties": "Burst 4, Power cell (range 90/360), Reload 4, Strength 15, Two-handed",
+    "cost": 1550,
+    "weight": 15,
+    "damage": "1d12 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "BKG",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst 2, Disintegrate 13, Power cell (range 120/480), Reload 2, Strength 19, Two-handed, Vicious 1",
+    "cost": 2750,
+    "weight": 19,
+    "damage": "3d4 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Beam rifle",
+    "type": "Martial Blaster",
+    "properties": "Penetrating 2, Power cell (range 150/600), Reload 2, Strength 15, Two-handed",
+    "cost": 1850,
+    "weight": 16,
+    "damage": "2d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Bitesaber",
+    "type": "Martial Lightweapon",
+    "properties": "Biting 13, Hidden, Luminous, Versatile (2d4)",
+    "cost": 1800,
+    "weight": 2.5,
+    "damage": "1d6 Acid",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Blaster carbine",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 70/280), Reload 16, Two-handed",
+    "cost": 425,
+    "weight": 5.5,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Blaster pistol",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 50/200), Reload 16",
+    "cost": 175,
+    "weight": 2.5,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Blaster rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 105/420), Reload 12, Two-handed",
+    "cost": 525,
+    "weight": 7.5,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Blightsaber",
+    "type": "Martial Lightweapon",
+    "properties": "Corruption 13, Hidden, Versatile (2d4)",
+    "cost": 1800,
+    "weight": 2.5,
+    "damage": "1d6 Necrotic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Bowcaster",
+    "type": "Simple Blaster",
+    "properties": "Burst 4, Power cell (range 50/200), Reload 4, Strength 13, Two-handed",
+    "cost": 1150,
+    "weight": 11,
+    "damage": "1d10 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Brightsaber",
+    "type": "Martial Lightweapon",
+    "properties": "Bright 13, Hidden, Luminous, Versatile (2d4)",
+    "cost": 1800,
+    "weight": 2.5,
+    "damage": "1d6 Fire",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Broadsaber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 13, Dire 1, Luminous, Versatile (1d8)",
+    "cost": 1000,
+    "weight": 2.75,
+    "damage": "2d4 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Bustersaber",
+    "type": "Martial Lightweapon",
+    "properties": "Brutal 1, Dexterity 19, Heavy, Keen 1, Luminous, Reach, Two-handed",
+    "cost": 2900,
+    "weight": 7.25,
+    "damage": "1d12 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Carbine rifle",
+    "type": "Martial Blaster",
+    "properties": "Auto, Power cell (range 90/360), Rapid 3, Reload 12, Strength 11, Two-handed",
+    "cost": 925,
+    "weight": 8.5,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Chaingun",
+    "type": "Martial Blaster",
+    "properties": "Auto, Rapid 2, Reload 8, Slug cartridge (range 80/320), Strength 13, Two-handed, Vicious 1",
+    "cost": 1325,
+    "weight": 10.5,
+    "damage": "2d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Chakram",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse, Returning, Thrown (range 30/90)",
+    "cost": 175,
+    "weight": 3,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Crossguard saber",
+    "type": "Martial Lightweapon",
+    "properties": "Defensive 1, Dexterity 13, Heavy, Luminous, Versatile (1d10)",
+    "cost": 725,
+    "weight": 3.25,
+    "damage": "1d8 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Cryo cannon",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst 2, Power cell (range 75/300), Reload 4, Strength 13, Two-handed, Vicious 1",
+    "cost": 3300,
+    "weight": 12.5,
+    "damage": "2d4 Cold",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Cryo carbine",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 45/180), Reload 12, Two-handed, Vicious 1",
+    "cost": 1250,
+    "weight": 6,
+    "damage": "1d6 Cold",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Cryo pistol",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 30/120), Reload 8, Vicious 1",
+    "cost": 750,
+    "weight": 2,
+    "damage": "1d4 Cold",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Cryo rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 50/200), Reload 4, Strength 11, Two-handed, Vicious 1",
+    "cost": 2400,
+    "weight": 10.5,
+    "damage": "2d4 Cold",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Cycler rifle",
+    "type": "Martial Blaster",
+    "properties": "Rapid 2, Reload 8, Slug cartridge (range 90/360), Strength 11, Two-handed",
+    "cost": 825,
+    "weight": 7.5,
+    "damage": "1d8 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Dire vibroblade",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 13, Dire 1, Versatile (1d10)",
+    "cost": 550,
+    "weight": 7,
+    "damage": "1d8 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Diresword",
+    "type": "Simple Vibroweapon",
+    "properties": "Dexterity 11, Dire 1, Heavy",
+    "cost": 300,
+    "weight": 3.75,
+    "damage": "1d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Disruptor carbine",
+    "type": "Simple Blaster",
+    "properties": "Disintegrate 13, Power cell (range 60/240), Reload 8, Strength 11, Two-handed",
+    "cost": 1450,
+    "weight": 8.5,
+    "damage": "1d8 Acid",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Disruptor pistol",
+    "type": "Simple Blaster",
+    "properties": "Disintegrate 13, Power cell (range 45/180), Reload 12, Strength 11",
+    "cost": 750,
+    "weight": 4.5,
+    "damage": "1d6 Acid",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Disruptor rifle",
+    "type": "Martial Blaster",
+    "properties": "Disintegrate 13, Power cell (range 60/240), Reload 4, Strength 13, Two-handed",
+    "cost": 2900,
+    "weight": 13.5,
+    "damage": "1d10 Acid",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Disruptor sniper",
+    "type": "Martial Blaster",
+    "properties": "Disintegrate 13, Power cell (range 120/480), Reload 2, Strength 15, Two-handed",
+    "cost": 3300,
+    "weight": 15,
+    "damage": "1d12 Acid",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Doubleblade",
+    "type": "Martial Vibroweapon",
+    "properties": "Double (1d6 kinetic), Finesse, Light",
+    "cost": 400,
+    "weight": 3.5,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Doublesaber",
+    "type": "Martial Lightweapon",
+    "properties": "Double (1d8 energy), Finesse, Luminous",
+    "cost": 725,
+    "weight": 2.25,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Doubleshoto",
+    "type": "Martial Lightweapon",
+    "properties": "Double (1d6 energy), Finesse, Light, Luminous",
+    "cost": 700,
+    "weight": 1.75,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Doublesword",
+    "type": "Martial Vibroweapon",
+    "properties": "Double (1d8 kinetic), Finesse",
+    "cost": 450,
+    "weight": 5.5,
+    "damage": "1d8 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Dual-phase saber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 13, Hidden, Luminous, Versatile (1d12), Vicious 1",
+    "cost": 1250,
+    "weight": 3,
+    "damage": "2d4 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Echostaff",
+    "type": "Martial Vibroweapon",
+    "properties": "Double (1d6 kinetic), Finesse, Sonorous 13",
+    "cost": 600,
+    "weight": 5,
+    "damage": "1d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Electrobaton",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse, Light, Shocking 13",
+    "cost": 275,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Electrohammer",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Heavy, Shocking 13, Two-handed",
+    "cost": 950,
+    "weight": 8.75,
+    "damage": "1d10 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Electrostaff",
+    "type": "Martial Vibroweapon",
+    "properties": "Double (1d6 kinetic), Finesse, Shocking 13",
+    "cost": 600,
+    "weight": 5,
+    "damage": "1d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Flechette cannon",
+    "type": "Martial Blaster",
+    "properties": "Reload 6, Special (range special), Strength 13, Two-handed",
+    "cost": 2300,
+    "weight": 13,
+    "damage": "Special",
+    "source": "WH",
+    "description": "The flechette cannon does not make attack rolls. Rather than traditional power cells, the flechette cannon uses specialized projector tanks, which, when fired, spray an area with the contents of the tank. Projector tanks require your target to make a saving throw to resist the tank s effects. It can have different ammunition types loaded simultaneously, and you can choose which ammunition you re using as you fire it (no action required). If you don t meet the flechette cannon s strength requirement, creatures have advantage on their saving throws. If you lack proficiency in the flechette cannon, you must roll the damage dice twice and take the lesser total."
+  },
+  {
+    "name": "Great-saber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 11, Luminous, Two-handed",
+    "cost": 1725,
+    "weight": 3.25,
+    "damage": "2d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Grenade launcher",
+    "type": "Martial Blaster",
+    "properties": "Reload 1, Special (range 90/360), Strength 11, Two-handed",
+    "cost": 1800,
+    "weight": 11.5,
+    "damage": "Special",
+    "source": "WH",
+    "description": "Rather than traditional power cells, the grenade launcher fires grenades. When firing a grenade at long range, or if you don t meet the grenade launcher s strength requirement, creatures within the radius of the grenade s explosion have advantage on the saving throw. If you lack proficiency in the grenade launcher, you must roll the damage dice twice and take the lesser total."
+  },
+  {
+    "name": "Guard shoto",
+    "type": "Martial Lightweapon",
+    "properties": "Defensive 1, Finesse, Hidden, Light luminous",
+    "cost": 375,
+    "weight": 1.25,
+    "damage": "1d4 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Hand BKG",
+    "type": "Martial Blaster",
+    "properties": "Brutal 1, Disintegrate 13, Keen 1, Power cell (range 50/200), Reload 4, Strength 15",
+    "cost": 1550,
+    "weight": 10,
+    "damage": "1d10 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Hand blaster",
+    "type": "Martial Blaster",
+    "properties": "Keen 1, Light, Power cell (range 40/160), Reload 8",
+    "cost": 500,
+    "weight": 0.5,
+    "damage": "1d4 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Hand cannon",
+    "type": "Martial Blaster",
+    "properties": "Brutal 1, Slug cartridge (range 25/100), Reload 8, Strength 11, Two-handed",
+    "cost": 1300,
+    "weight": 10.5,
+    "damage": "1d10 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Heavy blaster rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 100/400), Rapid 2, Reload 8, Strength 13, Two-handed",
+    "cost": 1025,
+    "weight": 10,
+    "damage": "2d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Heavy bowcaster",
+    "type": "Martial Blaster",
+    "properties": "Burst 2, Power cell (range 90/360), Reload 4, Strength 17, Two-handed",
+    "cost": 1750,
+    "weight": 15.5,
+    "damage": "1d12 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Heavy carbine",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 60/240), Rapid 4, Reload 16, Strength 11, Two-handed",
+    "cost": 775,
+    "weight": 7.5,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Heavy pistol",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 45/180), Reload 16",
+    "cost": 300,
+    "weight": 4,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Heavy repeater",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst 4, Power cell (range 80/320), Rapid 4, Reload 8, Strength 13, Two-handed",
+    "cost": 1225,
+    "weight": 11,
+    "damage": "2d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Heavy shotgun",
+    "type": "Martial Blaster",
+    "properties": "Burst 2, Reload 8, Slug cartridge (range 60/240), Strength 13, Two-handed",
+    "cost": 1125,
+    "weight": 9.5,
+    "damage": "2d4 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Heavy slugpistol",
+    "type": "Martial Blaster",
+    "properties": "Rapid 8, Reload 12, Slug cartridge (range 30/120)",
+    "cost": 375,
+    "weight": 3.5,
+    "damage": "1d8 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Hidden blade",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse, Fixed, Hidden, Light",
+    "cost": 75,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Hold-out",
+    "type": "Simple Blaster",
+    "properties": "Hidden, Light, Power cell (range 30/120), Reload 8",
+    "cost": 225,
+    "weight": 0.5,
+    "damage": "1d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Hunting rifle",
+    "type": "Martial Blaster",
+    "properties": "Reload 4, Slug cartridge (range 125/500), Strength 11, Two-handed",
+    "cost": 1000,
+    "weight": 11,
+    "damage": "1d10 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Incinerator carbine",
+    "type": "Simple Blaster",
+    "properties": "Dire 1, Disintegrate 13, Power cell (range 60/240), Reload 12, Strength 11, Two-handed",
+    "cost": 1650,
+    "weight": 7.5,
+    "damage": "1d6 Fire",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Incinerator pistol",
+    "type": "Simple Blaster",
+    "properties": "Dire 1, Disintegrate 13, Power cell (range 40/160), Reload 16, Strength 11",
+    "cost": 1250,
+    "weight": 3.5,
+    "damage": "1d4 Fire",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Incinerator rifle",
+    "type": "Martial Blaster",
+    "properties": "Dire 1, Disintegrate 13, Power cell (range 80/320), Reload 8, Strength 11, Two-handed",
+    "cost": 1950,
+    "weight": 9.5,
+    "damage": "1d8 Fire",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Incinerator sniper",
+    "type": "Martial Blaster",
+    "properties": "Dire 1, Disintegrate 13, Power cell (range 120/480), Reload 2, Strength 15, Two-handed",
+    "cost": 3300,
+    "weight": 14.5,
+    "damage": "1d10 Fire",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Ion cannon",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst 4, Power cell (range 90/360), Reload 4, Strength 15, Two-handed",
+    "cost": 3800,
+    "weight": 16.5,
+    "damage": "1d10 Ion",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Ion carbine",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 60/240), Reload 12, Two-handed",
+    "cost": 600,
+    "weight": 6,
+    "damage": "1d4 Ion",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Ion pistol",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 40/160), Reload 16",
+    "cost": 250,
+    "weight": 1,
+    "damage": "1d3 Ion",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Ion rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 80/320), Reload 8, Two-handed",
+    "cost": 1150,
+    "weight": 8,
+    "damage": "1d6 Ion",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Light pistol",
+    "type": "Simple Blaster",
+    "properties": "Light, Power cell (range 40/160), Reload 8",
+    "cost": 250,
+    "weight": 0.5,
+    "damage": "1d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Light repeater",
+    "type": "Simple Blaster",
+    "properties": "Auto, Power cell (range 50/200), Rapid 5, Reload 20, Two-handed",
+    "cost": 625,
+    "weight": 6,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Light slugpistol",
+    "type": "Simple Blaster",
+    "properties": "Light, Reload 8, Slug cartridge (range 35/140)",
+    "cost": 250,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Lightaxe",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 11, Heavy, Luminous, Two-handed",
+    "cost": 1550,
+    "weight": 3.75,
+    "damage": "1d12 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Lightblade",
+    "type": "Simple Lightweapon",
+    "properties": "Finesse, Hidden, Luminous",
+    "cost": 375,
+    "weight": 1.5,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Lightbow",
+    "type": "Martial Blaster",
+    "properties": "Piercing 1, Power cell (range 60/240), Reload 2, Strength 15, Two-handed",
+    "cost": 1800,
+    "weight": 14,
+    "damage": "2d6 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Lightclub",
+    "type": "Simple Lightweapon",
+    "properties": "Dexterity 11, Heavy, Luminous, Two-handed",
+    "cost": 1300,
+    "weight": 3.75,
+    "damage": "1d10 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Lightdagger",
+    "type": "Simple Lightweapon",
+    "properties": "Finesse, Hidden, Light, Luminous, Thrown (range 20/60)",
+    "cost": 425,
+    "weight": 1,
+    "damage": "1d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Lightfoil",
+    "type": "Martial Lightweapon",
+    "properties": "Finesse, Hidden, Luminous",
+    "cost": 475,
+    "weight": 1.5,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Lightglaive",
+    "type": "Martial Lightweapon",
+    "properties": "Brutal 1, Dexterity 13, Luminous, Reach, Two-handed",
+    "cost": 2050,
+    "weight": 5.75,
+    "damage": "1d10 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Lightkatana",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 11, Hidden, Luminous, Piercing 1, Versatile (1d10)",
+    "cost": 925,
+    "weight": 2.75,
+    "damage": "1d8 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Lightnodachi",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 17, Luminous, Piercing 1, Two-handed, Vicious 1",
+    "cost": 3050,
+    "weight": 4.5,
+    "damage": "3d4 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Lightsaber",
+    "type": "Simple Lightweapon",
+    "properties": "Hidden, Luminous, Versatile (2d4)",
+    "cost": 450,
+    "weight": 2.25,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Lightstaff",
+    "type": "Simple Lightweapon",
+    "properties": "Dexterity 11, Luminous, Reach, Two-handed",
+    "cost": 1275,
+    "weight": 4.25,
+    "damage": "2d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Martial lightsaber",
+    "type": "Martial Lightweapon",
+    "properties": "Hidden, Luminous, Versatile (1d10)",
+    "cost": 550,
+    "weight": 2.25,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Nervebaton",
+    "type": "Simple Vibroweapon",
+    "properties": "Disruptive, Neuralizing 13",
+    "cost": 375,
+    "weight": 2,
+    "damage": "1d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Net",
+    "type": "Martial Vibroweapon",
+    "properties": "Light, Finesse, Special, Thrown (range 15)",
+    "cost": 300,
+    "weight": 3,
+    "damage": "Special",
+    "source": "PHB",
+    "description": "A Large or smaller creature hit by a net is restrained until it is freed. A net has no effect on formless or Huge or larger creatures. A creature can use its action to make a DC 13 Strength check, freeing itself or another creature within its reach on a success. The net has an AC of 10, 5 hit points, and immunity to all damage not dealt by melee weapons. Destroying the net frees the creature without harming it and immediately ends the net\u2019s effects. While a creature is restrained by a net, you can make no further attacks with it."
+  },
+  {
+    "name": "Pikesaber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 11, Luminous, Reach, Two-handed",
+    "cost": 1675,
+    "weight": 5.25,
+    "damage": "1d10 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Railgun",
+    "type": "Martial Blaster",
+    "properties": "Piercing 1, Reload 2, Slug cartridge (range 150/600), Strength 17, Two-handed",
+    "cost": 1900,
+    "weight": 16,
+    "damage": "2d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Repeating blaster",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst 4, Power cell (range 75/300), Rapid 4, Reload 8, Strength 11, Two-handed",
+    "cost": 1025,
+    "weight": 9,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Rocket launcher",
+    "type": "Martial Blaster",
+    "properties": "Reload 1, Special (range 150/600), Strength 13, Two-handed",
+    "cost": 2250,
+    "weight": 14,
+    "damage": "Special",
+    "source": "WH",
+    "description": "Rather than traditional power cells, the rocket launcher fires specialized projectiles in the form of rockets. When firing a rocket at long range, or if you don t meet the rocket launcher s strength requirement, creatures within the radius of the rocket s explosion have advantage on the saving throw."
+  },
+  {
+    "name": "Rotary cannon",
+    "type": "Martial Blaster",
+    "properties": "Auto, Power cell (range 75/300), Rapid 2, Reload 8, Strength 13, Two-handed",
+    "cost": 1500,
+    "weight": 12.5,
+    "damage": "1d10 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Sabermace",
+    "type": "Simple Lightweapon",
+    "properties": "Brutal 1, Dexterity 13, Hidden, Luminous, Versatile (1d10)",
+    "cost": 950,
+    "weight": 2.75,
+    "damage": "1d8 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Saberwhip",
+    "type": "Martial Lightweapon",
+    "properties": "Finesse, Hidden, Luminous, Reach",
+    "cost": 750,
+    "weight": 3.5,
+    "damage": "1d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Scattergun",
+    "type": "Simple Blaster",
+    "properties": "Burst 2, Reload 8, Slug cartridge (range 30/120), Strength 11",
+    "cost": 625,
+    "weight": 2,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Shotgun",
+    "type": "Simple Blaster",
+    "properties": "Burst 2, Reload 4, Slug cartridge (range 30/120), Strength 11, Two-handed",
+    "cost": 725,
+    "weight": 6.5,
+    "damage": "2d4 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Shotosaber",
+    "type": "Martial Lightweapon",
+    "properties": "Finesse, Hidden, Light, Luminous",
+    "cost": 450,
+    "weight": 1,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Shoulder blaster",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 40/160), Rapid 4, Reload 16, Smart (15/+2), Special",
+    "cost": 1275,
+    "weight": 3,
+    "damage": "1d6 Energy",
+    "source": "WH",
+    "description": "Mounted by the shoulder slot, a shoulder blaster does not require a free hand to use. Additionally, you have advantage on Strength ability checks and saving throws to avoid being disarmed of this weapon."
+  },
+  {
+    "name": "Shoulder cannon",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst 8, Power cell (range 60/240), Reload 8, Smart (15/+2), Special, Strength 11",
+    "cost": 1625,
+    "weight": 8.5,
+    "damage": "1d8 Energy",
+    "source": "WH",
+    "description": "Mounted by the shoulder slot, a shoulder cannon does not require a free hand to use. Additionally, you have advantage on Strength ability checks and saving throws to avoid being disarmed of this weapon."
+  },
+  {
+    "name": "Sicklesaber",
+    "type": "Simple Lightweapon",
+    "properties": "Dexterity 11, Dire 1, Hidden, Light, Luminous",
+    "cost": 700,
+    "weight": 1,
+    "damage": "1d6 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Sith saber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 11, Hidden, Keen 1, Versatile (1d10)",
+    "cost": 925,
+    "weight": 2.75,
+    "damage": "2d4 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Slugpistol",
+    "type": "Simple Blaster",
+    "properties": "Rapid 8, Reload 16, Slug cartridge (range 40/160), Strength 11",
+    "cost": 325,
+    "weight": 3,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Slugthrower",
+    "type": "Martial Blaster",
+    "properties": "Reload 12, Slug cartridge (range 105/420), Two-handed",
+    "cost": 525,
+    "weight": 7.5,
+    "damage": "1d8 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Smart cannon",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst 2, Rapid 2, Reload 4, Slug cartridge (range 75/300), Smart (15/+2), Strength 15, Two-handed",
+    "cost": 2250,
+    "weight": 13.5,
+    "damage": "1d10 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Smart pistol",
+    "type": "Martial Blaster",
+    "properties": "Piercing 1, Rapid 2, Reload 16, Slug cartridge (range 40/160), Smart (15/+2), Strength 11",
+    "cost": 1075,
+    "weight": 4,
+    "damage": "1d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Sniper rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 150/600), Reload 2, Strength 13, Two-handed",
+    "cost": 1300,
+    "weight": 13.5,
+    "damage": "1d12 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Splitsaber",
+    "type": "Martial Lightweapon",
+    "properties": "Double (2d4 energy), Interlocking, Luminous",
+    "cost": 1500,
+    "weight": 3,
+    "damage": "2d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Splitshoto",
+    "type": "Martial Lightweapon",
+    "properties": "Double (1d8 energy), Interlocking, Light, Luminous",
+    "cost": 1150,
+    "weight": 2,
+    "damage": "1d8 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Subrepeater",
+    "type": "Martial Blaster",
+    "properties": "Auto, Rapid 4, Light, Power cell (range 30/120), Reload 16, Strength 11",
+    "cost": 625,
+    "weight": 4,
+    "damage": "1d6 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Techaxe",
+    "type": "Simple Vibroweapon",
+    "properties": "Light, Thrown (range 25/75)",
+    "cost": 75,
+    "weight": 1,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Techblade",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse, Light",
+    "cost": 100,
+    "weight": 1.5,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Techstaff",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Double (2d4 kinetic), Light",
+    "cost": 650,
+    "weight": 5.25,
+    "damage": "2d4 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vapor projector",
+    "type": "Martial Blaster",
+    "properties": "Reload 6, Special (range special), Strength 13, Two-handed",
+    "cost": 2300,
+    "weight": 13,
+    "damage": "Special",
+    "source": "WH",
+    "description": "The vapor projector does not make attack rolls. Rather than traditional power cells, the vapor projector uses specialized projector tanks, which, when fired, spray an area with the contents of the tank. Projector tanks require your target to make a saving throw to resist the tank s effects. It can have different ammunition types loaded simultaneously, and you can choose which ammunition you re using as you fire it (no action required). If you don t meet the vapor projector s strength requirement, creatures have advantage on their saving throws. If you lack proficiency in the vapor projector, you must roll the damage dice twice and take the lesser total."
+  },
+  {
+    "name": "Vibroaxe",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Heavy, Two-handed",
+    "cost": 950,
+    "weight": 9.25,
+    "damage": "1d12 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrobattleaxe",
+    "type": "Martial Vibroweapon",
+    "properties": "Brutal 1, Dexterity 13, Heavy, Two-handed",
+    "cost": 1200,
+    "weight": 10,
+    "damage": "1d12 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibroblade",
+    "type": "Martial Vibroweapon",
+    "properties": "Versatile (1d10)",
+    "cost": 200,
+    "weight": 5,
+    "damage": "1d8 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrobuster",
+    "type": "Martial Vibroweapon",
+    "properties": "Brutal 1, Dexterity 19, Heavy, Keen 1, Reach, Two-handed",
+    "cost": 1850,
+    "weight": 13.25,
+    "damage": "1d12 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibrodagger",
+    "type": "Simple Vibroweapon",
+    "properties": "Finesse, Light, Thrown (range 20/60)",
+    "cost": 50,
+    "weight": 0.5,
+    "damage": "1d4 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrodart",
+    "type": "Simple Vibroweapon",
+    "properties": "Finesse, Special, Thrown (range 20/60)",
+    "cost": 5,
+    "weight": 0.5,
+    "damage": "1d4 Kinetic",
+    "source": "PHB",
+    "description": "Due to their diminutive size, vibrodarts make ineffective melee weapons. Melee attack rolls made with them are made at disadvantage."
+  },
+  {
+    "name": "Vibroflail",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Reckless 1",
+    "cost": 500,
+    "weight": 4.75,
+    "damage": "2d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibroglaive",
+    "type": "Martial Vibroweapon",
+    "properties": "Brutal 1, Dexterity 13, Reach, Two-handed",
+    "cost": 1200,
+    "weight": 10,
+    "damage": "1d10 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibrohammer",
+    "type": "Martial Vibroweapon",
+    "properties": "Heavy, Two-handed, Vicious 1",
+    "cost": 600,
+    "weight": 7.5,
+    "damage": "2d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibrokatana",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Piercing 1, Versatile (1d10)",
+    "cost": 450,
+    "weight": 5.75,
+    "damage": "1d8 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibroknife",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse, Light, Piercing 1",
+    "cost": 225,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibroknuckler",
+    "type": "Simple Vibroweapon",
+    "properties": "Hidden, Light",
+    "cost": 75,
+    "weight": 1.25,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibromace",
+    "type": "Simple Vibroweapon",
+    "properties": "Dexterity 11, Heavy, Two-handed",
+    "cost": 700,
+    "weight": 7,
+    "damage": "1d10 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibronodachi",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 17, Piercing 1, Two-handed, Vicious 1",
+    "cost": 2200,
+    "weight": 12,
+    "damage": "3d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibropike",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Reach, Two-handed",
+    "cost": 950,
+    "weight": 9.25,
+    "damage": "1d10 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrorapier",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse",
+    "cost": 150,
+    "weight": 3.5,
+    "damage": "1d8 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrosabre",
+    "type": "Simple Vibroweapon",
+    "properties": "Dexterity 11, Keen 1, Light",
+    "cost": 300,
+    "weight": 1.75,
+    "damage": "1d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibroshield",
+    "type": "Martial Vibroweapon",
+    "properties": "Defensive 1, Fixed",
+    "cost": 325,
+    "weight": 3.75,
+    "damage": "1d8 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibrospear",
+    "type": "Simple Vibroweapon",
+    "properties": "Thrown (range 25/75), Versatile (2d4)",
+    "cost": 125,
+    "weight": 4,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrostaff",
+    "type": "Simple Vibroweapon",
+    "properties": "Versatile (2d4)",
+    "cost": 100,
+    "weight": 4,
+    "damage": "1d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrostiletto",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse, Keen 1, Light, Thrown (range 30/90)",
+    "cost": 250,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibrosword",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Two-handed",
+    "cost": 1150,
+    "weight": 9.25,
+    "damage": "2d6 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "Vibrotonfa",
+    "type": "Martial Vibroweapon",
+    "properties": "Defensive 1, Finesse, Light",
+    "cost": 225,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Vibrowhip",
+    "type": "Martial Vibroweapon",
+    "properties": "Finesse, Reach",
+    "cost": 275,
+    "weight": 3.5,
+    "damage": "1d4 Kinetic",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "War hat",
+    "type": "Martial Vibroweapon",
+    "properties": "Defensive 1, Disguised, Returning, Thrown (range 30/90)",
+    "cost": 350,
+    "weight": 3.25,
+    "damage": "1d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Warsaber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 15, Reckless 1, Two-handed, Vicious 1",
+    "cost": 2175,
+    "weight": 4.25,
+    "damage": "2d6 Energy",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Warsword",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 15, Reckless 1, Two-handed, Vicious 1",
+    "cost": 1650,
+    "weight": 10.75,
+    "damage": "2d6 Kinetic",
+    "source": "WH",
+    "description": ""
+  },
+  {
+    "name": "Wrist launcher",
+    "type": "Simple Blaster",
+    "properties": "Fixed, Reload 1, Special (range 30/120)",
+    "cost": 400,
+    "weight": 2,
+    "damage": "Special",
+    "source": "PHB",
+    "description": "Rather than traditional power cells, the wrist launcher fires specialized projectiles in the form of darts, small missiles, or specialized canisters."
+  },
+  {
+    "name": "Wristblaster",
+    "type": "Simple Blaster",
+    "properties": "Disguised, Fixed, Light, Power cell (range 30/120), Reload 8",
+    "cost": 200,
+    "weight": 0.5,
+    "damage": "1d4 Energy",
+    "source": "PHB",
+    "description": ""
+  },
+  {
+    "name": "ARC caster",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 60/240), Burst 8, Rapid 4, Reload 9, Strength 11, Two-handed",
+    "cost": 2125,
+    "weight": 9,
+    "damage": "2d4 Lightning",
+    "source": "EC",
+    "description": "Whenever you deal damage with this weapon and roll the maximum on the weapon damage die, the creature hit becomes shocked until the end of its next turn."
+  },
+  {
+    "name": "Affixed Rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 90/360), Fixed, Rapid 4, Reload 8, Strength 11, Two-handed",
+    "cost": 700,
+    "weight": 8,
+    "damage": "1d8 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Anti-materiel blaster",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 180/720), Auto, Reload 2, Penetrating 2, Strength 19, Two-handed",
+    "cost": 2500,
+    "weight": 18.5,
+    "damage": "3d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Anti-materiel rifle",
+    "type": "Martial Blaster",
+    "properties": "Slug cartridge (range 180/720), Reload 2, Penetrating 2, Strength 19, Two-handed",
+    "cost": 1900,
+    "weight": 17,
+    "damage": "2d6 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Atlatl",
+    "type": "Simple Vibroweapon",
+    "properties": "Disguised, Light, Special",
+    "cost": 375,
+    "weight": 1.25,
+    "damage": "1d6 Kinetic",
+    "source": "EC",
+    "description": "This specialized gungan club can be used to throw grenades or similar objects at long distances. If you are wielding this weapon, as part of the action to throw a grenade, you can instead throw it using an atlatl you are holding. The grenade can be thrown at a short distance of 30ft and a long distance of 120ft. When throwing a grenade at long range, creatures within the radius of the grenade\u2019s explosion have advantage on the saving throw. If you lack proficiency in the atlatl, you must roll the damage dice twice and take the lesser total."
+  },
+  {
+    "name": "Blaster cannon",
+    "type": "Martial Blaster",
+    "properties": "Auto, Burst, Rapid, Special (range 120/480), Strength 19, Two-handed",
+    "cost": 5500,
+    "weight": 18.5,
+    "damage": "2d6 Energy",
+    "source": "EC",
+    "description": "Rather than traditional power cells, the blaster cannon uses a specialized power generator that allows it to fire continuously for 10 minutes. Replacing a power generator takes an action. Before firing the blaster cannon, you must deploy it using an action unless you meet its strength requirement. Alternatively, if you\u2019re able to make multiple attacks with the Attack action, this action replaces one of them. While deployed in this way, you treat this weapon\u2019s strength number as two steps less (from 19 to 15), your speed is reduced by half, and you cannot fire this weapon at long range. You can collapse the blaster cannon as an action or bonus action."
+  },
+  {
+    "name": "Bo-rifle",
+    "type": "Exotic Blaster",
+    "properties": "Modal (blaster rifle and techstaff)",
+    "cost": 1075,
+    "weight": 0,
+    "damage": "Special",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Bo-rifle",
+    "type": "Exotic Vibroweapon",
+    "properties": "Modal (blaster rifle and techstaff)",
+    "cost": 1075,
+    "weight": 0,
+    "damage": "Special",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Bolas",
+    "type": "Martial Vibroweapon",
+    "properties": "Light, Special, Thrown (range 20/60)",
+    "cost": 100,
+    "weight": 2,
+    "damage": "Special",
+    "source": "EC",
+    "description": "A Large or smaller creature hit by a bolas is restrained until it is freed. A bolas has no effect on formless or Huge or larger creatures. A creature can use its action to make a DC 13 Dexterity check, freeing itself or another creature within its reach on a success. The bolas has an AC of 10, 5 hit points, and immunity to all damage not dealt by melee weapons. Destroying the bolas frees the creature without harming it and immediately ends the bolas\u2019s effects. While a creature is restrained by a bolas, you can make no further attacks with it. Due to their unwieldy nature, bolas make ineffective melee weapons. Melee attack rolls made with them are made at disadvantage."
+  },
+  {
+    "name": "Bolt-thrower",
+    "type": "Martial Blaster",
+    "properties": "Reload 1, Silent, Special (range 90/360), Strength 13, Two-handed",
+    "cost": 1825,
+    "weight": 13.5,
+    "damage": "Special",
+    "source": "EC",
+    "description": "Rather than traditional power cells, the bolt-thrower fires specialized projectiles in the form of bolts."
+  },
+  {
+    "name": "Cesta",
+    "type": "Martial Vibroweapon",
+    "properties": "Disguised, Double (1d8) finesse, Special",
+    "cost": 975,
+    "weight": 5.75,
+    "damage": "1d8 Kinetic",
+    "source": "EC",
+    "description": "This specialized gungan staff can be used to throw grenades or similar objects at long distances. If you are wielding this weapon, as part of the action to throw a grenade, you can instead throw it using a cesta you are holding. The grenade can be thrown at a short distance of 60ft and a long distance of 240ft. When throwing a grenade at long range, creatures within the radius of the grenade\u2019s explosion have advantage on the saving throw. If you lack proficiency in the cesta, you must roll the damage dice twice and take the lesser total."
+  },
+  {
+    "name": "Chained dagger",
+    "type": "Martial Vibroweapon",
+    "properties": "Disarming, Finesse, Reach",
+    "cost": 350,
+    "weight": 3.75,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Chained lightdagger",
+    "type": "Martial Lightweapon",
+    "properties": "Disarming, Finesse, Luminous, Reach",
+    "cost": 800,
+    "weight": 3.5,
+    "damage": "1d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Claymoresaber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 13, Luminous, Two-handed",
+    "cost": 2300,
+    "weight": 3.5,
+    "damage": "3d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Compound bow",
+    "type": "Martial Blaster",
+    "properties": "Mighty, Silent, Special (range 75/300), Two-handed",
+    "cost": 600,
+    "weight": 6.5,
+    "damage": "1d8 Kinetic",
+    "source": "EC",
+    "description": "Rather than traditional power cells, the compound bow fires specialized projectiles in the form of arrows. You can make a ranged weapon attack only if you have ammunition to fire from the weapon. Each time you attack with the weapon, you expend one arrow. Drawing the ammunition from a quiver, case, or other container is part of the attack. At the end of the battle, you can recover half your expended ammunition by taking a minute to search the battlefield."
+  },
+  {
+    "name": "Crosssaber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 15, Double (2d4 energy), Heavy, Luminous, Reach",
+    "cost": 1650,
+    "weight": 5.25,
+    "damage": "2d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Disguised blade",
+    "type": "Martial Vibroweapon",
+    "properties": "Disarming, Disguised, Finesse, Light",
+    "cost": 125,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Disruptorshiv",
+    "type": "Martial Vibroweapon",
+    "properties": "Disruptive, Finesse, Shocking 13",
+    "cost": 425,
+    "weight": 2.5,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Electroprod",
+    "type": "Simple Vibroweapon",
+    "properties": "Disruptive, Shocking 13, Two-handed",
+    "cost": 650,
+    "weight": 6,
+    "damage": "1d8 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Electrovoulge",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 13, Reach, Shocking 13, Two-handed",
+    "cost": 1250,
+    "weight": 10,
+    "damage": "1d10 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Electrowhip",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 11, Disruptive, Reach, Shocking 13",
+    "cost": 725,
+    "weight": 4.25,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Energy bow",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 80/320), Mighty, Reload 4, Two-handed",
+    "cost": 475,
+    "weight": 4.5,
+    "damage": "1d6 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Energy slingshot",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 20/80), Disruptive, Fixed, Mighty, Reload 20, Two-handed",
+    "cost": 425,
+    "weight": 4,
+    "damage": "1d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Hooked vibroblade",
+    "type": "Martial Vibroweapon",
+    "properties": "Disarming, Finesse",
+    "cost": 225,
+    "weight": 3.75,
+    "damage": "1d8 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "IWS",
+    "type": "Exotic Blaster",
+    "properties": "Modal (blaster rifle, grenade launcher, and sniper rifle)",
+    "cost": 3625,
+    "weight": 23,
+    "damage": "Special",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Jagged vibroblade",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 13, Keen 1, Versatile (1d12)",
+    "cost": 650,
+    "weight": 7,
+    "damage": "2d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Lightbaton",
+    "type": "Simple Lightweapon",
+    "properties": "Hidden, Light, Luminous",
+    "cost": 400,
+    "weight": 1.25,
+    "damage": "1d8 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Lightcutlass",
+    "type": "Simple Lightweapon",
+    "properties": "Dexterity 11, Hidden, Luminous",
+    "cost": 725,
+    "weight": 1.5,
+    "damage": "2d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Lightfist",
+    "type": "Martial Lightweapon",
+    "properties": "Disguised, Disruptive, Fixed, Light, Luminous",
+    "cost": 650,
+    "weight": 1.5,
+    "damage": "1d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Lightning cannon",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 90/360), Auto, Penetrating 2, Reload 4, Strength 15, Two-handed",
+    "cost": 4400,
+    "weight": 16,
+    "damage": "1d6 Lightning",
+    "source": "EC",
+    "description": "Whenever you deal damage with this weapon and roll the maximum on the weapon damage die, the creature hit becomes shocked until the end of its next turn."
+  },
+  {
+    "name": "Lightning carbine",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 60/240), Penetrating 6, Reload 12, Strength 11, Two-handed",
+    "cost": 1150,
+    "weight": 7,
+    "damage": "1d6 Lightning",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Lightning pistol",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 30/120), Penetrating 8, Reload 16",
+    "cost": 550,
+    "weight": 2,
+    "damage": "1d4 Lightning",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Lightning rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 60/240), Penetrating 2, Reload 8, Strength 11, Two-handed",
+    "cost": 2125,
+    "weight": 8.5,
+    "damage": "1d6 Lightning",
+    "source": "EC",
+    "description": "Whenever you deal damage with this weapon and roll the maximum on the weapon damage die, the creature hit becomes shocked until the end of its next turn."
+  },
+  {
+    "name": "Lightring",
+    "type": "Martial Lightweapon",
+    "properties": "Finesse, Hidden, Luminous, Returning, Thrown (range 25/75)",
+    "cost": 575,
+    "weight": 2,
+    "damage": "1d6 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Lightsaber pike",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 11, Double (1d8 energy), Luminous, Reach",
+    "cost": 1175,
+    "weight": 4.25,
+    "damage": "1d8 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Mancatcher",
+    "type": "Simple Vibroweapon",
+    "properties": "Reach, Special, Two-handed",
+    "cost": 800,
+    "weight": 7,
+    "damage": "1d8 Kinetic",
+    "source": "EC",
+    "description": "When you would make a Strength (Athletics) check to attempt to grapple a creature while wielding a weapon with the grappling property, you can instead make a melee weapon attack with it. If the attack hits, the creature becomes grappled by you, and it takes damage equal to your Strength modifier of the same type as the weapon\u2019s damage."
+  },
+  {
+    "name": "Marksman blaster",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 125/500), Reload 8, Strength 13, Two-handed",
+    "cost": 1100,
+    "weight": 12,
+    "damage": "1d10 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Mortar launcher",
+    "type": "Martial Blaster",
+    "properties": "Special (range 150/600), Reload 1, Two-handed",
+    "cost": 3500,
+    "weight": 25,
+    "damage": "Special",
+    "source": "EC",
+    "description": "Rather than traditional power cells, the mortar launcher fires grenades. If you lack proficiency in the mortar launcher, you must roll the damage dice twice and take the lesser total. A mortar launcher cannot fire on targets within its short range and when firing a grenade at long range, creatures within the radius of the grenade\u2019s explosion do not have advantage on the saving throw. Additionally, when you launch a mortar at a target, you can treat the Weapon\u2019s point of origin as being 200ft in the air for the purposes of determining line of sight and cover. The mortar launcher requires the use of a tripod, which is included in the price. Over the course of 1 minute, you can deploy or collapse the mortar launcher on the tripod. While deployed, your speed is reduced to 0."
+  },
+  {
+    "name": "Needler",
+    "type": "Simple Blaster",
+    "properties": "Slug cartridge (range 30/160), Piercing 1, Reload 12, Silent, Special",
+    "cost": 475,
+    "weight": 3,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": "The needler includes a specialized compartment for poison. One dose of poison, when installed in this compartment, retains its potency for 1 hour before drying. One dose of poison is effective for the next 10 shots fired by the weapon."
+  },
+  {
+    "name": "Neuronic whip",
+    "type": "Exotic Vibroweapon",
+    "properties": "Reach, Shocking 15, Specialized (shocking)",
+    "cost": 725,
+    "weight": 0,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Nightstinger rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 125/500), Reload 2, Silent, Strength 11, Two-handed",
+    "cost": 1075,
+    "weight": 11,
+    "damage": "1d10 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Phase knife",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 11, Disguised, Hidden, Keen 1, Light, Luminous, Vicious 1",
+    "cost": 1025,
+    "weight": 1.75,
+    "damage": "1d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Radiation cannon",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 75/300), Auto, Burst 2, Disrupt ive, Piercing 1, Reload 4, Strength 15, Two-handed",
+    "cost": 3900,
+    "weight": 13.5,
+    "damage": "2d4 Necrotic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Radrifle",
+    "type": "Exotic Blaster",
+    "properties": "Disintegrate 15, Power cell (range 120/480), Reload 8, Specialized (disintegrate), Strength 13, Two-handed",
+    "cost": 1575,
+    "weight": 14,
+    "damage": "1d6 Necrotic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Retrosaber",
+    "type": "Martial Lightweapon",
+    "properties": "Dexterity 13, Dire 1, Reckless 1, Versatile (1d10)",
+    "cost": 950,
+    "weight": 3,
+    "damage": "1d8 Energy",
+    "source": "EC",
+    "description": "The retrosaber is an ancient type of lightweapon that requires a power cell to function. Once four attacks have been made with a retrosaber, a character must replace the power cell using an action or bonus action. You must have one free hand to replace the power cell."
+  },
+  {
+    "name": "Revolver",
+    "type": "Martial Blaster",
+    "properties": "Slug cartridge (range 60/240), Rapid 4, Reload 8, Strength 11",
+    "cost": 625,
+    "weight": 6.5,
+    "damage": "2d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Riot baton",
+    "type": "Martial Vibroweapon",
+    "properties": "Defensive 1, Light",
+    "cost": 250,
+    "weight": 1.5,
+    "damage": "1d6 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Riot shocker",
+    "type": "Martial Vibroweapon",
+    "properties": "Defensive 1, Light, Shocking 13",
+    "cost": 425,
+    "weight": 1,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Rocket rifle",
+    "type": "Martial Blaster",
+    "properties": "Reload 6, Special (range 60/240), Strength 11, Two-handed",
+    "cost": 2250,
+    "weight": 12,
+    "damage": "Special",
+    "source": "EC",
+    "description": "Rather than traditional power cells, the rocket rifle fires specialized projectiles in the form of small missiles."
+  },
+  {
+    "name": "Saberaxe",
+    "type": "Martial Lightweapon",
+    "properties": "Luminous",
+    "cost": 600,
+    "weight": 1,
+    "damage": "2d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Sabergauntlet",
+    "type": "Martial Lightweapon",
+    "properties": "Finesse, Fixed, Luminous",
+    "cost": 475,
+    "weight": 1.5,
+    "damage": "1d8 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Saberspear",
+    "type": "Simple Lightweapon",
+    "properties": "Luminous, Thrown (range 20/60), Versatile (2d4)",
+    "cost": 450,
+    "weight": 2,
+    "damage": "1d6 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Saberstaff",
+    "type": "Exotic Lightweapon",
+    "properties": "Modal (double-saber and tech-staff)",
+    "cost": 1375,
+    "weight": 0,
+    "damage": "Special",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Saberstaff",
+    "type": "Exotic Vibroweapon",
+    "properties": "Modal (double-saber and tech-staff)",
+    "cost": 1375,
+    "weight": 0,
+    "damage": "Special",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Scatter blaster",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 40/160), Burst 3, Reload 12, Strength 13, Two-handed",
+    "cost": 1175,
+    "weight": 9.5,
+    "damage": "2d4 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Sentry gun",
+    "type": "Martial Blaster",
+    "properties": "Brutal, Keen 1, Reload 4, Special (range 120/480), Strength 19, Two-handed",
+    "cost": 3250,
+    "weight": 16.5,
+    "damage": "1d12 Energy",
+    "source": "EC",
+    "description": "Before firing the sentry gun, you must deploy it using an action unless you meet its strength requirement. Alternatively, if you\u2019re able to make multiple attacks with the Attack action, this action replaces one of them. While deployed in this way, you treat this weapon\u2019s strength number as two steps less (from 19 to 15), your speed is reduced by half, and you cannot fire this weapon at long range. You can collapse the sentry gun as an action or bonus action."
+  },
+  {
+    "name": "Shatter cannon",
+    "type": "Martial Blaster",
+    "properties": "Slug cartridge (range 75/300), Auto, Burst 4, Reload 8, Silent, Strength 15, Two-handed",
+    "cost": 1625,
+    "weight": 14,
+    "damage": "1d10 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Shatter pistol",
+    "type": "Simple Blaster",
+    "properties": "Slug cartridge (range 60/240), Light, Reload 12, Silent, Strength 11",
+    "cost": 375,
+    "weight": 2,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Shatter rifle",
+    "type": "Martial Blaster",
+    "properties": "Slug cartridge (range 100/400), Reload 8, Silent, Strength 11, Two-handed",
+    "cost": 750,
+    "weight": 9.5,
+    "damage": "2d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Shock whip",
+    "type": "Martial Vibroweapon",
+    "properties": "Reach, Shocking 13",
+    "cost": 475,
+    "weight": 3.5,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Shortbow",
+    "type": "Simple Blaster",
+    "properties": "Mighty, Silent, Special (range 60/240), Two-handed",
+    "cost": 550,
+    "weight": 4,
+    "damage": "1d6 Kinetic",
+    "source": "EC",
+    "description": "Rather than traditional power cells, the shortbow fires specialized projectiles in the form of arrows. You can make a ranged weapon attack only if you have ammunition to fire from the weapon. Each time you attack with the weapon, you expend one arrow. Drawing the ammunition from a quiver, case, or other container is part of the attack. At the end of the battle, you can recover half your expended ammunition by taking a minute to search the battlefield."
+  },
+  {
+    "name": "Sonic cannon",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 90/360), Auto, Burst 2, Disruptive, Reload 4, Strength 17, Two-handed",
+    "cost": 2100,
+    "weight": 16.5,
+    "damage": "1d10 Sonic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Sonic carbine",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 60/240), Disruptive, Reload 12, Strength 11, Two-handed",
+    "cost": 675,
+    "weight": 7,
+    "damage": "1d6 Sonic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Sonic pistol",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 30/120), Disruptive, Reload 16",
+    "cost": 375,
+    "weight": 2,
+    "damage": "1d4 Sonic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Sonic rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 80/320), Disruptive, Reload 8, Strength 11, Two-handed",
+    "cost": 875,
+    "weight": 9,
+    "damage": "1d8 Sonic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Stealth carbine",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 70/280), Reload 16, Silent, Two-handed",
+    "cost": 500,
+    "weight": 6,
+    "damage": "1d6 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Stun gauntlet",
+    "type": "Simple Vibroweapon",
+    "properties": "Disruptive, Fixed, Shocking 13",
+    "cost": 400,
+    "weight": 2.25,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Sunsaber",
+    "type": "Exotic Lightweapon",
+    "properties": "Bright 15, Dexterity 11, Hidden, Specialized (bright), Versatile (2d4)",
+    "cost": 1875,
+    "weight": 0,
+    "damage": "1d6 Fire",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Switch cannon",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 100/400), Burst 2, Reload 4, Strength 15, Switch (2d4 acid/cold/fire/lightning), Two-handed",
+    "cost": 3350,
+    "weight": 12.5,
+    "damage": "1d10 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Switch carbine",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 70/280), Reload 16, Switch (1d4 acid), Two-handed",
+    "cost": 925,
+    "weight": 7.5,
+    "damage": "1d6 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Switch pistol",
+    "type": "Simple Blaster",
+    "properties": "Power cell (range 40/160), Reload 20, Switch (1d4 fire)",
+    "cost": 675,
+    "weight": 4.5,
+    "damage": "1d6 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Switch rifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 105/420), Reload 8, Switch (1d6 lightning), Two-handed",
+    "cost": 1025,
+    "weight": 9.5,
+    "damage": "1d8 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Switch sniper",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 150/600), Reload 2, Strength 13, Switch (1d10 cold), Two-handed",
+    "cost": 1800,
+    "weight": 15.5,
+    "damage": "1d12 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Torpedo launcher",
+    "type": "Martial Blaster",
+    "properties": "Special (range 1200/3600), Reload 1, Two-handed",
+    "cost": 15000,
+    "weight": 30,
+    "damage": "Special",
+    "source": "EC",
+    "description": "Rather than traditional power cells, the torpedo launcher fires specialized projectiles in the form of torpedoes. Torpedo launchers have advantage on attack rolls against Gargantuan creatures and disadvantage on attack rolls against Large and smaller creatures. Unlike other weapons, the torpedo launcher can only be loaded using an action, and you don\u2019t add your Dexterity modifier to damage rolls you make with it. The torpedo launcher requires the use of a tripod, which is included in the price. Over the course of 1 minute, you can deploy or collapse the torpedo launcher on the tripod. While deployed, your speed is reduced to 0."
+  },
+  {
+    "name": "Tranquilizer rifle",
+    "type": "Simple Blaster",
+    "properties": "Slug cartridge (range 60/240), Reload 4, Silent, Special",
+    "cost": 275,
+    "weight": 2.5,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": "The tranquilizer rifle includes a specialized compartment for poison. One dose of poison, when installed in this compartment, retains its potency for 1 hour before drying. One dose of poison is effective for the next 4 shots fired by the weapon. Additionally, creatures reduced to 0 hit points by this weapon are immediately stabilized, unless that damage would instantly kill them."
+  },
+  {
+    "name": "Vibrobaton",
+    "type": "Martial Vibroweapon",
+    "properties": "\u2014",
+    "cost": 250,
+    "weight": 4,
+    "damage": "2d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Vibroclaw",
+    "type": "Simple Vibroweapon",
+    "properties": "Finesse, Fixed, Light",
+    "cost": 50,
+    "weight": 0.75,
+    "damage": "1d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Vibroclaymore",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 13, Two-handed",
+    "cost": 1700,
+    "weight": 10.5,
+    "damage": "3d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Vibrocutlass",
+    "type": "Simple Vibroweapon",
+    "properties": "Dexterity 11",
+    "cost": 600,
+    "weight": 1,
+    "damage": "2d4 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Vibrocutter",
+    "type": "Simple Vibroweapon",
+    "properties": "Heavy",
+    "cost": 50,
+    "weight": 3,
+    "damage": "1d6 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Vibrolance",
+    "type": "Martial Vibroweapon",
+    "properties": "Dexterity 13, Reach, Special",
+    "cost": 1500,
+    "weight": 8.5,
+    "damage": "1d12 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Wristblade",
+    "type": "Martial Vibroweapon",
+    "properties": "Fixed, Light, Piercing 1",
+    "cost": 275,
+    "weight": 1.75,
+    "damage": "1d6 Kinetic",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Wristrifle",
+    "type": "Martial Blaster",
+    "properties": "Power cell (range 60/240), Fixed, Reload 12",
+    "cost": 250,
+    "weight": 4.5,
+    "damage": "1d8 Energy",
+    "source": "EC",
+    "description": ""
+  },
+  {
+    "name": "Wristsaber",
+    "type": "Simple Lightweapon",
+    "properties": "Finesse, Fixed, Light, Luminous",
+    "cost": 375,
+    "weight": 1,
+    "damage": "1d4 Energy",
+    "source": "EC",
+    "description": ""
+  }
+]

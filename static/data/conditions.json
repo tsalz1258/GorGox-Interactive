@@ -1,0 +1,86 @@
+[
+  {
+    "Name": "Blinded",
+    "Description": "A blinded creature can’t see and automatically fails any ability check that requires sight. Unless a creature benefits from powers or a special sense, attack rolls against the creature have advantage, and the creature’s attack rolls have disadvantage."
+  },
+  {
+    "Name": "Charmed",
+    "Description": "A charmed creature can’t attack the charmer or target the charmer with harmful abilities or enhanced effects. The charmer has advantage on any ability check to interact socially with the creature."
+  },
+  {
+    "Name": "Corroded",
+    "Description": "Some abilities, effects, and hazards can lead to the corroded condition, which is measured in three levels. For each level of corroded a creature has, it takes 1 additional damage from weapons."
+  },
+  {
+    "Name": "Deafened",
+    "Description": "A deafened creature can’t hear and automatically fails any ability check that requires hearing."
+  },
+  {
+    "Name": "Diseased",
+    "Description": "A diseased creature suffers effects that vary based on the disease."
+  },
+  {
+    "Name": "Exhaustion",
+    "Description": "Exhaustion is measured in six levels. An effect can give a creature one or more levels. A creature suffers the effect of its current exhaustion level and all lower levels. Long rest reduces exhaustion by 1 if the creature eats and drinks."
+  },
+  {
+    "Name": "Frightened",
+    "Description": "A frightened creature has disadvantage on ability checks and attack rolls while the source of its fear is within line of sight. The creature can’t willingly move closer to the source of its fear."
+  },
+  {
+    "Name": "Grappled",
+    "Description": "A grappled creature’s speed becomes 0. The condition ends if the grappler is incapacitated or if the creature is removed from the grappler’s reach."
+  },
+  {
+    "Name": "Ignited",
+    "Description": "A creature that is ignited takes fire damage at the end of each of its turns (as listed in the condition). If the creature or another adjacent creature uses an action to put out the flames, or another effect extinguishes them, the ignited condition ends."
+  },
+  {
+    "Name": "Incapacitated",
+    "Description": "An incapacitated creature can’t take actions or reactions and automatically fails Strength, Dexterity, and Constitution checks."
+  },
+  {
+    "Name": "Invisible",
+    "Description": "An invisible creature is unseen without special senses. For hiding, it is considered heavily obscured. Attack rolls against the creature have disadvantage, and the creature’s attack rolls have advantage unless detected by special senses or powers."
+  },
+  {
+    "Name": "Paralyzed",
+    "Description": "A paralyzed creature is incapacitated and can’t move or speak. The creature automatically fails Strength and Dexterity saving throws, attack rolls against it have advantage, and any attack from within 5 feet is a critical hit."
+  },
+  {
+    "Name": "Petrified",
+    "Description": "A petrified creature is transformed into an inanimate solid substance, its weight increases tenfold, and it ceases aging. It is incapacitated and unaware of its surroundings. Attack rolls against it have advantage; it automatically fails Strength and Dexterity saves, has resistance to all damage, and is immune to poison and disease."
+  },
+  {
+    "Name": "Poisoned",
+    "Description": "A poisoned creature has disadvantage on attack rolls and ability checks."
+  },
+  {
+    "Name": "Prone",
+    "Description": "A prone creature’s only movement option is to crawl unless it stands up. It has disadvantage on melee attacks; ranged attacks within 30 feet also have disadvantage. Attacks from within 5 feet against it have advantage; otherwise, they have disadvantage."
+  },
+  {
+    "Name": "Restrained",
+    "Description": "A restrained creature has 4 slowed levels. Attack rolls against it have advantage, its own attack rolls have disadvantage, and it has disadvantage on Dexterity saving throws."
+  },
+  {
+    "Name": "Shocked",
+    "Description": "A shocked creature can’t take reactions. On its turn it can take either an action or a bonus action, but not both."
+  },
+  {
+    "Name": "Slowed",
+    "Description": "Slowed is measured in four levels. Each level reduces speed (Level 1: -15 ft, Level 2: -25 ft, Level 3: -30 ft, Level 4: speed becomes 0 and it can’t benefit from bonuses to speed). Slowed levels stack and decrease only when specified by an effect."
+  },
+  {
+    "Name": "Stunned",
+    "Description": "A stunned creature is incapacitated, can’t move, and can speak only falteringly. It automatically fails Strength and Dexterity saving throws and attack rolls against it have advantage."
+  },
+  {
+    "Name": "Unconscious",
+    "Description": "An unconscious creature is incapacitated, can’t move or speak, is unaware of its surroundings, drops held items, and falls prone. It automatically fails Strength and Dexterity saving throws. Attack rolls against it have advantage, and attacks within 5 feet are critical hits."
+  },
+  {
+    "Name": "Weakened",
+    "Description": "A weakened creature heals at half rate from effects that restore hit points. It can only add half its ability modifier to ability checks, attack rolls, and saving throws—unless that modifier is negative."
+  }
+]
