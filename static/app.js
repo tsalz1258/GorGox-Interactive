@@ -120,6 +120,20 @@ function connect() {
     myPlayerName = playerName;
     isDM = document.getElementById('isDM').checked; // Set once and NEVER change
     
+    // Save connection info for auto-reconnect
+    localStorage.setItem('savedPlayerName', playerName);
+    localStorage.setItem('savedIsDM', isDM.toString());
+    localStorage.setItem('savedStyle', selectedStyle);
+    localStorage.setItem('autoReconnect', 'true');
+    
+    performConnection(playerName, isDM, selectedStyle);
+}
+
+function performConnection(playerName, isDmValue, style) {
+    myPlayerName = playerName;
+    isDM = isDmValue;
+    selectedStyle = style;
+    
     // Connect WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -154,11 +168,37 @@ function connect() {
     ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         updateConnectionStatus(false);
+        
+        // If auto-reconnecting and connection fails, show connection modal
+        const autoReconnect = localStorage.getItem('autoReconnect');
+        if (autoReconnect === 'true') {
+            console.log('⚠️ Auto-reconnect failed, showing connection modal');
+            const connectionModal = document.getElementById('connectionModal');
+            if (connectionModal) {
+                connectionModal.classList.add('active');
+                connectionModal.style.display = '';
+            }
+            localStorage.removeItem('autoReconnect'); // Clear flag so it doesn't retry
+        }
     };
     
-    ws.onclose = () => {
+    ws.onclose = (event) => {
         updateConnectionStatus(false);
-        addLogEntry('Disconnected from server', 'info');
+        if (typeof addLogEntry === 'function') {
+            addLogEntry('Disconnected from server', 'info');
+        }
+        
+        // If auto-reconnecting and connection closes unexpectedly, show connection modal
+        const autoReconnect = localStorage.getItem('autoReconnect');
+        if (autoReconnect === 'true' && !event.wasClean) {
+            console.log('⚠️ Auto-reconnect closed unexpectedly, showing connection modal');
+            const connectionModal = document.getElementById('connectionModal');
+            if (connectionModal) {
+                connectionModal.classList.add('active');
+                connectionModal.style.display = '';
+            }
+            localStorage.removeItem('autoReconnect'); // Clear flag so it doesn't retry
+        }
     };
 }
 
@@ -325,6 +365,12 @@ function handleServerMessage(message) {
                         showCharacterManager();
                     }
                 }, 1000);
+            }
+            
+            // Show refresh button when connected
+            const refreshBtn = document.getElementById('refreshButton');
+            if (refreshBtn) {
+                refreshBtn.classList.remove('hidden');
             }
             
             document.getElementById('playerInfo').textContent = 
@@ -831,11 +877,6 @@ function handleServerMessage(message) {
             updateInitiativeList();
             updateCombatStatus();
             
-            // Alert test - REMOVE THIS LATER
-            if (!isDM) {
-                alert('🎯 COMBAT STARTED! Combat Action Panel should appear below. If you see this alert but no panel, there is a JavaScript error.');
-            }
-            
             updatePlayerTurnControls(); // Show combat action panel for players
             addLogEntry('⚔️ Combat has started! Rolling for initiative...', 'info');
             
@@ -1168,16 +1209,28 @@ function handleServerMessage(message) {
             console.log('Damage:', message.damage);
             console.log('New HP:', message.new_hp);
             
-            // CRITICAL: Always update character or enemy data FIRST (source of truth)
-            // This ensures HP is synced across all clients
+            // CRITICAL: Store previous HP BEFORE updating (needed for animation)
             const damagedToken = tokens.find(t => t.id === message.target_id);
-            let damagedParticipant = null; // Declare outside if blocks so it's accessible later
+            let damagedParticipant = null;
+            let oldHp = null;
+            let maxHp = null;
+            
             if (damagedToken) {
                 if (damagedToken.entity_type === 'Player') {
                     const char = characters.find(c => c.id === damagedToken.entity_id);
                     if (char) {
+                        // Store previous HP for animation BEFORE updating
+                        // CRITICAL: Use current_hp if available, otherwise use max_hp (for first damage)
+                        oldHp = char.current_hp !== undefined && char.current_hp !== null ? char.current_hp : char.max_hp;
+                        maxHp = char.max_hp;
+                        
+                        // CRITICAL: Store in previousHpValues BEFORE updating HP (like dealDamage() does)
+                        // This ensures updateTokenInfo() can read the old HP value
+                        previousHpValues.set(damagedToken.entity_id, { hp: oldHp, maxHp: maxHp });
+                        console.log(`💾 Stored previous HP BEFORE update: ${oldHp}/${maxHp} for entity_id ${damagedToken.entity_id}`);
+                        
                         console.log('✅ Updating character data:', char.name);
-                        console.log('   Old character HP:', char.current_hp);
+                        console.log('   Old character HP:', oldHp, '(was:', char.current_hp, ')');
                         console.log('   New character HP:', message.new_hp);
                         char.current_hp = message.new_hp;
                         console.log('   ✅ Character HP updated to:', char.current_hp);
@@ -1200,8 +1253,13 @@ function handleServerMessage(message) {
                     // Update enemy instance HP
                     const enemy = enemies.find(e => e.id === damagedToken.entity_id);
                     if (enemy) {
+                        // Store previous HP for animation BEFORE updating
+                        oldHp = enemy.current_hp !== undefined ? enemy.current_hp : (enemy.max_hp || 100);
+                        maxHp = enemy.max_hp || 100;
+                        // Don't store in previousHpValues here - we'll do it right before updateTokenInfo() (like healing)
+                        
                         console.log('✅ Updating enemy data:', enemy.name);
-                        console.log('   Old enemy HP:', enemy.current_hp);
+                        console.log('   Old enemy HP:', oldHp);
                         console.log('   New enemy HP:', message.new_hp);
                         // Always update enemy HP (don't check if undefined - set it)
                         enemy.current_hp = message.new_hp;
@@ -1222,16 +1280,71 @@ function handleServerMessage(message) {
             }
             
             // Force UI update to reflect new HP
-            // CRITICAL: Always update token info if this token is currently selected
-            // Also update if this is the player's own character (even if not selected)
-            const shouldUpdateTokenInfo = selectedToken && selectedToken.id === message.target_id;
+            // CRITICAL: Match dealDamage() EXACTLY - it works perfectly out of combat
+            // dealDamage() updates HP, then calls updateTokenInfo() directly
+            // previousHpValues was already stored BEFORE updating HP (above)
             const isMyCharacter = damagedToken && damagedToken.entity_type === 'Player' && 
                                  damagedToken.entity_id === myCharacterId;
             
             // ALWAYS update UI for any damage - ensure players see their HP update
-            // Update initiative list first (shows HP for players), then token info
-            updateInitiativeList();
-            updateTokenInfo();
+            // Match dealDamage() order EXACTLY: updateInitiativeList() FIRST, then updateTokenInfo()
+            // CRITICAL: For animation to work, the token must be selected so the health bar exists
+            // dealDamage() works because the token is already selected when you use the damage input
+            // In combat, we need to ensure the token is selected (even temporarily) for the health bar to exist
+            const wasTokenSelected = selectedToken && selectedToken.id === message.target_id;
+            const previousSelection = selectedToken;
+            
+            // CRITICAL: Always ensure previousHpValues is set before calling updateTokenInfo()
+            // Verify it's set correctly
+            if (damagedToken && oldHp !== null && oldHp !== undefined && maxHp !== null && maxHp !== undefined) {
+                if (damagedToken.entity_type === 'Player') {
+                    const stored = previousHpValues.get(damagedToken.entity_id);
+                    if (!stored || stored.hp !== oldHp) {
+                        previousHpValues.set(damagedToken.entity_id, { hp: oldHp, maxHp: maxHp });
+                        console.log(`💾 Re-stored previous HP: ${oldHp}/${maxHp} for entity_id ${damagedToken.entity_id}`);
+                    }
+                } else if (damagedToken.entity_type === 'Enemy') {
+                    const key = `enemy-${damagedToken.entity_id}`;
+                    const stored = previousHpValues.get(key);
+                    if (!stored || stored.hp !== oldHp) {
+                        previousHpValues.set(key, { hp: oldHp, maxHp: maxHp });
+                        console.log(`💾 Re-stored previous HP: ${oldHp}/${maxHp} for enemy ${damagedToken.entity_id}`);
+                    }
+                }
+            }
+            
+            // CRITICAL: Ensure previousHpValues is set RIGHT BEFORE calling updateTokenInfo()
+            // This must happen after we've updated the HP, but before updateTokenInfo() reads it
+            if (damagedToken && oldHp !== null && oldHp !== undefined && maxHp !== null && maxHp !== undefined) {
+                if (damagedToken.entity_type === 'Player') {
+                    // Double-check it's set correctly right before updateTokenInfo()
+                    previousHpValues.set(damagedToken.entity_id, { hp: oldHp, maxHp: maxHp });
+                    console.log(`💾 Final check - stored previous HP: ${oldHp}/${maxHp} for entity_id ${damagedToken.entity_id}`);
+                } else if (damagedToken.entity_type === 'Enemy') {
+                    const key = `enemy-${damagedToken.entity_id}`;
+                    previousHpValues.set(key, { hp: oldHp, maxHp: maxHp });
+                    console.log(`💾 Final check - stored previous HP: ${oldHp}/${maxHp} for enemy ${damagedToken.entity_id}`);
+                }
+            }
+            
+            if (!wasTokenSelected && damagedToken) {
+                // Token not selected - temporarily select it to create health bar and show animation
+                console.log('🎬 Token not selected, temporarily selecting to show damage animation');
+                selectedToken = damagedToken;
+                updateInitiativeList();
+                updateTokenInfo();
+                
+                // Restore previous selection after animation completes (1.5s + buffer)
+                setTimeout(() => {
+                    selectedToken = previousSelection;
+                    updateTokenInfo();
+                }, 1600);
+            } else {
+                // Token is already selected - just update normally (matches dealDamage() pattern)
+                updateInitiativeList();
+                updateTokenInfo();
+            }
+            
             renderCanvas();
             
             // If this is the player's character and they have the character sheet open, refresh it
@@ -1349,12 +1462,69 @@ function handleServerMessage(message) {
             } else {
                 // Accept the characters (style matches or not set)
                 console.log('✅ Accepting CharacterList');
+                
+                // Update HP in combat participants if in combat
+                if (combatState.active && message.characters) {
+                    message.characters.forEach(updatedChar => {
+                        const participant = combatState.participants.find(p => p.entity_id === updatedChar.id);
+                        if (participant) {
+                            participant.current_hp = updatedChar.current_hp;
+                            participant.max_hp = updatedChar.max_hp;
+                            console.log(`✅ Updated HP for ${participant.name}: ${updatedChar.current_hp}/${updatedChar.max_hp}`);
+                        }
+                    });
+                }
+                
                 characters = message.characters || [];
                 renderCharacterList();
                 syncCharactersWithServer();
                 
-                // Auto-show character selection for players who haven't selected yet
+                // Update character sheet if viewing one
+                if (currentViewingCharacter) {
+                    const updatedChar = characters.find(c => c.id === currentViewingCharacter.id);
+                    if (updatedChar) {
+                        currentViewingCharacter.current_hp = updatedChar.current_hp;
+                        currentViewingCharacter.max_hp = updatedChar.max_hp;
+                        renderCharacterSheetContent();
+                    }
+                }
+                
+                // Update initiative list if in combat
+                if (combatState.active) {
+                    updateInitiativeList();
+                }
+                
+                // Try to restore saved character selection after refresh
                 if (!isDM && !myCharacterId && characters.length > 0) {
+                    const savedCharacterId = localStorage.getItem('savedCharacterId');
+                    const savedPlayerName = localStorage.getItem('savedPlayerName');
+                    
+                    if (savedCharacterId && savedPlayerName === myPlayerName) {
+                        const savedChar = characters.find(c => c.id === savedCharacterId);
+                        if (savedChar) {
+                            console.log('🔄 Restoring saved character selection:', savedChar.name);
+                            // Restore character selection without showing alert
+                            myCharacterId = savedCharacterId;
+                            sendMessage({
+                                type: 'SelectCharacter',
+                                character_id: savedCharacterId
+                            });
+                            const myPlayer = connectedPlayers.find(p => p && p.name === myPlayerName);
+                            if (myPlayer) {
+                                myPlayer.character_name = savedChar.name;
+                            }
+                            renderPlayerList();
+                            document.getElementById('playerInfo').textContent = `Playing as: ${savedChar.name}`;
+                            addLogEntry(`Restored character: ${savedChar.name}`, 'info');
+                            return; // Don't show character selection modal
+                        } else {
+                            console.log('⚠️ Saved character not found, clearing localStorage');
+                            localStorage.removeItem('savedCharacterId');
+                            localStorage.removeItem('savedPlayerName');
+                        }
+                    }
+                    
+                    // Auto-show character selection for players who haven't selected yet
                     const modal = document.getElementById('characterManagerModal');
                     if (modal && !modal.classList.contains('active')) {
                         console.log('🎭 Auto-opening character selection - characters loaded');
@@ -2997,16 +3167,46 @@ function updateTokenInfo() {
                 const hpBarId = `hp-bar-${selectedToken.entity_id}`;
                 const previousHp = previousHpValues.get(selectedToken.entity_id);
                 const startPercent = previousHp ? (previousHp.hp / previousHp.maxHp) * 100 : hpPercent;
-                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%"></div></div>`;
-                // Animate to new value after a tiny delay to ensure DOM is ready
+                
+                // CRITICAL: If startPercent equals hpPercent, there's no animation!
+                // This means previousHpValues wasn't set correctly
+                if (startPercent === hpPercent && previousHp) {
+                    console.warn(`⚠️ startPercent equals hpPercent! Previous HP: ${previousHp.hp}, Current HP: ${currentHp}, Max HP: ${maxHp}`);
+                } else if (!previousHp) {
+                    console.warn(`⚠️ No previousHp found for entity_id ${selectedToken.entity_id}! Available keys:`, Array.from(previousHpValues.keys()));
+                }
+                
+                console.log(`🎬 Health bar: ${previousHp ? `${previousHp.hp}/${previousHp.maxHp}` : 'no previous'} -> ${currentHp}/${maxHp} (${startPercent.toFixed(1)}% -> ${hpPercent.toFixed(1)}%)`);
+                
+                // CRITICAL: Only animate if startPercent is different from hpPercent
+                if (Math.abs(startPercent - hpPercent) > 0.1) {
+                    // CRITICAL: Ensure transition is applied by setting it explicitly in the style
+                    info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%; transition: width 1.5s ease-out !important;"></div></div>`;
+                    // Animate to new value after a tiny delay to ensure DOM is ready
+                    setTimeout(() => {
+                        const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
+                        if (fillElement) {
+                            // Force reflow to ensure initial width is applied before animating
+                            void fillElement.offsetHeight;
+                            // Explicitly set transition again to ensure it's applied
+                            fillElement.style.transition = 'width 1.5s ease-out';
+                            // Now set the new width - CSS transition will animate it smoothly
+                            fillElement.style.width = `${hpPercent}%`;
+                            console.log(`✅ Started health bar animation from ${startPercent.toFixed(1)}% to ${hpPercent.toFixed(1)}% (1.5s transition)`);
+                        } else {
+                            console.warn(`⚠️ Health bar fill element not found: #${hpBarId} .hp-fill`);
+                        }
+                    }, 10);
+                } else {
+                    // No animation needed - values are the same (or very close)
+                    console.log(`⚠️ Skipping animation - startPercent (${startPercent.toFixed(1)}%) equals hpPercent (${hpPercent.toFixed(1)}%)`);
+                    info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${hpPercent}%;"></div></div>`;
+                }
+                // Store current HP for next update (delay to ensure animation uses old value)
+                // CRITICAL: Delay this to AFTER the animation completes (1.5s + buffer)
                 setTimeout(() => {
-                    const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
-                    if (fillElement) {
-                        fillElement.style.width = `${hpPercent}%`;
-                    }
-                }, 10);
-                // Store current HP for next update
-                previousHpValues.set(selectedToken.entity_id, { hp: currentHp, maxHp: maxHp });
+                    previousHpValues.set(selectedToken.entity_id, { hp: currentHp, maxHp: maxHp });
+                }, 1600);
                 info += `<div class="token-stat"><span>AC:</span><span>${entityData.armor_class}</span></div>`;
                 info += `<div class="token-stat"><span>Initiative:</span><span>+${entityData.initiative_bonus}</span></div>`;
                 info += `<div class="token-stat"><span>Speed:</span><span>${entityData.speed} ft</span></div>`;
@@ -3036,7 +3236,11 @@ function updateTokenInfo() {
         
         if (enemy || instance) {
             const displayName = instance ? instance.name : (enemy ? enemy.name : 'Unknown');
-            const currentHp = instance ? instance.current_hp : (enemy ? enemy.max_hp : 0);
+            // CRITICAL: Use enemy.current_hp as fallback, not enemy.max_hp
+            // Prioritize instance HP (from combat), then enemy.current_hp, then enemy.max_hp
+            const currentHp = instance ? instance.current_hp : 
+                             (enemy && enemy.current_hp !== undefined && enemy.current_hp !== null ? enemy.current_hp : 
+                             (enemy ? enemy.max_hp : 0));
             const maxHp = instance ? instance.max_hp : (enemy ? enemy.max_hp : 0);
             const ac = instance ? instance.armor_class : (enemy ? enemy.armor_class : 0);
             
@@ -3045,20 +3249,39 @@ function updateTokenInfo() {
                 info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${enemy.creature_type} (CR ${enemy.challenge_rating})</p>`;
             }
             info += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#ff8844'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
-            const hpPercent = (currentHp / maxHp) * 100;
+            const hpPercent = maxHp > 0 ? (currentHp / maxHp) * 100 : 0;
             const hpBarId = `hp-bar-enemy-${selectedToken.entity_id}`;
             const previousHp = previousHpValues.get(`enemy-${selectedToken.entity_id}`);
             const startPercent = previousHp ? (previousHp.hp / previousHp.maxHp) * 100 : hpPercent;
-            info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%"></div></div>`;
-            // Animate to new value after a tiny delay to ensure DOM is ready
+            
+            // CRITICAL: Only animate if startPercent is different from hpPercent
+            if (Math.abs(startPercent - hpPercent) > 0.1) {
+                // CRITICAL: Ensure transition is applied by setting it explicitly in the style
+                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%; transition: width 1.5s ease-out !important;"></div></div>`;
+                // Animate to new value after a tiny delay to ensure DOM is ready
+                setTimeout(() => {
+                    const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
+                    if (fillElement) {
+                        // Force reflow to ensure initial width is applied before animating
+                        void fillElement.offsetHeight;
+                        // Explicitly set transition again to ensure it's applied
+                        fillElement.style.transition = 'width 1.5s ease-out';
+                        // Now set the new width - CSS transition will animate it smoothly
+                        fillElement.style.width = `${hpPercent}%`;
+                        console.log(`✅ Started enemy health bar animation from ${startPercent.toFixed(1)}% to ${hpPercent.toFixed(1)}% (1.5s transition)`);
+                    } else {
+                        console.warn(`⚠️ Enemy health bar fill element not found: #${hpBarId} .hp-fill`);
+                    }
+                }, 10);
+            } else {
+                // No animation needed - values are the same (or very close)
+                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${hpPercent}%;"></div></div>`;
+            }
+            // Store current HP for next update (delay to ensure animation uses old value)
+            // CRITICAL: Delay this to AFTER the animation completes (1.5s + buffer)
             setTimeout(() => {
-                const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
-                if (fillElement) {
-                    fillElement.style.width = `${hpPercent}%`;
-                }
-            }, 10);
-            // Store current HP for next update
-            previousHpValues.set(`enemy-${selectedToken.entity_id}`, { hp: currentHp, maxHp: maxHp });
+                previousHpValues.set(`enemy-${selectedToken.entity_id}`, { hp: currentHp, maxHp: maxHp });
+            }, 1600);
             info += `<div class="token-stat"><span>AC:</span><span>${ac}</span></div>`;
             
             if (enemy) {
@@ -4027,6 +4250,23 @@ function dealDamage() {
     const participant = combatState.participants.find(p => p.id === selectedToken.id);
     const targetName = participant ? participant.name : (selectedToken.entity_type === 'Enemy' ? 'Enemy' : 'Target');
     
+    // Store previous HP values for animation BEFORE updating
+    if (selectedToken.entity_type === 'Player') {
+        const char = characters.find(c => c.id === selectedToken.entity_id);
+        if (char) {
+            const oldHp = char.current_hp !== undefined && char.current_hp !== null ? char.current_hp : char.max_hp;
+            const maxHp = char.max_hp || 100;
+            previousHpValues.set(selectedToken.entity_id, { hp: oldHp, maxHp: maxHp });
+        }
+    } else if (selectedToken.entity_type === 'Enemy') {
+        const enemy = enemies.find(e => e.id === selectedToken.entity_id);
+        if (enemy) {
+            const oldHp = enemy.current_hp !== undefined && enemy.current_hp !== null ? enemy.current_hp : (enemy.max_hp || 100);
+            const maxHp = enemy.max_hp || 100;
+            previousHpValues.set(`enemy-${selectedToken.entity_id}`, { hp: oldHp, maxHp: maxHp });
+        }
+    }
+    
     // Update HP locally (optimistic update)
     if (participant) {
         const oldHp = participant.current_hp;
@@ -4043,8 +4283,13 @@ function dealDamage() {
     } else if (selectedToken.entity_type === 'Enemy') {
         // Update enemy instance HP
         const enemy = enemies.find(e => e.id === selectedToken.entity_id);
-        if (enemy && enemy.current_hp !== undefined) {
-            enemy.current_hp = Math.max(0, enemy.current_hp - damage);
+        if (enemy) {
+            const currentHp = enemy.current_hp !== undefined && enemy.current_hp !== null ? enemy.current_hp : (enemy.max_hp || 100);
+            enemy.current_hp = Math.max(0, currentHp - damage);
+            // Also update participant if in combat
+            if (participant) {
+                participant.current_hp = enemy.current_hp;
+            }
         }
     }
     
@@ -4087,6 +4332,23 @@ function healTarget() {
     const participant = combatState.participants.find(p => p.id === selectedToken.id);
     const targetName = participant ? participant.name : (selectedToken.entity_type === 'Enemy' ? 'Enemy' : 'Target');
     
+    // Store previous HP values for animation BEFORE updating
+    if (selectedToken.entity_type === 'Player') {
+        const char = characters.find(c => c.id === selectedToken.entity_id);
+        if (char) {
+            const oldHp = char.current_hp !== undefined && char.current_hp !== null ? char.current_hp : char.max_hp;
+            const maxHp = char.max_hp || 100;
+            previousHpValues.set(selectedToken.entity_id, { hp: oldHp, maxHp: maxHp });
+        }
+    } else if (selectedToken.entity_type === 'Enemy') {
+        const enemy = enemies.find(e => e.id === selectedToken.entity_id);
+        if (enemy) {
+            const oldHp = enemy.current_hp !== undefined && enemy.current_hp !== null ? enemy.current_hp : (enemy.max_hp || 100);
+            const maxHp = enemy.max_hp || 100;
+            previousHpValues.set(`enemy-${selectedToken.entity_id}`, { hp: oldHp, maxHp: maxHp });
+        }
+    }
+    
     // Update HP locally (optimistic update)
     if (participant) {
         const oldHp = participant.current_hp;
@@ -4103,9 +4365,14 @@ function healTarget() {
     } else if (selectedToken.entity_type === 'Enemy') {
         // Update enemy instance HP
         const enemy = enemies.find(e => e.id === selectedToken.entity_id);
-        if (enemy && enemy.current_hp !== undefined) {
-            const maxHp = enemy.max_hp || 100; // Fallback if max_hp not set
-            enemy.current_hp = Math.min(maxHp, enemy.current_hp + healing);
+        if (enemy) {
+            const currentHp = enemy.current_hp !== undefined && enemy.current_hp !== null ? enemy.current_hp : (enemy.max_hp || 100);
+            const maxHp = enemy.max_hp || 100;
+            enemy.current_hp = Math.min(maxHp, currentHp + healing);
+            // Also update participant if in combat
+            if (participant) {
+                participant.current_hp = enemy.current_hp;
+            }
         }
     }
     
@@ -4295,6 +4562,44 @@ function updatePlayerTurnControls() {
     } else {
         controlsDiv.classList.add('hidden');
     }
+}
+
+// Animate health bar for any token (even if not selected)
+function animateHealthBar(token, oldHp, newHp, maxHp) {
+    if (!token || oldHp === null || maxHp === null) return;
+    
+    // Determine the HP bar ID based on token type
+    let hpBarId;
+    if (token.entity_type === 'Player') {
+        hpBarId = `hp-bar-${token.entity_id}`;
+    } else if (token.entity_type === 'Enemy') {
+        hpBarId = `hp-bar-enemy-${token.entity_id}`;
+    } else {
+        return; // Don't animate for other types
+    }
+    
+    // Find the health bar element
+    const hpBar = document.getElementById(hpBarId);
+    if (!hpBar) {
+        // Health bar doesn't exist (token not selected), animation will happen when token is selected
+        return;
+    }
+    
+    // Get the fill element
+    const fillElement = hpBar.querySelector('.hp-fill');
+    if (!fillElement) return;
+    
+    // Calculate percentages
+    const oldPercent = (oldHp / maxHp) * 100;
+    const newPercent = (newHp / maxHp) * 100;
+    
+    // Set initial width to old HP
+    fillElement.style.width = `${oldPercent}%`;
+    
+    // Animate to new HP after a tiny delay
+    setTimeout(() => {
+        fillElement.style.width = `${newPercent}%`;
+    }, 10);
 }
 
 function updateCombatParticipantHP(targetId, newHp) {
@@ -5268,8 +5573,50 @@ function spawnNPC(npc) {
     console.log('========== SPAWNING NPC ==========');
     console.log('NPC:', npc.name);
     
-    const instanceName = prompt(`Name for this ${npc.name}:`, `${npc.name} 1`);
-    if (!instanceName) return;
+    // Find the highest number for this NPC type
+    let nextNumber = 1;
+    const baseName = npc.name.replace(/\s+\d+$/, ''); // Remove trailing number if present
+    
+    // Check existing NPCs and tokens for this NPC type
+    const existingNPCs = enemies.filter(e => {
+        if (!e.name || !e.isNPC) return false;
+        const npcBaseName = e.name.replace(/\s+\d+$/, '');
+        return npcBaseName === baseName || e.name.startsWith(baseName);
+    });
+    
+    // Also check tokens for NPC names
+    tokens.forEach(token => {
+        if (token.entity_type === 'Enemy') {
+            const enemy = enemies.find(e => e.id === token.entity_id && e.isNPC);
+            if (enemy && enemy.name) {
+                const tokenBaseName = enemy.name.replace(/\s+\d+$/, '');
+                if (tokenBaseName === baseName || enemy.name.startsWith(baseName)) {
+                    existingNPCs.push(enemy);
+                }
+            }
+        }
+    });
+    
+    // Extract numbers from existing NPC names
+    existingNPCs.forEach(e => {
+        if (e.name) {
+            const match = e.name.match(/\s+(\d+)$/);
+            if (match) {
+                const num = parseInt(match[1]);
+                if (num >= nextNumber) {
+                    nextNumber = num + 1;
+                }
+            } else if (e.name === baseName || e.name === npc.name) {
+                // If there's one with no number, next should be 2
+                if (nextNumber === 1) {
+                    nextNumber = 2;
+                }
+            }
+        }
+    });
+    
+    const instanceName = `${baseName} ${nextNumber}`;
+    console.log(`✅ Auto-generated NPC instance name: ${instanceName} (found ${existingNPCs.length} existing)`);
     
     // Generate instance ID
     const instanceId = generateUUID();
@@ -5679,8 +6026,50 @@ function spawnEnemy(enemyId, enemyName) {
     console.log('Base enemy ID:', enemyId);
     console.log('Base enemy name:', enemyName);
     
-    const instanceName = prompt(`Name for this ${enemyName}:`, `${enemyName} 1`);
-    if (!instanceName) return;
+    // Find the highest number for this enemy type
+    let nextNumber = 1;
+    const baseName = enemyName.replace(/\s+\d+$/, ''); // Remove trailing number if present
+    
+    // Check existing enemies and tokens for this enemy type
+    const existingEnemies = enemies.filter(e => {
+        if (!e.name) return false;
+        const enemyBaseName = e.name.replace(/\s+\d+$/, '');
+        return enemyBaseName === baseName || e.name.startsWith(baseName);
+    });
+    
+    // Also check tokens for enemy names
+    tokens.forEach(token => {
+        if (token.entity_type === 'Enemy') {
+            const enemy = enemies.find(e => e.id === token.entity_id);
+            if (enemy && enemy.name) {
+                const tokenBaseName = enemy.name.replace(/\s+\d+$/, '');
+                if (tokenBaseName === baseName || enemy.name.startsWith(baseName)) {
+                    existingEnemies.push(enemy);
+                }
+            }
+        }
+    });
+    
+    // Extract numbers from existing enemy names
+    existingEnemies.forEach(e => {
+        if (e.name) {
+            const match = e.name.match(/\s+(\d+)$/);
+            if (match) {
+                const num = parseInt(match[1]);
+                if (num >= nextNumber) {
+                    nextNumber = num + 1;
+                }
+            } else if (e.name === baseName || e.name === enemyName) {
+                // If there's one with no number, next should be 2
+                if (nextNumber === 1) {
+                    nextNumber = 2;
+                }
+            }
+        }
+    });
+    
+    const instanceName = `${baseName} ${nextNumber}`;
+    console.log(`✅ Auto-generated instance name: ${instanceName} (found ${existingEnemies.length} existing)`);
     
     // Generate instance ID ONCE and use it for both spawn and token placement
     const instanceId = generateUUID();
@@ -6098,6 +6487,13 @@ function selectCharacterForPlay(charId) {
     console.log('   Setting myCharacterId to:', charId);
     
     myCharacterId = charId;
+    
+    // Save to localStorage for refresh persistence
+    if (!isDM) {
+        localStorage.setItem('savedCharacterId', charId);
+        localStorage.setItem('savedPlayerName', myPlayerName);
+        console.log('💾 Saved character selection to localStorage');
+    }
     
     console.log('✅✅✅ CHARACTER SELECTION COMPLETE! ✅✅✅');
     console.log('   myCharacterId is now:', myCharacterId);
@@ -6975,26 +7371,40 @@ function addRollEntry(message, isNat20 = false, isNat1 = false) {
         return;
     }
     
+    // Remove placeholder message if it exists
+    const placeholder = log.querySelector('div[style*="opacity: 0.5"]');
+    if (placeholder) {
+        placeholder.remove();
+    }
+    
     const entry = document.createElement('div');
     entry.className = 'log-entry info';
     
+    // Enhanced styling with animations and better visibility
+    const baseStyle = 'padding: 12px 15px; margin: 6px 0; border-radius: 6px; font-size: 15px; line-height: 1.5; transition: all 0.3s ease; animation: slideIn 0.3s ease-out;';
+    
     // Special styling for nat 20 (green) and nat 1 (red)
     if (isNat20) {
-        entry.style.cssText = 'padding: 8px; margin: 4px 0; border-left: 4px solid #44ff44; background: linear-gradient(135deg, rgba(68, 255, 68, 0.25) 0%, rgba(34, 200, 34, 0.15) 100%); border-radius: 3px; color: #88ff88; font-weight: bold; box-shadow: 0 0 10px rgba(68, 255, 68, 0.3);';
+        entry.style.cssText = baseStyle + 'border-left: 5px solid #44ff44; background: linear-gradient(135deg, rgba(68, 255, 68, 0.35) 0%, rgba(34, 200, 34, 0.25) 100%); color: #88ff88; font-weight: bold; box-shadow: 0 0 15px rgba(68, 255, 68, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2); text-shadow: 0 0 5px rgba(68, 255, 68, 0.5);';
     } else if (isNat1) {
-        entry.style.cssText = 'padding: 8px; margin: 4px 0; border-left: 4px solid #ff4444; background: linear-gradient(135deg, rgba(255, 68, 68, 0.25) 0%, rgba(200, 34, 34, 0.15) 100%); border-radius: 3px; color: #ff8888; font-weight: bold; box-shadow: 0 0 10px rgba(255, 68, 68, 0.3);';
+        entry.style.cssText = baseStyle + 'border-left: 5px solid #ff4444; background: linear-gradient(135deg, rgba(255, 68, 68, 0.35) 0%, rgba(200, 34, 34, 0.25) 100%); color: #ff8888; font-weight: bold; box-shadow: 0 0 15px rgba(255, 68, 68, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2); text-shadow: 0 0 5px rgba(255, 68, 68, 0.5);';
     } else {
-        entry.style.cssText = 'padding: 8px; margin: 4px 0; border-left: 3px solid #ffaa44; background: rgba(255, 170, 68, 0.15); border-radius: 3px;';
+        entry.style.cssText = baseStyle + 'border-left: 4px solid #ffaa44; background: linear-gradient(135deg, rgba(255, 170, 68, 0.25) 0%, rgba(255, 140, 40, 0.15) 100%); color: #ffd4a0; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);';
     }
     
     const timestamp = new Date().toLocaleTimeString();
     
     // Format the message to bold player names
     const formattedMessage = formatLogMessage(message);
-    entry.innerHTML = `<span style="opacity: 0.6; font-size: 10px;">[${timestamp}]</span> ${formattedMessage}`;
+    entry.innerHTML = `<span style="opacity: 0.7; font-size: 12px; font-weight: normal; margin-right: 8px;">[${timestamp}]</span> ${formattedMessage}`;
     
     log.appendChild(entry);
-    log.scrollTop = log.scrollHeight;
+    
+    // Smooth scroll to bottom
+    log.scrollTo({
+        top: log.scrollHeight,
+        behavior: 'smooth'
+    });
     
     console.log('✅ Added to rolls log, total entries:', log.children.length);
     
@@ -9129,6 +9539,19 @@ function buildSimpleCharacterSheet(char) {
     
     const escapedName = escapeJs(char.name);
     
+    // Check for inspiration in character_data if it exists
+    let hasInspiration = false;
+    if (char.character_data) {
+        try {
+            const charData = JSON.parse(char.character_data);
+            const data = charData.character || charData;
+            hasInspiration = data.inspiration === true;
+        } catch (e) {
+            // Ignore parse errors
+        }
+    }
+    const escapedCharId = escapeJs(char.id);
+    
     let html = `
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px;">
             <div class="panel" style="padding: 15px;">
@@ -9137,6 +9560,17 @@ function buildSimpleCharacterSheet(char) {
                 <div class="token-stat"><span>Class:</span><span>${char.class}</span></div>
                 <div class="token-stat"><span>Level:</span><span>${char.level}</span></div>
                 <div class="token-stat"><span>Proficiency:</span><span>+${char.proficiency_bonus}</span></div>
+                <div class="token-stat" style="margin-top: 10px;">
+                    <span>Inspiration:</span>
+                    <button id="inspirationToggle-${char.id.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                            data-character-id="${escapedCharId}"
+                            onclick="toggleInspiration(this.dataset.characterId)" 
+                            style="padding: 5px 15px; border: 2px solid ${hasInspiration ? '#44ff44' : '#888'}; border-radius: 5px; background: ${hasInspiration ? 'rgba(68, 255, 68, 0.2)' : 'rgba(136, 136, 136, 0.2)'}; color: ${hasInspiration ? '#44ff44' : '#888'}; cursor: pointer; font-weight: bold; transition: all 0.2s;"
+                            onmouseover="this.style.transform='scale(1.05)'" 
+                            onmouseout="this.style.transform='scale(1)'">
+                        ${hasInspiration ? '✨ Has Inspiration' : '○ No Inspiration'}
+                    </button>
+                </div>
             </div>
             
             <div class="panel" style="padding: 15px;">
@@ -9236,6 +9670,10 @@ function buildDetailedCharacterSheet(char, charData) {
         maxHP = charData.hp?.max || char.max_hp;
     }
     
+    // Get inspiration value (default to false if not set)
+    const hasInspiration = charData.inspiration === true;
+    const escapedCharId = escapeJs(char.id);
+    
     html += `<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 15px; margin-bottom: 15px;">
         <div class="panel" style="padding: 15px;">
             <h4 style="color: #4a9eff;">🎭 Character Info</h4>
@@ -9245,6 +9683,17 @@ function buildDetailedCharacterSheet(char, charData) {
             <div class="token-stat"><span>Level:</span><span>${level}</span></div>
             ${charData.species ? `<div class="token-stat"><span>Species:</span><span>${charData.species.name || charData.species}</span></div>` : ''}
             ${charData.background ? `<div class="token-stat"><span>Background:</span><span>${charData.background.name || charData.background}</span></div>` : ''}
+            <div class="token-stat" style="margin-top: 10px;">
+                <span>Inspiration:</span>
+                <button id="inspirationToggle-${char.id.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                        data-character-id="${escapedCharId}"
+                        onclick="toggleInspiration(this.dataset.characterId)" 
+                        style="padding: 5px 15px; border: 2px solid ${hasInspiration ? '#44ff44' : '#888'}; border-radius: 5px; background: ${hasInspiration ? 'rgba(68, 255, 68, 0.2)' : 'rgba(136, 136, 136, 0.2)'}; color: ${hasInspiration ? '#44ff44' : '#888'}; cursor: pointer; font-weight: bold; transition: all 0.2s;"
+                        onmouseover="this.style.transform='scale(1.05)'" 
+                        onmouseout="this.style.transform='scale(1)'">
+                    ${hasInspiration ? '✨ Has Inspiration' : '○ No Inspiration'}
+                </button>
+            </div>
         </div>
         <div class="panel" style="padding: 15px; text-align: center;">
             <h4 style="color: #ff4444;">💚 HP</h4>
@@ -12165,6 +12614,202 @@ function playHpDamageSoundLocally() {
         console.error('❌ Error creating HP damage sound audio:', e);
         console.error('   Sound file:', soundFile);
         console.error('   Sound path:', soundPath);
+    }
+}
+
+function refreshApplication() {
+    console.log('🔄 Refreshing game state (tokens, HP, map)...');
+    addLogEntry('🔄 Refreshing game state...', 'info');
+    
+    // Refresh map and tokens
+    if (currentMap && currentMap.id) {
+        console.log('🔄 Requesting map reload:', currentMap.id);
+        sendMessage({ type: 'LoadMap', map_id: currentMap.id, clear_tokens: false });
+    }
+    
+    // Request token update
+    requestTokenRefresh();
+    
+    // Request updated characters (to get current HP)
+    console.log('🔄 Requesting updated characters...');
+    sendMessage({ type: 'ListCharacters' });
+    
+    // Also fetch from API for immediate update
+    fetch(`/api/characters?style=${selectedStyle}`)
+        .then(res => {
+            if (res.ok) {
+                return res.json();
+            }
+            throw new Error(`HTTP ${res.status}`);
+        })
+        .then(data => {
+            console.log('✅ Received updated characters:', data.length);
+            characters = data || [];
+            renderCharacterList();
+            
+            // Update character HP in UI if viewing character sheet
+            if (currentViewingCharacter) {
+                const updatedChar = characters.find(c => c.id === currentViewingCharacter.id);
+                if (updatedChar) {
+                    currentViewingCharacter.current_hp = updatedChar.current_hp;
+                    currentViewingCharacter.max_hp = updatedChar.max_hp;
+                    renderCharacterSheetContent();
+                }
+            }
+            
+            // Update initiative list if in combat
+            if (combatState.active) {
+                updateInitiativeList();
+            }
+        })
+        .catch(err => {
+            console.error('❌ Error refreshing characters:', err);
+        });
+    
+    // Request updated enemies (to get current HP)
+    console.log('🔄 Requesting updated enemies...');
+    sendMessage({ type: 'ListEnemies', style: selectedStyle });
+    
+    // Update token info if a token is selected
+    if (selectedToken) {
+        setTimeout(() => {
+            updateTokenInfo();
+        }, 500);
+    }
+    
+    // Re-render canvas after a short delay to allow server responses
+    setTimeout(() => {
+        renderCanvas();
+        updateInitiativeList();
+        addLogEntry('✅ Game state refreshed', 'success');
+        console.log('✅ Game state refresh complete');
+    }, 500);
+}
+
+function autoConnect() {
+    // Don't auto-connect if already connected
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        console.log('ℹ️ Already connected, skipping auto-connect');
+        return false;
+    }
+    
+    const savedPlayerName = localStorage.getItem('savedPlayerName');
+    const savedIsDM = localStorage.getItem('savedIsDM');
+    const savedStyle = localStorage.getItem('savedStyle');
+    const autoReconnect = localStorage.getItem('autoReconnect');
+    
+    if (autoReconnect === 'true' && savedPlayerName && savedIsDM !== null) {
+        console.log('🔄 Auto-reconnecting with saved credentials...');
+        console.log('   Player:', savedPlayerName);
+        console.log('   Is DM:', savedIsDM === 'true');
+        console.log('   Style:', savedStyle || 'dnd');
+        
+        // Set form values (if elements exist)
+        const playerNameInput = document.getElementById('playerName');
+        const isDMCheckbox = document.getElementById('isDM');
+        const styleSelector = document.getElementById('styleSelector');
+        
+        if (playerNameInput) playerNameInput.value = savedPlayerName;
+        if (isDMCheckbox) isDMCheckbox.checked = savedIsDM === 'true';
+        if (styleSelector && savedStyle) styleSelector.value = savedStyle;
+        
+        // Hide connection modal immediately (will be shown again if connection fails)
+        const connectionModal = document.getElementById('connectionModal');
+        if (connectionModal) {
+            connectionModal.classList.remove('active');
+            connectionModal.style.display = 'none';
+        }
+        
+        // Perform connection
+        performConnection(savedPlayerName, savedIsDM === 'true', savedStyle || 'dnd');
+        
+        return true;
+    }
+    
+    return false;
+}
+
+function toggleInspiration(characterId) {
+    const char = characters.find(c => c.id === characterId);
+    if (!char) {
+        console.error('Character not found:', characterId);
+        return;
+    }
+    
+    // Parse character_data
+    let charData = null;
+    let fullData = null;
+    try {
+        if (char.character_data) {
+            fullData = JSON.parse(char.character_data);
+            charData = fullData.character || fullData;
+        }
+    } catch (e) {
+        console.error('Error parsing character_data:', e);
+        return;
+    }
+    
+    if (!charData) {
+        // If no character_data exists, create a basic structure
+        charData = {
+            name: char.name,
+            player_name: char.player_name
+        };
+        fullData = charData;
+    }
+    
+    // Toggle inspiration
+    const newInspirationValue = !(charData.inspiration === true);
+    charData.inspiration = newInspirationValue;
+    
+    // Update fullData structure
+    if (fullData.character) {
+        fullData.character = charData;
+    } else {
+        fullData = charData;
+    }
+    
+    // Update character object
+    char.character_data = JSON.stringify(fullData);
+    
+    // Update the global characters array
+    const index = characters.findIndex(c => c.id === characterId);
+    if (index !== -1) {
+        characters[index] = char;
+    }
+    
+    // Update current viewing character if it's the same
+    if (currentViewingCharacter && currentViewingCharacter.id === characterId) {
+        currentViewingCharacter = char;
+        currentViewingCharacterFullData = fullData;
+        currentViewingCharacterData = charData;
+    }
+    
+    // Send update to server
+    const characterUpdate = buildCharacterUpdatePayload(char);
+    if (characterUpdate && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: "UpdateCharacter",
+            character: characterUpdate
+        }));
+        console.log(`✅ Inspiration ${newInspirationValue ? 'granted' : 'removed'} for ${char.name}`);
+    } else {
+        console.warn('⚠️ WebSocket not available, inspiration change not synced to server');
+    }
+    
+    // Update the button appearance
+    const buttonId = `inspirationToggle-${characterId.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const button = document.getElementById(buttonId);
+    if (button) {
+        button.textContent = newInspirationValue ? '✨ Has Inspiration' : '○ No Inspiration';
+        button.style.borderColor = newInspirationValue ? '#44ff44' : '#888';
+        button.style.background = newInspirationValue ? 'rgba(68, 255, 68, 0.2)' : 'rgba(136, 136, 136, 0.2)';
+        button.style.color = newInspirationValue ? '#44ff44' : '#888';
+    }
+    
+    // Refresh character sheet if it's currently open
+    if (currentViewingCharacter && currentViewingCharacter.id === characterId) {
+        renderCharacterSheetContent();
     }
 }
 
