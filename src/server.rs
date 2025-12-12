@@ -385,7 +385,7 @@ async fn handle_client_message(
         }
         
         // Essential token management handlers
-        ClientMessage::PlaceToken { entity_id, entity_type, x, y } => {
+        ClientMessage::PlaceToken { entity_id, entity_type, x, y, size } => {
             use crate::models::Token;
             
             let token = Token {
@@ -395,7 +395,7 @@ async fn handle_client_message(
                 entity_type,
                 x,
                 y,
-                size: 1.0,
+                size: size.unwrap_or(1.0), // Default to 1.0 (Medium) if not provided
                 image_url: None,
             };
             
@@ -417,6 +417,31 @@ async fn handle_client_message(
         
         ClientMessage::RemoveToken { token_id } => {
             if game_state.write().await.remove_token(&token_id) {
+                let tokens = game_state.read().await.tokens.clone();
+                let token_update = ServerMessage::TokenUpdate { tokens };
+                broadcast_message(clients, &token_update).await;
+            }
+        }
+        
+        ClientMessage::UpdateTokenSize { token_id, size } => {
+            // Only DM can update token size - check from game state
+            let gs = game_state.read().await;
+            let is_dm = gs.players.get(session_id)
+                .map(|p| p.is_dm)
+                .unwrap_or(false);
+            drop(gs);
+            
+            if !is_dm {
+                return;
+            }
+            
+            // Find and update the token
+            let mut gs = game_state.write().await;
+            if let Some(token) = gs.tokens.iter_mut().find(|t| t.id == token_id) {
+                token.size = size;
+                drop(gs); // Release the lock
+                
+                // Broadcast updated tokens to all clients
                 let tokens = game_state.read().await.tokens.clone();
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;

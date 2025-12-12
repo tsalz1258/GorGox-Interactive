@@ -26,3 +26,6 @@ Write-Host "Done! Now you need to force push:" -ForegroundColor Green
 Write-Host "  git push --force --all" -ForegroundColor Cyan
 Write-Host "  git push --force --tags" -ForegroundColor Cyan
 
+
+
+

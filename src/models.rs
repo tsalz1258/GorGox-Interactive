@@ -124,9 +124,10 @@ pub enum ClientMessage {
     ClearMap, // Clear current map and all tokens
     
     // Token management
-    PlaceToken { entity_id: String, entity_type: TokenType, x: f32, y: f32 },
+    PlaceToken { entity_id: String, entity_type: TokenType, x: f32, y: f32, size: Option<f32> },
     MoveToken { token_id: String, x: f32, y: f32 },
     RemoveToken { token_id: String },
+    UpdateTokenSize { token_id: String, size: f32 },
     
     // Combat
     StartCombat,

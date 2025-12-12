@@ -717,7 +717,45 @@ function handleServerMessage(message) {
             console.log('📋 NPC instances before token update:', npcInstancesBefore.length);
             
             // Update tokens array - this is authoritative from server
-            tokens = message.tokens || [];
+            const serverTokens = message.tokens || [];
+            
+            // CRITICAL: Preserve manually set sizes from local tokens array
+            // Store current local token sizes before replacing the array
+            const localTokenSizes = new Map();
+            tokens.forEach(t => {
+                if (t.size && t.size !== 1.0) {
+                    // Only preserve non-default sizes (manually set)
+                    localTokenSizes.set(t.id, t.size);
+                }
+            });
+            
+            // Merge server tokens with preserved sizes
+            tokens = serverTokens.map(t => {
+                // Check if we have a manually set size for this token
+                const preservedSize = localTokenSizes.get(t.id);
+                if (preservedSize) {
+                    console.log(`✅ Preserving manually set size ${preservedSize} for token ${t.id} (server had: ${t.size})`);
+                    return { ...t, size: preservedSize };
+                }
+                
+                // Check if server sent a valid size
+                const hasValidSize = t.size !== undefined && 
+                                    t.size !== null && 
+                                    !isNaN(t.size) && 
+                                    typeof t.size === 'number' &&
+                                    t.size > 0;
+                
+                if (hasValidSize) {
+                    // Use server's size
+                    return t;
+                } else {
+                    // Calculate if size is truly missing
+                    const calculatedSize = getTokenSize(t.entity_id, t.entity_type);
+                    console.log(`🔧 Token ${t.id} (${t.entity_id}) missing/invalid size, calculated: ${calculatedSize}`);
+                    return { ...t, size: calculatedSize };
+                }
+            });
+            
             console.log('✅ Local tokens array updated. Total tokens:', tokens.length);
             if (tokens.length > 0) {
                 console.log('Token details:');
@@ -725,7 +763,7 @@ function handleServerMessage(message) {
                     const enemy = enemies.find(e => e.id === t.entity_id);
                     const char = characters.find(c => c.id === t.entity_id);
                     const name = enemy ? enemy.name : (char ? char.name : 'Unknown');
-                    console.log(`  ${i + 1}. ${t.entity_type} at (${t.x}, ${t.y}) - entity_id: ${t.entity_id} - name: ${name}`);
+                    console.log(`  ${i + 1}. ${t.entity_type} at (${t.x}, ${t.y}) - entity_id: ${t.entity_id} - name: ${name} - size: ${t.size}`);
                 });
             }
             
@@ -733,6 +771,26 @@ function handleServerMessage(message) {
             const npcInstancesAfter = enemies.filter(e => e && e.isNPC && e.npcData);
             if (npcInstancesAfter.length !== npcInstancesBefore.length) {
                 console.warn('⚠️ NPC instance count changed! Before:', npcInstancesBefore.length, 'After:', npcInstancesAfter.length);
+            }
+            
+            // Update selectedToken if it still exists in the new tokens array
+            // CRITICAL: Preserve the size from selectedToken if it was manually set
+            if (selectedToken) {
+                const updatedToken = tokens.find(t => t.id === selectedToken.id);
+                if (updatedToken) {
+                    // Preserve size from selectedToken if it was manually set (non-default)
+                    const oldSize = selectedToken.size;
+                    if (oldSize && oldSize !== 1.0 && updatedToken.size === 1.0) {
+                        console.log(`🔧 Preserving manually set size ${oldSize} for token ${selectedToken.id} (server had: ${updatedToken.size})`);
+                        updatedToken.size = oldSize;
+                    }
+                    // Update selectedToken to point to the updated token in the array
+                    selectedToken = updatedToken;
+                    updateTokenInfo();
+                } else {
+                    // Token was removed, clear selection
+                    selectedToken = null;
+                }
             }
             
             // Always render canvas when tokens update - this ensures all clients see the tokens
@@ -2525,8 +2583,45 @@ function calculateReachableSquares(startX, startY, maxSquares) {
 }
 
 function drawToken(token) {
-    const size = gridSize * token.size;
-    // FIX: Position tokens inside grid squares, not on gridlines
+    // Calculate token dimensions based on size - always use circles
+    // size = 1.0: Medium (1x1 square, circle radius = gridSize/2)
+    // size = 2.0: Large (2x2 = 4 squares, circle radius = gridSize)
+    // size = 4.0: Huge (4x4 = 16 squares, circle radius = gridSize*2)
+    // size = 8.0: Gargantuan (8x8 = 64 squares, circle radius = gridSize*4)
+    
+    // CRITICAL: Preserve existing size - only calculate if truly missing
+    // Don't recalculate if size already exists (even if it's 1.0)
+    let tokenSize = token.size;
+    const hasValidSize = tokenSize !== undefined && 
+                        tokenSize !== null && 
+                        !isNaN(tokenSize) && 
+                        typeof tokenSize === 'number';
+    
+    if (!hasValidSize) {
+        // Only calculate if size is truly missing
+        tokenSize = getTokenSize(token.entity_id, token.entity_type);
+        // Update the token object so it persists
+        token.size = tokenSize;
+        console.log(`🔧 Token ${token.entity_id} missing size in drawToken, calculated: ${tokenSize}`);
+    } else {
+        // Preserve existing size - ensure it's a number
+        tokenSize = parseFloat(tokenSize);
+        if (isNaN(tokenSize)) {
+            tokenSize = 1.0;
+        }
+    }
+    
+    // Calculate circle radius based on size
+    // radius = gridSize * tokenSize / 2
+    // This ensures the circle covers the appropriate area:
+    // - Medium (1.0): radius = gridSize/2 (covers 1x1)
+    // - Large (2.0): radius = gridSize (covers 2x2)
+    // - Huge (4.0): radius = gridSize*2 (covers 4x4)
+    // - Gargantuan (8.0): radius = gridSize*4 (covers 8x8)
+    const radius = gridSize * tokenSize / 2;
+    const diameter = radius * 2;
+    
+    // Position token - center on the grid square they're placed on
     const x = token.x * gridSize + gridSize / 2;
     const y = token.y * gridSize + gridSize / 2;
     
@@ -2562,28 +2657,28 @@ function drawToken(token) {
     }
     
     if (hasPortrait && portraitImg && portraitImg.complete) {
-        // Draw portrait image as circular token
+        // Draw portrait image - always as circle
         ctx.save();
         ctx.beginPath();
-        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.closePath();
         ctx.clip();
         
-        // Draw image centered in circle
-        ctx.drawImage(portraitImg, x - size / 2, y - size / 2, size, size);
+        // Draw image to fill circle
+        ctx.drawImage(portraitImg, x - radius, y - radius, diameter, diameter);
         
         ctx.restore();
         
         // Border based on type
         ctx.beginPath();
-        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.strokeStyle = borderColor;
         ctx.lineWidth = 3;
         ctx.stroke();
     } else {
-        // Fallback: colored circle (no portrait available or not loaded yet)
+        // Fallback: colored shape (no portrait available or not loaded yet) - always as circle
         ctx.beginPath();
-        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
         
         // Color based on type
         switch (token.entity_type) {
@@ -2615,9 +2710,9 @@ function drawToken(token) {
         const fade = 1.0 - Math.min(age / highlight.duration, 1.0);
         
         if (fade > 0) {
-            // Draw pulsing glow effect
-            const pulseRadius = (size / 2) + 15 + (Math.sin(age / 100) * 5); // Pulsing effect
-            const gradient = ctx.createRadialGradient(x, y, size / 2, x, y, pulseRadius);
+            // Draw pulsing glow effect - always circular
+            const pulseRadius = radius + 15 + (Math.sin(age / 100) * 5); // Pulsing effect
+            const gradient = ctx.createRadialGradient(x, y, radius, x, y, pulseRadius);
             gradient.addColorStop(0, `rgba(138, 43, 226, ${0.8 * fade})`); // Purple glow
             gradient.addColorStop(0.5, `rgba(138, 43, 226, ${0.4 * fade})`);
             gradient.addColorStop(1, `rgba(138, 43, 226, 0)`);
@@ -2627,9 +2722,9 @@ function drawToken(token) {
             ctx.arc(x, y, pulseRadius, 0, Math.PI * 2);
             ctx.fill();
             
-            // Draw purple border
+            // Draw purple border - always circular
             ctx.beginPath();
-            ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
             ctx.strokeStyle = `rgba(138, 43, 226, ${fade})`;
             ctx.lineWidth = 4;
             ctx.stroke();
@@ -2637,11 +2732,12 @@ function drawToken(token) {
             // Draw "Speaking" label
             if (fade > 0.5 && highlight.discordUsername) {
                 ctx.fillStyle = `rgba(0, 0, 0, ${0.8 * fade})`;
-                ctx.fillRect(x - 50, y - size / 2 - 25, 100, 20);
+                const labelY = y - radius - 25;
+                ctx.fillRect(x - 50, labelY, 100, 20);
                 ctx.fillStyle = `rgba(138, 43, 226, ${fade})`;
                 ctx.font = 'bold 11px Arial';
                 ctx.textAlign = 'center';
-                ctx.fillText(`🔊 ${highlight.discordUsername}`, x, y - size / 2 - 10);
+                ctx.fillText(`🔊 ${highlight.discordUsername}`, x, labelY + 15);
             }
         } else {
             // Remove expired highlight (will be cleaned up in renderCanvas)
@@ -2649,10 +2745,10 @@ function drawToken(token) {
         }
     }
     
-    // Selection highlight (yellow, above Discord highlight)
+    // Selection highlight (yellow, above Discord highlight) - always circular
     if (selectedToken && selectedToken.id === token.id) {
         ctx.beginPath();
-        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.strokeStyle = '#ffff00';
         ctx.lineWidth = 4;
         ctx.stroke();
@@ -2705,7 +2801,7 @@ function drawToken(token) {
         displayName = token.entity_type;
     }
     
-    ctx.fillText(displayName, x, y + size / 2 + 18);
+    ctx.fillText(displayName, x, y + radius + 18);
     ctx.shadowBlur = 0;
 }
 
@@ -2868,15 +2964,22 @@ function onCanvasMouseDown(e) {
         return; // Stop here - don't process token clicks
     }
     
-    // Check if clicking on a token
+    // Check if clicking on a token - always use circular bounds
     let clickedToken = null;
     for (let token of tokens) {
+        const tokenSize = token.size || 1.0;
+        // Calculate circle radius based on size (same as drawToken)
+        const radius = gridSize * tokenSize / 2;
+        
+        // Token center position
         const tokenX = token.x * gridSize + gridSize / 2;
         const tokenY = token.y * gridSize + gridSize / 2;
-        const size = gridSize * token.size / 2;
         
+        // Check if click is within circular bounds
         const dist = Math.sqrt(Math.pow(mouseX - tokenX, 2) + Math.pow(mouseY - tokenY, 2));
-        if (dist <= size) {
+        const clicked = dist <= radius;
+        
+        if (clicked) {
             clickedToken = token;
             break;
         }
@@ -3332,6 +3435,26 @@ function updateTokenInfo() {
         if (combatState.currentTurn === selectedToken.id) {
             info += `<p style="color: #ffaa44; font-weight: bold; margin-top: 8px;">🎯 CURRENT TURN!</p>`;
         }
+    }
+    
+    // Add token size selector (DM only)
+    if (isDM) {
+        const currentSize = selectedToken.size || 1.0;
+        const sizeLabel = currentSize <= 1.0 ? 'Medium (1x1)' : 
+                         currentSize <= 2.0 ? 'Large (2x2)' : 
+                         currentSize <= 4.0 ? 'Huge (4x4)' : 
+                         'Gargantuan (8x8)';
+        info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+        info += `<div class="token-stat"><span>Token Size:</span><span>${sizeLabel}</span></div>`;
+        info += `<div style="margin-top: 10px;">`;
+        info += `<label style="display: block; font-size: 11px; margin-bottom: 5px; color: #aaa;">Change Size:</label>`;
+        info += `<select id="tokenSizeSelect" onchange="changeTokenSize('${selectedToken.id}', this.value)" style="width: 100%; padding: 5px; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 3px; font-size: 12px;">`;
+        info += `<option value="1.0" ${currentSize <= 1.0 ? 'selected' : ''}>Medium (1x1 square)</option>`;
+        info += `<option value="2.0" ${currentSize > 1.0 && currentSize <= 2.0 ? 'selected' : ''}>Large (2x2 = 4 squares)</option>`;
+        info += `<option value="4.0" ${currentSize > 2.0 && currentSize <= 4.0 ? 'selected' : ''}>Huge (4x4 = 16 squares)</option>`;
+        info += `<option value="8.0" ${currentSize > 4.0 ? 'selected' : ''}>Gargantuan (8x8 = 64 squares)</option>`;
+        info += `</select>`;
+        info += `</div>`;
     }
     
     infoDiv.innerHTML = info;
@@ -4306,6 +4429,36 @@ function dealDamage() {
     renderCanvas();
     
     document.getElementById('damageAmount').value = '';
+}
+
+function changeTokenSize(tokenId, newSize) {
+    const sizeValue = parseFloat(newSize);
+    if (isNaN(sizeValue) || sizeValue <= 0) {
+        console.error('Invalid token size:', newSize);
+        return;
+    }
+    
+    console.log(`📐 Changing token ${tokenId} size to ${sizeValue}`);
+    
+    // Send message to server
+    sendMessage({
+        type: 'UpdateTokenSize',
+        token_id: tokenId,
+        size: sizeValue
+    });
+    
+    // Update local token immediately for responsive UI
+    const token = tokens.find(t => t.id === tokenId);
+    if (token) {
+        token.size = sizeValue;
+        renderCanvas();
+    }
+    
+    // Update selected token if it's the one being changed
+    if (selectedToken && selectedToken.id === tokenId) {
+        selectedToken.size = sizeValue;
+        updateTokenInfo();
+    }
 }
 
 function healTarget() {
@@ -5669,12 +5822,14 @@ function spawnNPC(npc) {
     console.log('✅ Added NPC instance:', instanceId, instanceName, 'Total NPCs:', enemies.filter(e => e.isNPC).length);
     
     // Place token
+    const tokenSize = getTokenSize(instanceId, 'Enemy');
     sendMessage({
         type: 'PlaceToken',
         entity_id: instanceId,
         entity_type: 'Enemy',
         x: 5,
-        y: 5
+        y: 5,
+        size: tokenSize
     });
     
     closeModal('enemyManagerModal');
@@ -5686,6 +5841,74 @@ function parseSpeed(speedStr) {
     // Try to extract first number (e.g., "25 ft." -> 25, "0 ft., fly 50 ft." -> 0)
     const match = speedStr.match(/(\d+)\s*ft/);
     return match ? parseInt(match[1]) : 30;
+}
+
+// Get token size in grid squares based on creature size
+// Returns: 1.0 for Tiny/Small/Medium, 2.0 for Large (4 squares = 2x2), 4.0 for Huge (16 squares = 4x4), 8.0 for Gargantuan (64 squares = 8x8)
+function getTokenSize(entityId, entityType) {
+    // Default to Medium (1 square)
+    let sizeValue = 1.0;
+    
+    if (entityType === 'Enemy' || entityType === 'NPC') {
+        const enemy = enemies.find(e => e.id === entityId);
+        if (enemy) {
+            // Check if it has npcData (NPC from database)
+            if (enemy.npcData && enemy.npcData.size) {
+                const npcSize = enemy.npcData.size;
+                const sizeStr = String(npcSize).toLowerCase().trim();
+                if (sizeStr === 'large') {
+                    sizeValue = 2.0; // 2x2 = 4 squares
+                } else if (sizeStr === 'huge') {
+                    sizeValue = 4.0; // 4x4 = 16 squares
+                } else if (sizeStr === 'gargantuan') {
+                    sizeValue = 8.0; // 8x8 = 64 squares
+                }
+                // Tiny, Small, Medium all default to 1.0
+                console.log(`📏 Token size for ${enemy.name}: "${npcSize}" -> ${sizeValue} squares`);
+            } else {
+                // Try to find in NPC database by name
+                const npcFromDB = npcs.find(n => n.name === enemy.name || enemy.name.startsWith(n.name));
+                if (npcFromDB && npcFromDB.size) {
+                    const sizeStr = String(npcFromDB.size).toLowerCase().trim();
+                    if (sizeStr === 'large') {
+                        sizeValue = 2.0;
+                    } else if (sizeStr === 'huge') {
+                        sizeValue = 4.0;
+                    } else if (sizeStr === 'gargantuan') {
+                        sizeValue = 8.0;
+                    }
+                    console.log(`📏 Token size for ${enemy.name} (from DB): "${npcFromDB.size}" -> ${sizeValue} squares`);
+                } else {
+                    console.log(`⚠️ No size found for enemy ${enemy.name} (id: ${entityId})`);
+                }
+            }
+        } else {
+            console.log(`⚠️ Enemy ${entityId} not found in enemies array`);
+        }
+    } else if (entityType === 'Player') {
+        const char = characters.find(c => c.id === entityId);
+        if (char && char.character_data) {
+            try {
+                const charData = JSON.parse(char.character_data);
+                if (charData.size) {
+                    const sizeStr = String(charData.size).toLowerCase().trim();
+                    if (sizeStr === 'large') {
+                        sizeValue = 2.0;
+                    } else if (sizeStr === 'huge') {
+                        sizeValue = 4.0;
+                    } else if (sizeStr === 'gargantuan') {
+                        sizeValue = 8.0; // 8x8 = 64 squares
+                    }
+                    console.log(`📏 Token size for player ${char.name}: "${charData.size}" -> ${sizeValue} squares`);
+                }
+            } catch (e) {
+                // Invalid JSON, use default
+                console.log(`⚠️ Could not parse character_data for ${char.name}:`, e);
+            }
+        }
+    }
+    
+    return sizeValue;
 }
 
 // Parse NPC raw_block to extract ability scores, tech powers, and force powers
@@ -5802,6 +6025,7 @@ function parseNPCRawBlock(rawBlock) {
 
 // Show NPC character sheet
 function showNPCCharacterSheet(entityId) {
+    console.log('📋 showNPCCharacterSheet called with entityId:', entityId);
     // Only DM can view full NPC character sheets
     if (!isDM) {
         console.warn('Only DM can view full NPC character sheets');
@@ -5810,8 +6034,10 @@ function showNPCCharacterSheet(entityId) {
     }
     
     const enemy = enemies.find(e => e.id === entityId);
+    console.log('🔍 Found enemy:', enemy ? { id: enemy.id, name: enemy.name, isNPC: enemy.isNPC, hasNpcData: !!enemy.npcData } : 'NOT FOUND');
     if (!enemy || !enemy.isNPC || !enemy.npcData) {
-        console.error('NPC not found or invalid');
+        console.error('NPC not found or invalid', { enemy: !!enemy, isNPC: enemy?.isNPC, hasNpcData: !!enemy?.npcData });
+        alert('NPC not found or invalid. Make sure the enemy is an NPC with valid data.');
         return;
     }
     
@@ -5850,22 +6076,28 @@ function showNPCCharacterSheet(entityId) {
         </div>
     </div>`;
     
-    // Ability Scores
+    // Escape enemy name for use in onclick handlers (needed early for ability scores)
+    const escapedEnemyName = escapeJs(enemy.name);
+    
+    // Ability Scores - Make them clickable like player sheets
     html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
-        <h4 style="color: #4a9eff;">📊 Ability Scores</h4>
+        <h4 style="color: #4a9eff;">📊 Ability Scores <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
         <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;">`;
     const abilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
     const abilityNames = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
     abilities.forEach(ab => {
         const score = parsedData[ab] || enemy[ab] || 10;
         const mod = Math.floor((score - 10) / 2);
-        html += `<div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">
+        html += `<div onclick="rollAbilityCheck('${ab}', ${mod}, '${escapedEnemyName}')" style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(74,158,255,0.2)'; this.style.transform='scale(1.05)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'; this.style.transform='scale(1)'">
             <div style="font-size: 24px; font-weight: bold;">${score}</div>
             <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase;">${abilityNames[ab]}</div>
             <div style="font-size: 12px; margin-top: 5px;">${mod >= 0 ? '+' : ''}${mod}</div>
         </div>`;
     });
     html += `</div></div>`;
+    
+    // Dice Roll Section - Add like player sheets
+    html += buildDiceRollSectionForNPC(enemy.name);
     
     // Combat Stats
     html += `<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
@@ -5906,14 +6138,19 @@ function showNPCCharacterSheet(entityId) {
         html += `</div>`;
     }
     
-    // Skills
+    // Saving Throws Section - Add like player sheets
+    html += buildSavingThrowsSectionForNPC(enemy, parsedData, escapedEnemyName);
+    
+    // Skills - Make them clickable like player sheets
     if (parsedData.skills && parsedData.skills.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
-            <h4 style="color: #4a9eff;">🎯 Skills</h4>
-            <div style="display: flex; flex-wrap: wrap; gap: 8px;">`;
+            <h4 style="color: #4a9eff;">🎯 Skills <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
+            <div style="display: flex; flex-direction: column; gap: 5px;">`;
         parsedData.skills.forEach(skill => {
-            html += `<div style="padding: 5px 10px; background: rgba(74,158,255,0.1); border-radius: 3px; font-size: 12px;">
-                ${skill.name} ${skill.bonus >= 0 ? '+' : ''}${skill.bonus}
+            const escapedSkill = escapeJs(skill.name);
+            html += `<div onclick="rollSkill('${escapedSkill}', ${skill.bonus}, '${escapedEnemyName}')" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(74,158,255,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
+                <span style="font-size: 13px;">${escapeHtml(skill.name)}</span>
+                <span style="font-weight: bold; color: #4a9eff;">${skill.bonus >= 0 ? '+' : ''}${skill.bonus}</span>
             </div>`;
         });
         html += `</div></div>`;
@@ -5947,12 +6184,98 @@ function showNPCCharacterSheet(entityId) {
         html += `</div></div>`;
     }
     
-    // Actions
+    // Actions - Parse and make clickable like player sheets
     if (npc.actions) {
-        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
-            <h4 style="color: #ff4444;">⚔️ Actions</h4>
-            <div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6;">${escapeHtml(npc.actions)}</div>
-        </div>`;
+        // Parse Multiattack first
+        const multiattack = parseMultiattack(npc.actions);
+        const attacks = parseAttacksFromActions(npc.actions);
+        
+        if (multiattack || attacks.length > 0) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+                <h4 style="color: #ff4444;">⚔️ Attacks <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>`;
+            
+            // Display Multiattack first if it exists
+            if (multiattack) {
+                const escapedMultiDesc = escapeJs(multiattack.description);
+                html += `<div 
+                    onmouseover="showAttackTooltip('${escapedMultiDesc}', event)" 
+                    onmouseout="hideSpellTooltip()" 
+                    style="padding: 10px; margin: 5px 0; background: rgba(255,215,0,0.15); border-left: 3px solid #ffd700; border-radius: 3px; cursor: help;">
+                    <div style="font-weight: bold; font-size: 15px; color: #ffd700;">⚡ Multiattack</div>`;
+                
+                if (multiattack.attackNames.length > 0) {
+                    html += `<div style="font-size: 12px; margin-top: 8px; padding: 8px; background: rgba(255,215,0,0.1); border-radius: 3px;">
+                        <div style="font-weight: bold; margin-bottom: 5px; opacity: 0.9;">Includes:</div>`;
+                    multiattack.attackNames.forEach(attackName => {
+                        html += `<div style="padding: 3px 0; font-size: 11px; opacity: 0.8;">• ${escapeHtml(attackName)}</div>`;
+                    });
+                    html += `</div>`;
+                }
+                
+                html += `<div style="font-size: 12px; opacity: 0.7; margin-top: 5px;">${escapeHtml(multiattack.description.substring(0, 150))}${multiattack.description.length > 150 ? '...' : ''}</div>`;
+                html += `</div>`;
+            }
+            
+            attacks.forEach((attack, attackIndex) => {
+                const escapedWeapon = escapeJs(attack.name);
+                const escapedDamage = escapeJs(attack.damage || '');
+                const escapedType = escapeJs(attack.damageType || '');
+                const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
+                
+                // Escape description for tooltip
+                const escapedDescription = attack.description ? escapeJs(attack.description) : '';
+                
+                if (attack.type === 'weapon' && attack.toHit !== null) {
+                    // Standard weapon attack
+                    html += `<div onclick='rollAttack("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}")' 
+                        onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
+                        onmouseout="hideSpellTooltip()" 
+                        style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" 
+                        onmouseenter="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" 
+                        onmouseleave="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'">
+                        <div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div>
+                        <div style="font-size: 13px; margin-top: 5px;">
+                            <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(attack.toHit)}</span> | 
+                            <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage || '')}</span> 
+                            ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}
+                        </div>
+                    </div>`;
+                } else if (attack.type === 'saving_throw' && attack.saveDC) {
+                    // Saving throw attack - click should roll damage, not saving throw
+                    // The saving throw is for players to make, but clicking rolls the damage
+                    const damageRollCode = attack.damage ? `const dmgResult = rollDice("${escapedDamage}"); addLogEntry("${escapedWeapon} damage: " + dmgResult.breakdown + " ${escapedType} = " + dmgResult.total, "damage");` : '';
+                    html += `<div onclick='${damageRollCode}addLogEntry("${escapedWeapon}: DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save - ${escapedDamage ? escapedDamage + ' ' + escapedType : 'No damage'} damage", "info")' 
+                        onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
+                        onmouseout="hideSpellTooltip()" 
+                        style="padding: 10px; margin: 5px 0; background: rgba(255,170,68,0.1); border-left: 3px solid #ffaa44; border-radius: 3px; cursor: pointer; transition: all 0.2s;" 
+                        onmouseenter="this.style.background='rgba(255,170,68,0.25)'; this.style.transform='translateX(5px)'" 
+                        onmouseleave="this.style.background='rgba(255,170,68,0.1)'; this.style.transform='translateX(0)'">
+                        <div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div>
+                        <div style="font-size: 13px; margin-top: 5px;">
+                            <span style="color: #ffaa44;">🛡️ DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save</span> | 
+                            ${attack.damage ? `<span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage)}</span>` : ''}
+                            ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}
+                        </div>
+                    </div>`;
+                } else {
+                    // Special action (no direct roll, but still clickable for info)
+                    html += `<div 
+                        onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
+                        onmouseout="hideSpellTooltip()" 
+                        style="padding: 10px; margin: 5px 0; background: rgba(170,136,255,0.1); border-left: 3px solid #aa88ff; border-radius: 3px; cursor: help;">
+                        <div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div>
+                        ${attack.description ? `<div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">${escapeHtml(attack.description.substring(0, 100))}${attack.description.length > 100 ? '...' : ''}</div>` : ''}
+                    </div>`;
+                }
+            });
+            html += `</div>`;
+        } else {
+            // Fallback: show raw text if parsing fails
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+                <h4 style="color: #ff4444;">⚔️ Actions</h4>
+                <div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6;">${escapeHtml(npc.actions)}</div>
+            </div>`;
+        }
     }
     
     // Reactions
@@ -5963,12 +6286,153 @@ function showNPCCharacterSheet(entityId) {
         </div>`;
     }
     
-    // Legendary Actions
+    // Legendary Actions - Parse and make clickable with usage tracker
     if (npc.legendary_actions) {
+        const legendaryData = parseLegendaryActions(npc.legendary_actions);
+        
+        // Get or initialize legendary action usage tracker
+        const legendaryKey = `legendary_actions_${enemy.id}`;
+        let legendaryUsage = JSON.parse(localStorage.getItem(legendaryKey) || '{"used": 0, "max": ' + legendaryData.maxActions + '}');
+        
+        // Ensure max is correct (in case NPC data changed)
+        legendaryUsage.max = legendaryData.maxActions;
+        if (legendaryUsage.used > legendaryUsage.max) {
+            legendaryUsage.used = legendaryUsage.max;
+        }
+        
+        const remaining = legendaryUsage.max - legendaryUsage.used;
+        
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
-            <h4 style="color: #aa88ff;">⭐ Legendary Actions</h4>
-            <div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6;">${escapeHtml(npc.legendary_actions)}</div>
-        </div>`;
+            <h4 style="color: #aa88ff;">⭐ Legendary Actions <span style="font-size: 12px; opacity: 0.6;">(Click to use!)</span></h4>
+            <div style="margin-bottom: 15px; padding: 10px; background: rgba(170,136,255,0.1); border-radius: 5px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <span style="font-size: 14px; font-weight: bold;">Available: </span>
+                    <span id="legendary-remaining-${enemy.id}" style="font-size: 18px; font-weight: bold; color: ${remaining > 0 ? '#44ff44' : '#ff4444'};">${remaining}</span>
+                    <span style="font-size: 12px; opacity: 0.7;"> / ${legendaryUsage.max}</span>
+                </div>
+                <button onclick="resetLegendaryActions('${enemy.id}', '${legendaryKey}')" style="padding: 5px 15px; background: rgba(68,255,68,0.2); border: 1px solid #44ff44; border-radius: 3px; color: #44ff44; cursor: pointer; font-size: 12px; font-weight: bold;" onmouseover="this.style.background='rgba(68,255,68,0.4)'" onmouseout="this.style.background='rgba(68,255,68,0.2)'">🔄 Reset</button>
+            </div>`;
+        
+        if (legendaryData.actions.length > 0) {
+            console.log('📋 Parsed legendary actions:', legendaryData.actions);
+            legendaryData.actions.forEach((action, index) => {
+                const actionCost = action.cost || 1;
+                const canUse = remaining >= actionCost;
+                const escapedActionName = escapeJs(action.name);
+                const escapedDescription = action.description ? escapeJs(action.description) : '';
+                
+                // Parse the legendary action to see if it's an attack and make it rollable
+                const mainAttacks = parseAttacksFromActions(npc.actions || '');
+                let matchingAttack = null;
+                let attackRollCode = '';
+                
+                // Check if description mentions an attack
+                if (action.description) {
+                    // Pattern 1: "makes a stomp attack" - look for "stomp" in action name
+                    // Pattern 2: "makes a single attack with its medium repeaters" - look for "medium repeaters"
+                    const attackNamePatterns = [
+                        /(?:makes?|with)\s+(?:a\s+)?(?:single\s+)?(?:attack\s+)?(?:with\s+)?(?:its\s+)?([A-Za-z\s]+?)(?:\s+attack|\.|$)/i,
+                        /(?:attack\s+with|using)\s+(?:its\s+)?([A-Za-z\s]+?)(?:\s+attack|\.|$)/i
+                    ];
+                    
+                    for (const pattern of attackNamePatterns) {
+                        const match = action.description.match(pattern);
+                        if (match && match[1]) {
+                            const weaponName = match[1].trim();
+                            // Try to find matching attack in main actions
+                            matchingAttack = mainAttacks.find(a => {
+                                const aName = a.name.toLowerCase();
+                                const wName = weaponName.toLowerCase();
+                                return aName.includes(wName) || wName.includes(aName);
+                            });
+                            if (matchingAttack) break;
+                        }
+                    }
+                    
+                    // Special case: "stomp attack" - look for any attack with "stomp" in the name
+                    if (!matchingAttack && action.description.toLowerCase().includes('stomp')) {
+                        matchingAttack = mainAttacks.find(a => a.name.toLowerCase().includes('stomp'));
+                    }
+                    
+                    // Special case: "medium repeaters" or "repeaters"
+                    if (!matchingAttack && (action.description.toLowerCase().includes('repeater') || action.description.toLowerCase().includes('repeaters'))) {
+                        matchingAttack = mainAttacks.find(a => a.name.toLowerCase().includes('repeater'));
+                    }
+                }
+                
+                // Build the attack roll code if we found a matching attack
+                if (matchingAttack) {
+                    const escapedWeapon = escapeJs(matchingAttack.name);
+                    const escapedDamage = escapeJs(matchingAttack.damage || '');
+                    const escapedType = escapeJs(matchingAttack.damageType || '');
+                    
+                    if (matchingAttack.type === 'weapon' && matchingAttack.toHit !== null) {
+                        // Weapon attack - roll the attack when clicked
+                        attackRollCode = `rollAttack('${escapedWeapon}', ${matchingAttack.toHit}, '${escapedDamage}', '${escapedType}', '${escapedEnemyName}');`;
+                    } else if (matchingAttack.type === 'saving_throw' && matchingAttack.saveDC) {
+                        // Saving throw attack - roll damage when clicked
+                        const damageRollCode = matchingAttack.damage ? `const dmgResult = rollDice("${escapedDamage}"); addLogEntry("${escapedWeapon} damage: " + dmgResult.breakdown + " ${escapedType} = " + dmgResult.total, "damage");` : '';
+                        attackRollCode = `${damageRollCode}addLogEntry("${escapedWeapon}: DC ${matchingAttack.saveDC} ${matchingAttack.saveType.charAt(0).toUpperCase() + matchingAttack.saveType.slice(1)} Save - ${escapedDamage ? escapedDamage + ' ' + escapedType : 'No damage'} damage", "info");`;
+                    }
+                }
+                
+                // Build onclick handler - include attack roll if it's an attack
+                const onclickHandler = canUse 
+                    ? `useLegendaryAction('${enemy.id}', '${legendaryKey}', ${actionCost}, '${escapedActionName}', '${escapedEnemyName}'); ${attackRollCode}`
+                    : 'alert(\'Not enough legendary actions remaining!\')';
+                
+                html += `<div onclick="${onclickHandler}" 
+                    onmouseover="${action.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
+                    onmouseout="hideSpellTooltip()" 
+                    style="padding: 10px; margin: 5px 0; background: ${canUse ? 'rgba(170,136,255,0.1)' : 'rgba(170,136,255,0.05)'}; border-left: 3px solid ${canUse ? '#aa88ff' : '#666'}; border-radius: 3px; cursor: ${canUse ? 'pointer' : 'not-allowed'}; transition: all 0.2s; opacity: ${canUse ? '1' : '0.5'};" 
+                    onmouseenter="${canUse ? `this.style.background='rgba(170,136,255,0.25)'; this.style.transform='translateX(5px)'` : ''}" 
+                    onmouseleave="${canUse ? `this.style.background='rgba(170,136,255,0.1)'; this.style.transform='translateX(0)'` : ''}">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="font-weight: bold; font-size: 15px;">${escapeHtml(action.name)}</div>
+                        <div style="font-size: 12px; color: #aa88ff; font-weight: bold;">Cost: ${actionCost}</div>
+                    </div>`;
+                
+                // If it's an attack, try to parse and make it rollable
+                if (action.description && (action.description.includes('attack') || action.description.includes('Attack'))) {
+                    // Try to find attack details in the description or link to main attacks
+                    const attackMatch = action.description.match(/(?:makes?|with)\s+(?:a\s+)?(?:single\s+)?(?:attack\s+)?(?:with\s+)?(?:its\s+)?([A-Za-z\s]+?)(?:\s+attack|\.|$)/i);
+                    if (attackMatch) {
+                        const weaponName = attackMatch[1].trim();
+                        // Try to find this attack in the main actions
+                        const mainAttacks = parseAttacksFromActions(npc.actions || '');
+                        const matchingAttack = mainAttacks.find(a => a.name.toLowerCase().includes(weaponName.toLowerCase()) || weaponName.toLowerCase().includes(a.name.toLowerCase()));
+                        if (matchingAttack) {
+                            const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
+                            if (matchingAttack.type === 'weapon' && matchingAttack.toHit !== null) {
+                                html += `<div style="font-size: 13px; margin-top: 5px;">
+                                    <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(matchingAttack.toHit)}</span> | 
+                                    <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(matchingAttack.damage || '')}</span> 
+                                    ${matchingAttack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(matchingAttack.damageType)}</span>` : ''}
+                                </div>`;
+                            } else if (matchingAttack.type === 'saving_throw' && matchingAttack.saveDC) {
+                                html += `<div style="font-size: 13px; margin-top: 5px;">
+                                    <span style="color: #ffaa44;">🛡️ DC ${matchingAttack.saveDC} ${matchingAttack.saveType.charAt(0).toUpperCase() + matchingAttack.saveType.slice(1)} Save</span> | 
+                                    ${matchingAttack.damage ? `<span style="color: #ffaa44;">💥 Damage: ${escapeHtml(matchingAttack.damage)}</span>` : ''}
+                                    ${matchingAttack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(matchingAttack.damageType)}</span>` : ''}
+                                </div>`;
+                            }
+                        }
+                        html += `<div style="margin-top: 5px; font-size: 12px; opacity: 0.8;">${escapeHtml(action.description)}</div>`;
+                    } else {
+                        html += `<div style="margin-top: 5px; font-size: 12px; opacity: 0.8;">${escapeHtml(action.description)}</div>`;
+                    }
+                } else {
+                    html += `<div style="margin-top: 5px; font-size: 12px; opacity: 0.8;">${escapeHtml(action.description)}</div>`;
+                }
+                
+                html += `</div>`;
+            });
+        } else {
+            // Fallback: show raw text if parsing fails
+            html += `<div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6;">${escapeHtml(npc.legendary_actions)}</div>`;
+        }
+        
+        html += `</div>`;
     }
     
     // Traits
@@ -6011,7 +6475,494 @@ function showNPCCharacterSheet(entityId) {
         sheetTitleEl.textContent = `${enemy.name} - NPC Character Sheet`;
         contentEl.innerHTML = html;
         document.getElementById('characterSheetModal').classList.add('active');
+        
+        // Setup dice roll buttons after rendering
+        setTimeout(() => {
+            setupDiceRollButtons(contentEl);
+        }, 100);
     }
+}
+
+// Build dice roll section for NPCs
+function buildDiceRollSectionForNPC(npcName) {
+    const escapedName = escapeJs(npcName);
+    
+    let html = `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+        <h4 style="color: #aa88ff;">🎲 Dice Rolls <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
+        <div class="dice-roll-container" data-character-name="${escapedName}" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">`;
+    
+    const diceTypes = [
+        { sides: 4, label: 'D4', color: '#4a9eff' },
+        { sides: 6, label: 'D6', color: '#44ff44' },
+        { sides: 8, label: 'D8', color: '#ffaa44' },
+        { sides: 10, label: 'D10', color: '#ff4444' },
+        { sides: 12, label: 'D12', color: '#aa88ff' },
+        { sides: 20, label: 'D20', color: '#ff6b6b' },
+        { sides: 100, label: 'D100', color: '#00d4ff' }
+    ];
+    
+    diceTypes.forEach(die => {
+        const colorRgb = die.sides === 4 ? '74,158,255' : 
+                        die.sides === 6 ? '68,255,68' : 
+                        die.sides === 8 ? '255,170,68' : 
+                        die.sides === 10 ? '255,68,68' : 
+                        die.sides === 12 ? '170,136,255' : 
+                        die.sides === 20 ? '255,107,107' : '0,212,255';
+        
+        html += `<div class="dice-roll-button" data-sides="${die.sides}" style="
+            padding: 12px; 
+            background: rgba(${colorRgb},0.15); 
+            border: 2px solid ${die.color}; 
+            border-radius: 5px; 
+            text-align: center; 
+            cursor: pointer; 
+            transition: all 0.2s;
+            font-weight: bold;
+            font-size: 14px;
+        " onmouseover="this.style.background='rgba(${colorRgb},0.3)'; this.style.transform='scale(1.05)'" onmouseleave="this.style.background='rgba(${colorRgb},0.15)'; this.style.transform='scale(1)'">
+            ${die.label}
+        </div>`;
+    });
+    
+    html += `</div></div>`;
+    
+    return html;
+}
+
+// Build saving throws section for NPCs
+function buildSavingThrowsSectionForNPC(enemy, parsedData, escapedEnemyName) {
+    const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
+    const calcMod = (score) => Math.floor((score - 10) / 2);
+    
+    const abilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+    const abilityLabels = {
+        str: 'Strength',
+        dex: 'Dexterity',
+        con: 'Constitution',
+        int: 'Intelligence',
+        wis: 'Wisdom',
+        cha: 'Charisma'
+    };
+    
+    // Calculate ability modifiers from parsed data or enemy data
+    const abilityMods = {};
+    abilities.forEach(ab => {
+        const score = parsedData[ab] || enemy[ab] || 10;
+        abilityMods[ab] = calcMod(score);
+    });
+    
+    let html = `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+        <h4 style="color: #ffaa44;">🛡️ Saving Throws <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">`;
+    
+    abilities.forEach(ab => {
+        const saveMod = abilityMods[ab] || 0;
+        const abilityName = abilityLabels[ab];
+        
+        html += `<div onclick="rollSavingThrow('${ab}', ${saveMod}, '${escapedEnemyName}')" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(255,170,68,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
+            <span style="font-size: 13px;">${abilityName}</span>
+            <span style="font-weight: bold; color: #ffaa44;">${formatMod(saveMod)}</span>
+        </div>`;
+    });
+    
+    html += `</div></div>`;
+    
+    return html;
+}
+
+// Parse Multiattack to extract which attacks it includes
+function parseMultiattack(actionsText) {
+    if (!actionsText) return null;
+    
+    // Find the start of Multiattack
+    const multiattackStart = actionsText.search(/(?:Multiattack|Multi-Attack)\s*\./i);
+    if (multiattackStart === -1) return null;
+    
+    // Get everything after "Multiattack."
+    const afterMultiattack = actionsText.substring(multiattackStart);
+    const afterPeriod = afterMultiattack.substring(afterMultiattack.indexOf('.') + 1);
+    
+    // Find where Multiattack ends - look for the next actual action name
+    // The issue is that action names like "Frightful Presence" might be mentioned IN the Multiattack description
+    // We need to find the next action that starts a new action block (typically followed by "The [creature]...")
+    // Pattern: period + space + CapitalizedWord(s) + period + space + "The" or creature name
+    // This helps distinguish between actions mentioned in Multiattack vs actual next actions
+    
+    // First, try to find pattern: ". Action Name. The" or ". Action Name. [Creature name]"
+    const nextActionPattern1 = /\.\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s*\.)\s+(?:The|It|This|That)/;
+    const match1 = afterPeriod.match(nextActionPattern1);
+    
+    let description;
+    if (match1) {
+        // Found next action that starts with "The" or similar, extract everything up to it
+        const nextActionIndex = afterPeriod.indexOf(match1[0]);
+        description = afterPeriod.substring(0, nextActionIndex).trim();
+    } else {
+        // Fallback: look for any capitalized multi-word phrase followed by period and then a capitalized word
+        // that's likely the start of a new action description
+        const nextActionPattern2 = /\.\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s*\.)\s+[A-Z]/;
+        const match2 = afterPeriod.match(nextActionPattern2);
+        if (match2) {
+            const nextActionIndex = afterPeriod.indexOf(match2[0]);
+            description = afterPeriod.substring(0, nextActionIndex).trim();
+        } else {
+            // Last resort: take everything after the period
+            description = afterPeriod.trim();
+        }
+    }
+    
+    if (!description) return null;
+    
+    return parseMultiattackFromDescription(description);
+}
+
+// Helper function to parse attack names from Multiattack description
+function parseMultiattackFromDescription(description) {
+    
+    // Extract attack names from the description
+    // Common patterns: "makes three attacks: one with X and two with Y"
+    // or "can use X. It then makes three attacks: one with Y and two with Z"
+    const attackNames = [];
+    
+    // Pattern 1: "makes X attacks: one with [attack1] and Y with [attack2]"
+    const pattern1 = /makes?\s+(\d+)\s+attacks?:\s*(?:one\s+with\s+its\s+)?([A-Za-z\s]+?)(?:\s+and\s+(\d+)\s+with\s+(?:its\s+)?([A-Za-z\s]+?))?/i;
+    const match1 = description.match(pattern1);
+    if (match1) {
+        if (match1[2]) attackNames.push(match1[2].trim());
+        if (match1[4]) attackNames.push(match1[4].trim());
+    }
+    
+    // Pattern 2: "can use [ability]. It then makes X attacks: one with [attack1] and Y with [attack2]"
+    const pattern2 = /can\s+use\s+(?:its\s+)?([A-Za-z\s]+?)(?:\.|,).*?makes?\s+(\d+)\s+attacks?:\s*(?:one\s+with\s+(?:its\s+)?([A-Za-z\s]+?))(?:\s+and\s+(\d+)\s+with\s+(?:its\s+)?([A-Za-z\s]+?))?/i;
+    const match2 = description.match(pattern2);
+    if (match2) {
+        if (match2[1]) attackNames.push(match2[1].trim());
+        if (match2[3]) attackNames.push(match2[3].trim());
+        if (match2[5]) attackNames.push(match2[5].trim());
+    }
+    
+    // Pattern 3: Look for attack names mentioned (e.g., "laser cannon volley", "medium repeaters")
+    // This is a fallback to catch any attack names mentioned
+    const attackNamePattern = /(?:with|using)\s+(?:its\s+)?([A-Z][A-Za-z\s]{3,30}?)(?:\s+attack|\s+volley|\s+repeaters|\.|,|$)/g;
+    let attackMatch;
+    while ((attackMatch = attackNamePattern.exec(description)) !== null) {
+        const name = attackMatch[1].trim();
+        if (name && !attackNames.includes(name) && name.length > 3) {
+            attackNames.push(name);
+        }
+    }
+    
+    return {
+        description: description,
+        attackNames: attackNames.filter((name, index, self) => self.indexOf(name) === index) // Remove duplicates
+    };
+}
+
+// Parse attacks from NPC actions text - improved to handle all action types
+function parseAttacksFromActions(actionsText) {
+    const attacks = [];
+    if (!actionsText) return attacks;
+    
+    const foundNames = new Set();
+    
+    // First, split the text into individual actions by looking for patterns like "Name. Description"
+    // Actions typically start with a capitalized name followed by a period
+    const actionSections = [];
+    const actionPattern = /([A-Z][A-Za-z\s]{2,50}?)\s*\.\s*([^]*?)(?=\s+[A-Z][A-Za-z]+\s*\.|$)/g;
+    let match;
+    
+    while ((match = actionPattern.exec(actionsText)) !== null) {
+        const name = match[1].trim();
+        const description = match[2] ? match[2].trim() : '';
+        
+        // Skip "Multiattack" as it's a special action that references others (we'll handle it separately)
+        if (name.toLowerCase() === 'multiattack' || name.toLowerCase() === 'multi-attack') {
+            continue;
+        }
+        
+        // Only process if we have a reasonable name and description
+        if (name.length >= 2 && name.length <= 50 && description.length > 5) {
+            actionSections.push({ name, description });
+        }
+    }
+    
+    // Process each action section
+    actionSections.forEach(({ name, description }) => {
+        if (foundNames.has(name.toLowerCase())) {
+            return; // Skip duplicates
+        }
+        
+        // Pattern 1: Standard weapon attacks (Melee/Ranged Weapon Attack)
+        const weaponMatch = description.match(/(?:Melee|Ranged)\s+Weapon\s+Attack:\s*([+-]?\d+)\s+to\s+hit.*?Hit:\s*(\d+)\s*\(([^)]+)\)\s*(\w+)?\s*damage/i);
+        if (weaponMatch) {
+            const toHit = parseInt(weaponMatch[1]);
+            const damage = weaponMatch[3].trim();
+            const damageType = (weaponMatch[4] || '').trim() || 'damage';
+            
+            attacks.push({
+                name: name,
+                toHit: toHit,
+                damage: damage,
+                damageType: damageType,
+                type: 'weapon',
+                description: description
+            });
+            foundNames.add(name.toLowerCase());
+            return;
+        }
+        
+        // Pattern 2: Actions with saving throws and damage
+        const saveWithDamageMatch = description.match(/DC\s+(\d+)\s+([A-Za-z]+)\s+saving\s+throw.*?taking\s+(\d+)\s*\(([^)]+)\)\s*(\w+)?\s*damage/i);
+        if (saveWithDamageMatch) {
+            const saveDC = parseInt(saveWithDamageMatch[1]);
+            const saveType = saveWithDamageMatch[2].trim().toLowerCase();
+            const damage = saveWithDamageMatch[4].trim();
+            const damageType = (saveWithDamageMatch[5] || '').trim() || 'damage';
+            
+            attacks.push({
+                name: name,
+                toHit: null,
+                damage: damage,
+                damageType: damageType,
+                saveDC: saveDC,
+                saveType: saveType,
+                type: 'saving_throw',
+                description: description
+            });
+            foundNames.add(name.toLowerCase());
+            return;
+        }
+        
+        // Pattern 3: Actions with saving throws but no damage (e.g., "Frightful Presence")
+        const saveNoDamageMatch = description.match(/DC\s+(\d+)\s+([A-Za-z]+)\s+saving\s+throw/i);
+        if (saveNoDamageMatch) {
+            const saveDC = parseInt(saveNoDamageMatch[1]);
+            const saveType = saveNoDamageMatch[2].trim().toLowerCase();
+            
+            attacks.push({
+                name: name,
+                toHit: null,
+                damage: null,
+                damageType: null,
+                saveDC: saveDC,
+                saveType: saveType,
+                type: 'saving_throw',
+                description: description
+            });
+            foundNames.add(name.toLowerCase());
+            return;
+        }
+        
+        // If none of the patterns match, it's likely a special action (like Multiattack)
+        // We'll skip it unless it has clear attack indicators
+    });
+    
+    return attacks;
+}
+
+// Parse legendary actions from NPC legendary_actions text
+function parseLegendaryActions(legendaryText) {
+    const result = {
+        maxActions: 3, // Default
+        actions: []
+    };
+    
+    if (!legendaryText) return result;
+    
+    // Extract max number of legendary actions (e.g., "can take 3 legendary actions")
+    const maxMatch = legendaryText.match(/can\s+take\s+(\d+)\s+legendary\s+action/i);
+    if (maxMatch) {
+        result.maxActions = parseInt(maxMatch[1]);
+    }
+    
+    // Find where actions start - look for pattern like "Stomp." or "Repeating Blasters." 
+    // These are action names that start with a capitalized word
+    // Skip all the intro text
+    let actionsText = legendaryText;
+    
+    // Try to find the first actual action by looking for a capitalized word followed by period
+    // that's on its own line or at the start of a line after blank lines
+    const firstActionPattern = /(?:^|\n\n)\s*([A-Z][A-Za-z\s]+?)\s*(?:\(Costs\s+\d+\s+Actions?\))?\s*\.\s/;
+    const firstActionMatch = legendaryText.match(firstActionPattern);
+    
+    if (firstActionMatch) {
+        // Find the index where this action starts
+        const firstActionIndex = legendaryText.indexOf(firstActionMatch[0]);
+        if (firstActionIndex >= 0) {
+            actionsText = legendaryText.substring(firstActionIndex).trim();
+        }
+    }
+    
+    // Split by blank lines first - each action is typically separated by blank lines
+    let actionBlocks = actionsText.split(/\n\s*\n/);
+    
+    // If that didn't split anything (no double newlines), try splitting by single newline + capitalized word pattern
+    if (actionBlocks.length === 1) {
+        // Try to split by pattern: newline + capitalized word(s) + period
+        // This matches things like "\nStomp." or "\nRepeating Blasters."
+        const splitPattern = /\n\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s*(?:\(Costs\s+\d+\s+Actions?\))?\s*\./g;
+        const matches = [...actionsText.matchAll(splitPattern)];
+        if (matches.length > 1) {
+            // Found multiple actions, split at these points
+            actionBlocks = [];
+            for (let i = 0; i < matches.length; i++) {
+                const start = i === 0 ? 0 : matches[i].index;
+                const end = i < matches.length - 1 ? matches[i + 1].index : actionsText.length;
+                const block = actionsText.substring(start, end).trim();
+                if (block) actionBlocks.push(block);
+            }
+        }
+    }
+    
+    const foundNames = new Set();
+    
+    actionBlocks.forEach(block => {
+        block = block.trim();
+        if (!block) return;
+        
+        // Skip if this looks like intro text (contains "can take" or "legendary action")
+        if (block.toLowerCase().includes('can take') || block.toLowerCase().includes('legendary action')) {
+            return;
+        }
+        
+        // Each block should be one action: "Action Name. Description" or "Action Name (Costs X Actions). Description"
+        // Match action name (1-3 capitalized words) followed by optional cost, then period, then description
+        const actionMatch = block.match(/^([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s*(?:\(Costs\s+(\d+)\s+Actions?\))?\s*\.\s*(.*)$/s);
+        
+        if (actionMatch) {
+            const name = actionMatch[1].trim();
+            const cost = actionMatch[2] ? parseInt(actionMatch[2]) : 1;
+            let description = actionMatch[3] ? actionMatch[3].trim() : '';
+            
+            // Clean up description - normalize whitespace
+            description = description.replace(/\s+/g, ' ').trim();
+            
+            if (name && name.length > 1 && name.length < 50 && !foundNames.has(name.toLowerCase())) {
+                result.actions.push({
+                    name: name,
+                    cost: cost,
+                    description: description
+                });
+                foundNames.add(name.toLowerCase());
+            }
+        }
+    });
+    
+    // If splitting by blank lines didn't work, try line-by-line approach
+    if (result.actions.length === 0) {
+        const lines = actionsText.split(/\n/);
+        let currentAction = null;
+        
+        lines.forEach(line => {
+            line = line.trim();
+            if (!line) {
+                // Blank line - save current action if exists
+                if (currentAction && currentAction.name) {
+                    if (!foundNames.has(currentAction.name.toLowerCase())) {
+                        result.actions.push(currentAction);
+                        foundNames.add(currentAction.name.toLowerCase());
+                    }
+                    currentAction = null;
+                }
+                return;
+            }
+            
+            // Check if this line starts a new action
+            // Pattern: "Action Name. Description" or "Action Name (Costs X Actions). Description"
+            const actionStartMatch = line.match(/^([A-Z][A-Za-z\s]+?)\s*(?:\(Costs\s+(\d+)\s+Actions?\))?\s*\.\s*(.*)$/);
+            
+            if (actionStartMatch) {
+                // Save previous action
+                if (currentAction && currentAction.name) {
+                    if (!foundNames.has(currentAction.name.toLowerCase())) {
+                        result.actions.push(currentAction);
+                        foundNames.add(currentAction.name.toLowerCase());
+                    }
+                }
+                
+                // Start new action
+                const name = actionStartMatch[1].trim();
+                const cost = actionStartMatch[2] ? parseInt(actionStartMatch[2]) : 1;
+                const description = actionStartMatch[3] ? actionStartMatch[3].trim() : '';
+                
+                currentAction = {
+                    name: name,
+                    cost: cost,
+                    description: description
+                };
+            } else if (currentAction) {
+                // Continuation of current action
+                currentAction.description += (currentAction.description ? ' ' : '') + line;
+            }
+        });
+        
+        // Don't forget the last action
+        if (currentAction && currentAction.name && !foundNames.has(currentAction.name.toLowerCase())) {
+            result.actions.push(currentAction);
+        }
+    }
+    
+    return result;
+}
+
+// Use a legendary action
+function useLegendaryAction(enemyId, storageKey, cost, actionName, enemyName) {
+    // Get current usage
+    let legendaryUsage = JSON.parse(localStorage.getItem(storageKey) || '{"used": 0, "max": 3}');
+    
+    // Check if enough actions available
+    const remaining = legendaryUsage.max - legendaryUsage.used;
+    if (remaining < cost) {
+        alert(`Not enough legendary actions! Need ${cost}, but only ${remaining} remaining.`);
+        return;
+    }
+    
+    // Update usage
+    legendaryUsage.used += cost;
+    localStorage.setItem(storageKey, JSON.stringify(legendaryUsage));
+    
+    // Update display
+    const remainingEl = document.getElementById(`legendary-remaining-${enemyId}`);
+    if (remainingEl) {
+        const newRemaining = legendaryUsage.max - legendaryUsage.used;
+        remainingEl.textContent = newRemaining;
+        remainingEl.style.color = newRemaining > 0 ? '#44ff44' : '#ff4444';
+    }
+    
+    // Log the action
+    addLogEntry(`${enemyName} used legendary action: ${actionName} (Cost: ${cost})`, 'info');
+    
+    // Refresh the sheet if it's open
+    const enemy = enemies.find(e => e.id === enemyId);
+    if (enemy && selectedToken && selectedToken.entity_id === enemyId) {
+        setTimeout(() => {
+            showNPCCharacterSheet(enemyId);
+        }, 100);
+    }
+}
+
+// Reset legendary actions (called at start of turn)
+function resetLegendaryActions(enemyId, storageKey) {
+    let legendaryUsage = JSON.parse(localStorage.getItem(storageKey) || '{"used": 0, "max": 3}');
+    legendaryUsage.used = 0;
+    localStorage.setItem(storageKey, JSON.stringify(legendaryUsage));
+    
+    // Update display
+    const remainingEl = document.getElementById(`legendary-remaining-${enemyId}`);
+    if (remainingEl) {
+        remainingEl.textContent = legendaryUsage.max;
+        remainingEl.style.color = '#44ff44';
+    }
+    
+    // Refresh the sheet if it's open
+    const enemy = enemies.find(e => e.id === enemyId);
+    if (enemy && selectedToken && selectedToken.entity_id === enemyId) {
+        setTimeout(() => {
+            showNPCCharacterSheet(enemyId);
+        }, 100);
+    }
+    
+    addLogEntry('Legendary actions reset!', 'info');
 }
 
 function escapeHtml(text) {
@@ -6091,16 +7042,44 @@ function spawnEnemy(enemyId, enemyName) {
         const tempEnemy = {...enemy, id: instanceId, name: instanceName};
         enemies.push(tempEnemy);
         console.log('✅ Added enemy instance locally:', tempEnemy);
+        
+        // Place token with the SAME instance ID
+        console.log('📤 Sending PlaceToken message with instance ID:', instanceId);
+        // Calculate size - try instance first, then fall back to base enemy
+        let tokenSize = getTokenSize(instanceId, 'Enemy');
+        if (tokenSize === 1.0) {
+            // If size is still 1.0, try looking up by base enemy ID
+            tokenSize = getTokenSize(enemyId, 'Enemy');
+        }
+        console.log(`📐 Calculated token size: ${tokenSize} squares`);
+        sendMessage({
+            type: 'PlaceToken',
+            entity_id: instanceId, // Same ID!
+            entity_type: 'Enemy',
+            x: 5,
+            y: 5,
+            size: tokenSize
+        });
+    } else {
+        console.error('❌ Base enemy not found:', enemyId);
+        // Still try to place token with default size
+        const tokenSize = 1.0;
+        sendMessage({
+            type: 'PlaceToken',
+            entity_id: instanceId,
+            entity_type: 'Enemy',
+            x: 5,
+            y: 5,
+            size: tokenSize
+        });
     }
-    
-    // Place token with the SAME instance ID
-    console.log('📤 Sending PlaceToken message with instance ID:', instanceId);
     sendMessage({
         type: 'PlaceToken',
         entity_id: instanceId, // Same ID!
         entity_type: 'Enemy',
         x: 5,
-        y: 5
+        y: 5,
+        size: tokenSize
     });
     
     closeModal('enemyManagerModal');
@@ -7762,6 +8741,32 @@ function keepSpellTooltip() {
     }
 }
 
+// Show attack tooltip on hover (for NPC attacks)
+function showAttackTooltip(description, event) {
+    const tooltip = document.getElementById('spellTooltip');
+    const content = document.getElementById('spellTooltipContent');
+    
+    if (!tooltip || !content) return;
+    
+    if (spellTooltipTimeout) {
+        clearTimeout(spellTooltipTimeout);
+        spellTooltipTimeout = null;
+    }
+    
+    // Format the tooltip content
+    content.innerHTML = `<div style="padding: 15px; max-width: 400px;">
+        <div style="font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(description)}</div>
+    </div>`;
+    
+    tooltip.style.display = 'block';
+    tooltip.style.zIndex = '99999';
+    tooltip.style.left = (event.clientX + 15) + 'px';
+    tooltip.style.top = (event.clientY + 15) + 'px';
+    
+    // Adjust position if tooltip goes off screen
+    adjustTooltipPosition(tooltip, event);
+}
+
 // Format spell/power data for tooltip display
 function formatSpellTooltip(spell) {
     // Detect if this is a Star Wars power
@@ -8877,12 +9882,14 @@ function placeCharacterToken(charId, charName) {
     const y = 5;
     
     console.log('Sending PlaceToken message...');
+    const tokenSize = getTokenSize(charId, 'Player');
     sendMessage({
         type: 'PlaceToken',
         entity_id: charId,
         entity_type: 'Player',
         x: x,
-        y: y
+        y: y,
+        size: tokenSize
     });
     
     console.log('✅ PlaceToken message sent, waiting for TokenUpdate...');
@@ -11722,12 +12729,16 @@ async function loadGameStateFromData(gameState, sourceName) {
             console.log('📤 Sending', savedTokens.length, 'tokens to server...');
             for (let i = 0; i < savedTokens.length; i++) {
                 const token = savedTokens[i];
+                // Always calculate size - don't trust saved size, recalculate from entity data
+                const tokenSize = getTokenSize(token.entity_id, token.entity_type);
+                console.log(`📐 Restoring token ${token.entity_id} with calculated size: ${tokenSize}`);
                 sendMessage({
                     type: 'PlaceToken',
                     entity_id: token.entity_id,
                     entity_type: token.entity_type,
                     x: token.x,
-                    y: token.y
+                    y: token.y,
+                    size: tokenSize
                 });
                 
                 // Small delay between tokens to avoid race conditions
