@@ -29,5 +29,8 @@ futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
+# Browser opening
+open = "5.0"
+
 [dev-dependencies]
 

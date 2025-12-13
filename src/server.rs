@@ -178,6 +178,7 @@ pub async fn start_server(
         .with_state((dnd_db, starwars_db, game_state, clients.clone()));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    let addr = listener.local_addr()?;
     info!("Server listening on http://0.0.0.0:3000");
     info!("✅ Save/Load API endpoints available:");
     info!("   GET  /api/test - Test endpoint");
@@ -185,6 +186,15 @@ pub async fn start_server(
     info!("   GET  /api/saves/:filename - Get saved state");
     info!("   POST /api/saves/:filename - Save game state");
     info!("   DELETE /api/saves/:filename - Delete saved state");
+
+    // Open browser automatically
+    let url = format!("http://localhost:{}", addr.port());
+    info!("🌐 Opening browser at {}", url);
+    if let Err(e) = open::that(&url) {
+        warn!("⚠️ Could not open browser automatically: {}. Please navigate to {}", e, url);
+    } else {
+        info!("✅ Browser opened successfully!");
+    }
 
     axum::serve(listener, app).await?;
     Ok(())

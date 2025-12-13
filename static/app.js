@@ -5821,8 +5821,9 @@ function spawnNPC(npc) {
     
     console.log('✅ Added NPC instance:', instanceId, instanceName, 'Total NPCs:', enemies.filter(e => e.isNPC).length);
     
-    // Place token
+    // Place token with automatically calculated size
     const tokenSize = getTokenSize(instanceId, 'Enemy');
+    console.log(`🎯 Placing NPC token ${instanceName} (${instanceId}) with size: ${tokenSize}`);
     sendMessage({
         type: 'PlaceToken',
         entity_id: instanceId,
@@ -5843,6 +5844,92 @@ function parseSpeed(speedStr) {
     return match ? parseInt(match[1]) : 30;
 }
 
+// Extract size from character data - comprehensive search
+function extractSizeFromCharacterData(charData) {
+    if (!charData) return null;
+    
+    // 1. Direct size field
+    if (charData.size) {
+        const sizeStr = String(charData.size).toLowerCase().trim();
+        if (['large', 'huge', 'gargantuan'].includes(sizeStr)) {
+            return sizeStr;
+        }
+    }
+    
+    // 2. Species object with size
+    if (charData.species) {
+        if (typeof charData.species === 'object' && charData.species.size) {
+            const sizeStr = String(charData.species.size).toLowerCase().trim();
+            if (['large', 'huge', 'gargantuan'].includes(sizeStr)) {
+                return sizeStr;
+            }
+        }
+        // Check if species itself is an object with nested size
+        if (typeof charData.species === 'object') {
+            // Check all nested properties
+            for (const key in charData.species) {
+                if (key.toLowerCase() === 'size' && charData.species[key]) {
+                    const sizeStr = String(charData.species[key]).toLowerCase().trim();
+                    if (['large', 'huge', 'gargantuan'].includes(sizeStr)) {
+                        return sizeStr;
+                    }
+                }
+            }
+        }
+    }
+    
+    // 3. Race object with size
+    if (charData.race) {
+        if (typeof charData.race === 'object' && charData.race.size) {
+            const sizeStr = String(charData.race.size).toLowerCase().trim();
+            if (['large', 'huge', 'gargantuan'].includes(sizeStr)) {
+                return sizeStr;
+            }
+        }
+    }
+    
+    // 4. Search in traits/features text
+    const searchFields = ['traits', 'features', 'race_traits', 'species_traits', 'raceFeatures', 'speciesFeatures'];
+    for (const field of searchFields) {
+        if (charData[field]) {
+            const fieldData = charData[field];
+            let searchText = '';
+            
+            if (Array.isArray(fieldData)) {
+                searchText = fieldData.map(t => {
+                    if (typeof t === 'string') return t;
+                    if (typeof t === 'object') {
+                        return (t.desc || t.name || t.description || JSON.stringify(t)).toLowerCase();
+                    }
+                    return String(t).toLowerCase();
+                }).join(' ');
+            } else if (typeof fieldData === 'string') {
+                searchText = fieldData.toLowerCase();
+            } else if (typeof fieldData === 'object') {
+                searchText = JSON.stringify(fieldData).toLowerCase();
+            }
+            
+            const sizeMatch = searchText.match(/\b(large|huge|gargantuan)\b/i);
+            if (sizeMatch) {
+                return sizeMatch[1].toLowerCase();
+            }
+        }
+    }
+    
+    // 5. Search entire character data as string (last resort)
+    try {
+        const fullText = JSON.stringify(charData).toLowerCase();
+        const sizeMatch = fullText.match(/["']size["']\s*:\s*["']?(large|huge|gargantuan)["']?/i);
+        if (sizeMatch) {
+            return sizeMatch[1].toLowerCase();
+        }
+    } catch (e) {
+        // Ignore JSON stringify errors
+    }
+    
+    return null;
+}
+
 // Get token size in grid squares based on creature size
 // Returns: 1.0 for Tiny/Small/Medium, 2.0 for Large (4 squares = 2x2), 4.0 for Huge (16 squares = 4x4), 8.0 for Gargantuan (64 squares = 8x8)
 function getTokenSize(entityId, entityType) {
@@ -5852,7 +5939,7 @@ function getTokenSize(entityId, entityType) {
     if (entityType === 'Enemy' || entityType === 'NPC') {
         const enemy = enemies.find(e => e.id === entityId);
         if (enemy) {
-            // Check if it has npcData (NPC from database)
+            // Check if it has npcData (NPC from database) - this is the primary source
             if (enemy.npcData && enemy.npcData.size) {
                 const npcSize = enemy.npcData.size;
                 const sizeStr = String(npcSize).toLowerCase().trim();
@@ -5866,8 +5953,15 @@ function getTokenSize(entityId, entityType) {
                 // Tiny, Small, Medium all default to 1.0
                 console.log(`📏 Token size for ${enemy.name}: "${npcSize}" -> ${sizeValue} squares`);
             } else {
-                // Try to find in NPC database by name
-                const npcFromDB = npcs.find(n => n.name === enemy.name || enemy.name.startsWith(n.name));
+                // Try to find in NPC database by name (for regular enemies that might match NPC names)
+                const baseName = enemy.name.replace(/\s+\d+$/, ''); // Remove trailing number
+                const npcFromDB = npcs.find(n => {
+                    const npcBaseName = n.name.replace(/\s+\d+$/, '');
+                    return n.name === enemy.name || 
+                           enemy.name.startsWith(n.name) || 
+                           baseName === npcBaseName ||
+                           enemy.name.includes(n.name);
+                });
                 if (npcFromDB && npcFromDB.size) {
                     const sizeStr = String(npcFromDB.size).toLowerCase().trim();
                     if (sizeStr === 'large') {
@@ -5877,34 +5971,47 @@ function getTokenSize(entityId, entityType) {
                     } else if (sizeStr === 'gargantuan') {
                         sizeValue = 8.0;
                     }
-                    console.log(`📏 Token size for ${enemy.name} (from DB): "${npcFromDB.size}" -> ${sizeValue} squares`);
+                    console.log(`📏 Token size for ${enemy.name} (from DB lookup): "${npcFromDB.size}" -> ${sizeValue} squares`);
                 } else {
-                    console.log(`⚠️ No size found for enemy ${enemy.name} (id: ${entityId})`);
+                    console.log(`⚠️ No size found for enemy ${enemy.name} (id: ${entityId}) - using default 1.0`);
                 }
             }
         } else {
-            console.log(`⚠️ Enemy ${entityId} not found in enemies array`);
+            console.log(`⚠️ Enemy ${entityId} not found in enemies array - using default 1.0`);
         }
     } else if (entityType === 'Player') {
         const char = characters.find(c => c.id === entityId);
         if (char && char.character_data) {
             try {
                 const charData = JSON.parse(char.character_data);
-                if (charData.size) {
-                    const sizeStr = String(charData.size).toLowerCase().trim();
+                
+                // Use the comprehensive extraction function
+                const sizeStr = extractSizeFromCharacterData(charData);
+                
+                if (sizeStr) {
                     if (sizeStr === 'large') {
                         sizeValue = 2.0;
                     } else if (sizeStr === 'huge') {
                         sizeValue = 4.0;
                     } else if (sizeStr === 'gargantuan') {
-                        sizeValue = 8.0; // 8x8 = 64 squares
+                        sizeValue = 8.0;
                     }
-                    console.log(`📏 Token size for player ${char.name}: "${charData.size}" -> ${sizeValue} squares`);
+                    console.log(`📏 Token size for player ${char.name}: "${sizeStr}" -> ${sizeValue} squares`);
+                } else {
+                    console.log(`⚠️ No size found in character_data for ${char.name} - using default 1.0`);
+                    console.log(`   Character data sample:`, {
+                        keys: Object.keys(charData),
+                        hasSpecies: !!charData.species,
+                        hasRace: !!charData.race,
+                        speciesType: typeof charData.species
+                    });
                 }
             } catch (e) {
                 // Invalid JSON, use default
                 console.log(`⚠️ Could not parse character_data for ${char.name}:`, e);
             }
+        } else {
+            console.log(`⚠️ Character ${entityId} not found or has no character_data - using default 1.0`);
         }
     }
     
@@ -7051,7 +7158,7 @@ function spawnEnemy(enemyId, enemyName) {
             // If size is still 1.0, try looking up by base enemy ID
             tokenSize = getTokenSize(enemyId, 'Enemy');
         }
-        console.log(`📐 Calculated token size: ${tokenSize} squares`);
+        console.log(`🎯 Placing enemy token ${instanceName} (${instanceId}) with size: ${tokenSize} squares`);
         sendMessage({
             type: 'PlaceToken',
             entity_id: instanceId, // Same ID!
@@ -9881,8 +9988,54 @@ function placeCharacterToken(charId, charName) {
     const x = 5;
     const y = 5;
     
-    console.log('Sending PlaceToken message...');
-    const tokenSize = getTokenSize(charId, 'Player');
+    // CRITICAL: Get character and parse character_data BEFORE placing token
+    const char = characters.find(c => c.id === charId);
+    if (!char) {
+        console.error(`❌ Character ${charId} not found in characters array!`);
+        alert('Character not found!');
+        return;
+    }
+    
+    // Parse character_data to find size using comprehensive extraction
+    let tokenSize = 1.0; // Default
+    if (char.character_data) {
+        try {
+            const charData = JSON.parse(char.character_data);
+            console.log(`🔍 Reading character data for ${charName} to find size...`);
+            console.log(`🔍 Character data structure:`, {
+                keys: Object.keys(charData),
+                hasSize: !!charData.size,
+                hasSpecies: !!charData.species,
+                hasRace: !!charData.race,
+                speciesType: typeof charData.species,
+                speciesValue: charData.species
+            });
+            
+            // Use the comprehensive extraction function
+            const sizeStr = extractSizeFromCharacterData(charData);
+            
+            if (sizeStr) {
+                if (sizeStr === 'large') {
+                    tokenSize = 2.0;
+                } else if (sizeStr === 'huge') {
+                    tokenSize = 4.0;
+                } else if (sizeStr === 'gargantuan') {
+                    tokenSize = 8.0;
+                }
+                console.log(`✅ Found size in character sheet: "${sizeStr}" -> ${tokenSize} squares`);
+            } else {
+                console.log(`⚠️ No size found in character_data for ${charName} - using default 1.0`);
+                console.log(`   Full character_data (first 500 chars):`, JSON.stringify(charData).substring(0, 500));
+            }
+        } catch (e) {
+            console.error(`❌ Could not parse character_data for ${charName}:`, e);
+            console.error(`   character_data value:`, char.character_data?.substring(0, 200));
+        }
+    } else {
+        console.log(`⚠️ Character ${charName} has no character_data - using default size 1.0`);
+    }
+    
+    console.log(`🎯 Placing player token ${charName} (${charId}) with FINAL size: ${tokenSize}`);
     sendMessage({
         type: 'PlaceToken',
         entity_id: charId,
