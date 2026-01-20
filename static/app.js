@@ -6064,21 +6064,45 @@ function parseNPCRawBlock(rawBlock) {
         /techcaster.*?tech powers[:\s]+(.*?)(?:Actions|Traits|Challenge|$)/is
     ];
     
+    const techPowersSet = new Set(); // Use Set to track unique normalized keys
+    
     for (const pattern of techPatterns) {
         const match = rawBlock.match(pattern);
         if (match) {
             const powersText = match[1];
-            // Extract power names (look for patterns like "power name" or "power name,")
-            const powerMatches = powersText.matchAll(/(?:At will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?:\d+[a-z-]*-level|Actions|Traits|$)/gi);
-            for (const powerMatch of powerMatches) {
-                const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p);
-                result.techPowers.push(...powers);
-            }
-            // Also try simple comma-separated list
-            if (result.techPowers.length === 0) {
+            // Extract power names with their levels (look for patterns like "1st-level: power name" or "At will: power name")
+            const powerMatches = Array.from(powersText.matchAll(/(?:At will|At-will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?=\d+[a-z-]*-level|At will|At-will|Actions|Traits|$)/gi));
+            
+            // If we found level-based matches, process them
+            if (powerMatches.length > 0) {
+                for (const powerMatch of powerMatches) {
+                    const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p && p.length > 2);
+                    powers.forEach(power => {
+                        if (power) {
+                            // Normalize: lowercase, trim, remove extra spaces
+                            const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                            // Only add if not already present
+                            if (!techPowersSet.has(normalized)) {
+                                techPowersSet.add(normalized);
+                                result.techPowers.push(power.trim());
+                            }
+                        }
+                    });
+                }
+            } else {
+                // Fallback: simple comma-separated list
                 const simplePowers = powersText.split(',').map(p => p.trim()).filter(p => p && p.length > 2);
-                result.techPowers.push(...simplePowers);
+                simplePowers.forEach(power => {
+                    if (power) {
+                        const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                        if (!techPowersSet.has(normalized)) {
+                            techPowersSet.add(normalized);
+                            result.techPowers.push(power.trim());
+                        }
+                    }
+                });
             }
+            break; // Only process first match to avoid duplicates
         }
     }
     
@@ -6090,21 +6114,45 @@ function parseNPCRawBlock(rawBlock) {
         /innate forcecasting.*?force powers[:\s]+(.*?)(?:Actions|Traits|Challenge|$)/is
     ];
     
+    const forcePowersSet = new Set(); // Use Set to track unique normalized keys
+    
     for (const pattern of forcePatterns) {
         const match = rawBlock.match(pattern);
         if (match) {
             const powersText = match[1];
-            // Extract power names
-            const powerMatches = powersText.matchAll(/(?:At will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?:\d+[a-z-]*-level|Actions|Traits|$)/gi);
-            for (const powerMatch of powerMatches) {
-                const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p);
-                result.forcePowers.push(...powers);
-            }
-            // Also try simple comma-separated list
-            if (result.forcePowers.length === 0) {
+            // Extract power names with their levels
+            const powerMatches = Array.from(powersText.matchAll(/(?:At will|At-will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?=\d+[a-z-]*-level|At will|At-will|Actions|Traits|$)/gi));
+            
+            // If we found level-based matches, process them
+            if (powerMatches.length > 0) {
+                for (const powerMatch of powerMatches) {
+                    const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p && p.length > 2);
+                    powers.forEach(power => {
+                        if (power) {
+                            // Normalize: lowercase, trim, remove extra spaces
+                            const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                            // Only add if not already present
+                            if (!forcePowersSet.has(normalized)) {
+                                forcePowersSet.add(normalized);
+                                result.forcePowers.push(power.trim());
+                            }
+                        }
+                    });
+                }
+            } else {
+                // Fallback: simple comma-separated list
                 const simplePowers = powersText.split(',').map(p => p.trim()).filter(p => p && p.length > 2);
-                result.forcePowers.push(...simplePowers);
+                simplePowers.forEach(power => {
+                    if (power) {
+                        const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                        if (!forcePowersSet.has(normalized)) {
+                            forcePowersSet.add(normalized);
+                            result.forcePowers.push(power.trim());
+                        }
+                    }
+                });
             }
+            break; // Only process first match to avoid duplicates
         }
     }
     
@@ -6138,6 +6186,14 @@ function showNPCCharacterSheet(entityId) {
         console.warn('Only DM can view full NPC character sheets');
         alert('Only the DM can view full NPC character sheets.');
         return;
+    }
+    
+    // Ensure tech and force powers are loaded for NPC tooltips
+    if (!techPowersLoaded) {
+        loadTechPowers();
+    }
+    if (!forcePowersLoaded) {
+        loadForcePowers();
     }
     
     const enemy = enemies.find(e => e.id === entityId);
@@ -6263,28 +6319,61 @@ function showNPCCharacterSheet(entityId) {
         html += `</div></div>`;
     }
     
-    // Tech Powers
-    if (parsedData.techPowers && parsedData.techPowers.length > 0) {
+    // Tech Powers - Use same logic as player sheets
+    const allTechPowers = [];
+    const allForcePowers = [];
+    const ensureUnique = (list, name) => {
+        if (!name) return;
+        if (!list.includes(name)) {
+            list.push(name);
+        }
+    };
+    
+    // Collect tech powers from parsed data (same approach as players)
+    if (parsedData.techPowers && Array.isArray(parsedData.techPowers)) {
+        parsedData.techPowers.forEach(name => ensureUnique(allTechPowers, name));
+    }
+    if (parsedData.forcePowers && Array.isArray(parsedData.forcePowers)) {
+        parsedData.forcePowers.forEach(name => ensureUnique(allForcePowers, name));
+    }
+    
+    if (allTechPowers.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #00d4ff;">⚡ Tech Powers <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
             <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
-        parsedData.techPowers.forEach(powerName => {
+        allTechPowers.forEach(powerName => {
             if (!powerName) return;
-            const escapedPower = escapeHtml(powerName);
+            // Use fuzzy matching to handle spacing differences (NPC names come from parsed text)
+            const lookup = findTechPowerInCacheGlobal(powerName);
+            const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
+                ? (lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level))
+                : null;
+            const baseLabel = levelDisplay
+                ? `${powerName} (${levelDisplay})`
+                : powerName;
+            const escapedPower = escapeHtml(baseLabel);
             const attrPower = powerName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
             html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 6px 12px; background: rgba(0,212,255,0.12); border-radius: 4px; font-size: 12px; border: 1px solid rgba(0,212,255,0.35); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(0,212,255,0.25)'; this.style.borderColor='#00d4ff'" onmouseleave="this.style.background='rgba(0,212,255,0.12)'; this.style.borderColor='rgba(0,212,255,0.35)'">${escapedPower}</div>`;
         });
         html += `</div></div>`;
     }
     
-    // Force Powers
-    if (parsedData.forcePowers && parsedData.forcePowers.length > 0) {
+    // Force Powers - Use same logic as player sheets
+    if (allForcePowers.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ff00ff;">✨ Force Powers <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
             <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
-        parsedData.forcePowers.forEach(powerName => {
+        allForcePowers.forEach(powerName => {
             if (!powerName) return;
-            const escapedPower = escapeHtml(powerName);
+            // Use fuzzy matching to handle spacing differences (NPC names come from parsed text)
+            const lookup = findForcePowerInCacheGlobal(powerName);
+            const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
+                ? (lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level))
+                : null;
+            const baseLabel = levelDisplay
+                ? `${powerName} (${levelDisplay})`
+                : powerName;
+            const escapedPower = escapeHtml(baseLabel);
             const attrPower = powerName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
             html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,0,255,0.2); border-radius: 3px; font-size: 12px; border: 1px solid rgba(255,0,255,0.4); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,0,255,0.4)'; this.style.borderColor='#ff00ff'" onmouseleave="this.style.background='rgba(255,0,255,0.2)'; this.style.borderColor='rgba(255,0,255,0.4)'">${escapedPower}</div>`;
         });
@@ -8747,38 +8836,125 @@ function showSpellTooltip(spellName, event) {
     }
 }
 
+// Helper function to find tech power in cache with fuzzy matching (used by both display and tooltip)
+function findTechPowerInCacheGlobal(powerName) {
+    if (!techPowersCache || !powerName) {
+        console.log(`⚠️ findTechPowerInCacheGlobal: cache=${!!techPowersCache}, powerName=${powerName}`);
+        return null;
+    }
+    
+    // Normalize the search term (same normalization as when loading cache)
+    const normalizedSearch = powerName.toLowerCase().trim().replace(/\s+/g, ' ');
+    console.log(`🔍 Looking up tech power: "${powerName}" -> normalized: "${normalizedSearch}"`);
+    
+    // Try exact match first
+    if (techPowersCache[normalizedSearch]) {
+        console.log(`✅ Found exact match for "${powerName}"`);
+        return techPowersCache[normalizedSearch];
+    }
+    
+    // Try fuzzy match - search all cache keys (case-insensitive, space-normalized)
+    for (const [key, value] of Object.entries(techPowersCache)) {
+        const keyNormalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+        // Check if keys match exactly (after normalization)
+        if (keyNormalized === normalizedSearch) {
+            console.log(`✅ Found normalized match for "${powerName}" (key: "${key}")`);
+            return value;
+        }
+        // Check if one contains the other (for partial matches)
+        if (keyNormalized.includes(normalizedSearch) || normalizedSearch.includes(keyNormalized)) {
+            // Only return if it's a close match (not too different in length)
+            const lengthDiff = Math.abs(keyNormalized.length - normalizedSearch.length);
+            if (lengthDiff <= 3 || normalizedSearch.length > 5) { // Allow small differences or longer names
+                console.log(`✅ Found fuzzy match for "${powerName}" -> "${value.name}" (key: "${key}")`);
+                return value;
+            }
+        }
+    }
+    
+    console.log(`❌ No match found for "${powerName}" in ${Object.keys(techPowersCache).length} tech powers`);
+    console.log(`📋 Available keys (first 10):`, Object.keys(techPowersCache).slice(0, 10));
+    return null;
+}
+
+function findForcePowerInCacheGlobal(powerName) {
+    if (!forcePowersCache || !powerName) return null;
+    
+    // Normalize the search term
+    const normalizedSearch = powerName.toLowerCase().trim().replace(/\s+/g, ' ');
+    
+    // Try exact match first
+    if (forcePowersCache[normalizedSearch]) {
+        return forcePowersCache[normalizedSearch];
+    }
+    
+    // Try fuzzy match - search all cache keys (case-insensitive, space-normalized)
+    for (const [key, value] of Object.entries(forcePowersCache)) {
+        const keyNormalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+        // Check if keys match exactly (after normalization)
+        if (keyNormalized === normalizedSearch) {
+            return value;
+        }
+        // Check if one contains the other (for partial matches)
+        if (keyNormalized.includes(normalizedSearch) || normalizedSearch.includes(keyNormalized)) {
+            // Only return if it's a close match (not too different in length)
+            const lengthDiff = Math.abs(keyNormalized.length - normalizedSearch.length);
+            if (lengthDiff <= 3 || normalizedSearch.length > 5) { // Allow small differences or longer names
+                return value;
+            }
+        }
+    }
+    
+    return null;
+}
+
 // Separate async function for fetching
 async function fetchSpellDataAndDisplay(spellName, tooltip, content, event) {
     try {
-        const cacheKey = spellName.toLowerCase().trim();
-        if (selectedStyle === 'starwars' && techPowersCache && techPowersCache[cacheKey]) {
-            content.innerHTML = formatTechPowerTooltip(techPowersCache[cacheKey]);
+        // CRITICAL: Check tech powers cache first (for both players and NPCs) with fuzzy matching
+        const techPower = findTechPowerInCacheGlobal(spellName);
+        if (techPower) {
+            console.log(`✅ Found tech power in cache: ${spellName} -> ${techPower.name}`);
+            content.innerHTML = formatTechPowerTooltip(techPower);
             adjustTooltipPosition(tooltip, event);
             return;
         }
-        if (selectedStyle === 'starwars') {
-            const importedDetail = findImportedTechPowerDetail(spellName);
-            if (importedDetail) {
-                if (!techPowersCache) techPowersCache = {};
-                techPowersCache[cacheKey] = importedDetail;
-                content.innerHTML = formatTechPowerTooltip(importedDetail);
-                adjustTooltipPosition(tooltip, event);
-                return;
-            }
-            if (forcePowersCache && forcePowersCache[cacheKey]) {
-                content.innerHTML = formatSpellTooltip(forcePowersCache[cacheKey]);
-                adjustTooltipPosition(tooltip, event);
-                return;
-            }
-            const importedForceDetail = findImportedForcePowerDetail(spellName);
-            if (importedForceDetail) {
-                if (!forcePowersCache) forcePowersCache = {};
-                forcePowersCache[cacheKey] = importedForceDetail;
-                content.innerHTML = formatSpellTooltip(importedForceDetail);
-                adjustTooltipPosition(tooltip, event);
-                return;
-            }
+        
+        // Check imported tech powers
+        const importedTechDetail = findImportedTechPowerDetail(spellName);
+        if (importedTechDetail) {
+            console.log(`✅ Found tech power in imported data: ${spellName}`);
+            if (!techPowersCache) techPowersCache = {};
+            const cacheKey = spellName.toLowerCase().trim();
+            techPowersCache[cacheKey] = importedTechDetail;
+            content.innerHTML = formatTechPowerTooltip(importedTechDetail);
+            adjustTooltipPosition(tooltip, event);
+            return;
         }
+        
+        // CRITICAL: Check force powers cache (for both players and NPCs) with fuzzy matching
+        const forcePower = findForcePowerInCacheGlobal(spellName);
+        if (forcePower) {
+            console.log(`✅ Found force power in cache: ${spellName} -> ${forcePower.name}`);
+            content.innerHTML = formatSpellTooltip(forcePower);
+            adjustTooltipPosition(tooltip, event);
+            return;
+        }
+        
+        // Check imported force powers
+        const importedForceDetail = findImportedForcePowerDetail(spellName);
+        if (importedForceDetail) {
+            console.log(`✅ Found force power in imported data: ${spellName}`);
+            if (!forcePowersCache) forcePowersCache = {};
+            const cacheKey = spellName.toLowerCase().trim();
+            forcePowersCache[cacheKey] = importedForceDetail;
+            content.innerHTML = formatSpellTooltip(importedForceDetail);
+            adjustTooltipPosition(tooltip, event);
+            return;
+        }
+        
+        // For Star Wars style, we've already checked tech/force, so continue to spell lookup
+        // For NPCs, if we get here, the power wasn't found in tech/force caches
         
         console.log('🌐 Fetching spell data...');
         const spell = await fetchSpellData(spellName);
@@ -11871,7 +12047,8 @@ async function loadTechPowers(force = false) {
             techPowersCache = {};
             powers.forEach(raw => {
                 if (!raw || !raw.name) return;
-                const key = raw.name.toLowerCase();
+                // Normalize key: lowercase, trim, normalize spaces (same as lookup)
+                const key = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
                 const levelInfo = normalizePowerLevel(raw.level, raw.category || raw.power_type || raw.type);
                 const castingTime = raw.casting_time || raw.casting_period || raw.castingPeriod || raw.castingTime || '';
                 const description = raw.description || raw.effect || '';
@@ -11897,6 +12074,7 @@ async function loadTechPowers(force = false) {
             });
             techPowersLoaded = true;
             console.log(`✅ Loaded ${Object.keys(techPowersCache).length} tech powers from ${url}`);
+            console.log(`📋 Sample tech power keys:`, Object.keys(techPowersCache).slice(0, 5));
             if (currentViewingCharacter && selectedStyle === 'starwars') {
                 renderCharacterSheetContent();
             }
@@ -11928,7 +12106,8 @@ async function loadForcePowers(force = false) {
             forcePowersCache = {};
             powers.forEach(raw => {
                 if (!raw || !raw.name) return;
-                const key = raw.name.toLowerCase();
+                // Normalize key: lowercase, trim, normalize spaces (same as lookup)
+                const key = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
                 const levelInfo = normalizePowerLevel(raw.level, raw.category || raw.power_type || raw.type);
                 const castingTime = raw.casting_time || raw.casting_period || raw.castingPeriod || raw.castingTime || '';
                 const description = raw.description || raw.effect || '';
