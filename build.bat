@@ -1,44 +1,60 @@
 @echo off
-title Building Gorgox Interactive
-color 0B
+REM Simple build script - Run this as Administrator to avoid Windows Defender issues
 
-REM Change to the directory where this batch file is located
-cd /d "%~dp0"
-
-echo.
 echo ========================================
-echo   BUILDING PROJECT
+echo   Building Release Version
 echo ========================================
 echo.
-echo Working directory: %CD%
-echo.
-echo This will take 3-5 minutes on first run...
+
+REM Check for admin - if not admin, warn user
+net session >nul 2>&1
+if %errorLevel% == 0 (
+    echo [OK] Running as Administrator
+    echo.
+    
+    REM Add target directory to Windows Defender exclusions
+    echo Adding build directory to Windows Defender exclusions...
+    powershell -Command "Add-MpPreference -ExclusionPath '%CD%\target' -ErrorAction SilentlyContinue" >nul 2>&1
+    echo [OK] Exclusion added
+    echo.
+) else (
+    echo [WARNING] Not running as Administrator
+    echo Windows Defender may block the build!
+    echo.
+    echo To fix: Right-click this file and select "Run as Administrator"
+    echo.
+    pause
+)
+
+echo Cleaning previous build...
+cargo clean
 echo.
 
-cargo build --release
+echo Waiting for file locks to clear...
+timeout /t 2 /nobreak >nul
+echo.
 
-if %ERRORLEVEL% EQU 0 (
+echo Starting build...
+cargo build --release --jobs 1
+
+if %errorLevel% == 0 (
     echo.
     echo ========================================
-    echo [+] BUILD SUCCESSFUL!
+    echo   Build Successful!
     echo ========================================
     echo.
-    echo To start the server, run: start.bat
-    echo Or just double-click: run.bat
+    echo Executable: target\release\gorgox_interactive.exe
     echo.
 ) else (
     echo.
     echo ========================================
-    echo [!] BUILD FAILED
+    echo   Build Failed
     echo ========================================
     echo.
-    echo Common fixes:
-    echo   - If "Access is denied": Run fix_antivirus.bat
-    echo   - If "cargo not found": Close terminal, open new one
-    echo   - See error message above for details
+    echo If you see LNK1104 errors:
+    echo   1. Run this file as Administrator
+    echo   2. Or manually add target folder to Windows Defender exclusions
     echo.
 )
 
 pause
-
-

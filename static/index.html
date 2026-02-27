@@ -31,7 +31,7 @@
         <div id="mainInterface" class="hidden">
             <!-- Header -->
     <header>
-        <h1>🎲 Gorgox Interactive <span style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v13.2 DUAL DB</span></h1>
+        <h1>🎲 Gorgox Interactive <span style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v14 DUAL DB</span></h1>
         <button onclick="showSpellTooltip('Fireball', {clientX: 300, clientY: 300})" style="background: #aa88ff; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🧪 Test Tooltip</button>
         <button onclick="populateCombatActionPanel()" style="background: #ff4444; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🔧 MANUAL POPULATE</button>
         <button onclick="console.log('CHARACTERS:', characters); console.log('MY CHARACTER ID:', myCharacterId);" style="background: #00ff00; color: black; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🐛 DEBUG DATA</button>
@@ -253,12 +253,14 @@
             </div>
         </div>
 
-        <!-- Character Manager Modal -->
+        <!-- Character Manager Modal (DM) / Choose who you're playing as (Player) -->
         <div id="characterManagerModal" class="modal">
             <div class="modal-content large">
-                <h2>Character Manager</h2>
-                <button onclick="showCreateCharacter()">Create Character</button>
-                <button onclick="showImportCharacter()">Import from JSON</button>
+                <h2 id="characterManagerModalTitle">Character Manager</h2>
+                <div id="characterManagerModalDmButtons" style="display: flex; gap: 8px; margin-bottom: 10px;">
+                    <button onclick="showCreateCharacter()">Create Character</button>
+                    <button onclick="showImportCharacter()">Import from JSON</button>
+                </div>
                 <div id="characterList"></div>
                 <button onclick="closeModal('characterManagerModal')">Close</button>
             </div>
@@ -889,7 +891,7 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
-    <script src="/static/app.js?v=13.3"></script>
+    <script src="/static/app.js?v=14"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

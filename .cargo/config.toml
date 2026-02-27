@@ -1,0 +1,18 @@
+[target.x86_64-pc-windows-msvc]
+# Use lld linker to potentially avoid Windows Defender issues
+# lld-link = true
+
+# Alternative: reduce linker flags that might trigger scanning
+rustflags = [
+    # Disable debug info in release builds to reduce file size
+    "-C", "debuginfo=0",
+    # Optimize for faster linking
+    "-C", "link-arg=/NOLOGO",
+]
+
+[build]
+# Build in temp directory to avoid OneDrive syncing issues
+# Uncomment below and set a path outside OneDrive if needed
+# target-dir = "C:/temp/rust-builds/gorgox-interactive"
+
+

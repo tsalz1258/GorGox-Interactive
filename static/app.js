@@ -1,3 +1,5 @@
+// GORGOX_APP_VERSION=select-character-required (no auto-assign) - if you see this in Sources, you have the latest JS
+(function () { try { console.log('%c[GorGox] app.js loaded - character select required (no auto Jaster)', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
 // Global state
 let ws = null;
 let selectedStyle = 'dnd'; // 'dnd' or 'starwars'
@@ -355,16 +357,17 @@ function handleServerMessage(message) {
                 document.getElementById('playerControls').classList.add('hidden');
                 console.log('DM MODE ACTIVATED - Full controls enabled, NO character selection');
             } else {
+                // Players: ensure no stale character selection so popup will show when characters load
+                myCharacterId = null;
                 // Show character selection for players (not DM)
                 document.getElementById('playerControls').classList.remove('hidden');
-                // Automatically show character selection modal when player connects
-                // Wait a bit for characters to load from server
+                // Show character selection modal soon; will show again when characters load if needed
                 setTimeout(() => {
-                    if (!myCharacterId) { // Only show if no character selected yet
-                        console.log('🎭 Auto-opening character selection for player');
+                    if (!isDM && !myCharacterId) {
+                        console.log('🎭 Auto-opening character selection for player (on connect)');
                         showCharacterManager();
                     }
-                }, 1000);
+                }, 600);
             }
             
             // Show refresh button when connected
@@ -1017,47 +1020,25 @@ function handleServerMessage(message) {
                     // If player has selected a character, try to match it
                     let myParticipant = null;
                     
+                    // Only use character player has already selected via "Select Character" - never auto-assign
                     if (myCharacterId) {
-                        // Try direct match
                         myParticipant = playerParticipants.find(p => p.entity_id === myCharacterId);
-                        if (myParticipant) {
-                            console.log('✅ Matched by entity_id');
-                        } else {
-                            // Try name match
+                        if (!myParticipant) {
                             const myChar = characters.find(c => c.id === myCharacterId);
                             if (myChar) {
                                 myParticipant = playerParticipants.find(p => p.name === myChar.name);
-                                if (myParticipant) {
-                                    console.log('✅ Matched by character name:', myChar.name);
-                                    myCharacterId = myParticipant.entity_id; // Update ID
-                                }
+                                if (myParticipant) myCharacterId = myParticipant.entity_id;
                             }
                         }
                     }
                     
-                    // If still no match and only 1 player, use that
-                    if (!myParticipant && playerParticipants.length === 1) {
-                        myParticipant = playerParticipants[0];
-                        myCharacterId = myParticipant.entity_id; // Update ID
-                        console.log('✅ Using single player participant:', myParticipant.name);
-                    }
-                    
-                    // If we have a match, prompt immediately
                     if (myParticipant) {
-                        console.log('🎲 PROMPTING FOR:', myParticipant.name, '(entity_id:', myParticipant.entity_id, ')');
+                        console.log('🎲 PROMPTING FOR:', myParticipant.name);
                         setTimeout(() => promptMyInitiative(), 100);
+                    } else if (!myCharacterId) {
+                        console.log('⚠️ Player has not selected a character yet - use Select Character button first');
                     } else {
-                        // Multiple players and no match - use first player or let them select character manually
-                        console.log('⚠️ Multiple players, using first participant or manual selection');
-                        if (playerParticipants.length > 0) {
-                            // Use first player participant as default
-                            const firstParticipant = playerParticipants[0];
-                            myCharacterId = firstParticipant.entity_id;
-                            console.log('✅ Using first participant:', firstParticipant.name);
-                            setTimeout(() => promptMyInitiative(), 100);
-                        } else {
-                            console.log('⚠️ No player participants found - player should select character manually');
-                        }
+                        console.log('⚠️ No matching participant for selected character');
                     }
                 } else {
                     console.error('❌ NO PLAYER PARTICIPANTS IN COMBAT!');
@@ -1552,41 +1533,13 @@ function handleServerMessage(message) {
                     updateInitiativeList();
                 }
                 
-                // Try to restore saved character selection after refresh
-                if (!isDM && !myCharacterId && characters.length > 0) {
-                    const savedCharacterId = localStorage.getItem('savedCharacterId');
-                    const savedPlayerName = localStorage.getItem('savedPlayerName');
-                    
-                    if (savedCharacterId && savedPlayerName === myPlayerName) {
-                        const savedChar = characters.find(c => c.id === savedCharacterId);
-                        if (savedChar) {
-                            console.log('🔄 Restoring saved character selection:', savedChar.name);
-                            // Restore character selection without showing alert
-                            myCharacterId = savedCharacterId;
-                            sendMessage({
-                                type: 'SelectCharacter',
-                                character_id: savedCharacterId
-                            });
-                            const myPlayer = connectedPlayers.find(p => p && p.name === myPlayerName);
-                            if (myPlayer) {
-                                myPlayer.character_name = savedChar.name;
-                            }
-                            renderPlayerList();
-                            document.getElementById('playerInfo').textContent = `Playing as: ${savedChar.name}`;
-                            addLogEntry(`Restored character: ${savedChar.name}`, 'info');
-                            return; // Don't show character selection modal
-                        } else {
-                            console.log('⚠️ Saved character not found, clearing localStorage');
-                            localStorage.removeItem('savedCharacterId');
-                            localStorage.removeItem('savedPlayerName');
-                        }
-                    }
-                    
-                    // Auto-show character selection for players who haven't selected yet
+                // For players: show character selection modal when characters load. Do NOT restore from localStorage
+                // so the player stays "blank" until they click Select Character and choose who they're playing as.
+                if (!isDM && characters.length > 0) {
                     const modal = document.getElementById('characterManagerModal');
                     if (modal && !modal.classList.contains('active')) {
-                        console.log('🎭 Auto-opening character selection - characters loaded');
-                        setTimeout(() => showCharacterManager(), 100);
+                        console.log('🎭 Auto-opening character selection - characters loaded (CharacterList)');
+                        setTimeout(() => showCharacterManager(), 50);
                     }
                 }
             }
@@ -1842,6 +1795,14 @@ function loadInitialData() {
             characters = data || [];
             renderCharacterList();
             syncCharactersWithServer();
+            // For players: show character selection modal when characters load. Do NOT restore from localStorage.
+            if (!isDM && characters.length > 0) {
+                const modal = document.getElementById('characterManagerModal');
+                if (modal && !modal.classList.contains('active')) {
+                    console.log('🎭 Auto-opening character selection - characters loaded (API)');
+                    setTimeout(() => showCharacterManager(), 50);
+                }
+            }
         })
         .catch(err => {
             console.error('❌ Error loading characters from API:', err);
@@ -7549,8 +7510,11 @@ function handleCustomSpellsList(message) {
 }
 
 function showCharacterManager() {
+    const titleEl = document.getElementById('characterManagerModalTitle');
+    const dmButtonsEl = document.getElementById('characterManagerModalDmButtons');
+    if (titleEl) titleEl.textContent = isDM ? 'Character Manager' : 'Choose who you\'re playing as';
+    if (dmButtonsEl) dmButtonsEl.style.display = isDM ? 'flex' : 'none';
     document.getElementById('characterManagerModal').classList.add('active');
-    // Request fresh character list to ensure we have the correct style
     sendMessage({ type: 'ListCharacters' });
     renderCharacterList();
 }
@@ -7566,20 +7530,36 @@ function renderCharacterList() {
         return;
     }
     
-    // Check if this is player character selection (not DM viewing)
-    const isSelectionMode = !isDM && !myCharacterId;
+    // DM: row opens character sheet. Players: row selects who you're playing as (no sheet - use "My Character Sheet" for that).
+    const isCurrentCharacter = (c) => c.id === myCharacterId;
     
     characters.forEach(char => {
         const item = document.createElement('div');
         item.className = 'entity-item';
         item.style.position = 'relative';
+        if (!isDM && isCurrentCharacter(char)) {
+            item.style.border = '2px solid #44ff44';
+            item.style.borderRadius = '6px';
+        }
         
-        // Main clickable area
+        const currentLabel = !isDM && isCurrentCharacter(char) ? ' <span style="color:#44ff44;font-weight:bold;">(Current)</span>' : '';
         const content = document.createElement('div');
         content.style.cursor = 'pointer';
-        content.onclick = () => showCharacterSheet(char, isSelectionMode); // Pass selection mode flag
+        if (isDM) {
+            content.onclick = () => showCharacterSheet(char, false);
+        } else {
+            // Select Character: clicking row = choose this character (updates top-right "Playing as"); no character sheet
+            content.onclick = () => {
+                if (char.id === myCharacterId) {
+                    closeModal('characterManagerModal');
+                    return;
+                }
+                selectCharacterForPlay(char.id);
+                closeModal('characterManagerModal');
+            };
+        }
         content.innerHTML = `
-            <h4>${char.name}</h4>
+            <h4>${char.name}${currentLabel}</h4>
             <p style="font-size: 11px; opacity: 0.8; margin: 4px 0;">${char.class} Level ${char.level} - ${char.player_name}</p>
             <div class="entity-stats">
                 <div class="entity-stat">HP ${char.max_hp}</div>
@@ -7602,8 +7582,8 @@ function renderCharacterList() {
             item.appendChild(deleteBtn);
         }
         
-        // Select button (Player selection mode only)
-        if (isSelectionMode) {
+        // Select button: for players, same as clicking the row (select who you're playing as)
+        if (!isDM && !isCurrentCharacter(char)) {
             const selectBtn = document.createElement('button');
             selectBtn.textContent = '✅ Select';
             selectBtn.style.cssText = 'position: absolute; bottom: 10px; right: 10px; background: #44ff44; color: #000; font-weight: bold; border: none; padding: 5px 15px; border-radius: 3px; cursor: pointer; font-size: 12px;';
@@ -7699,13 +7679,13 @@ function selectCharacterForPlay(charId) {
     renderPlayerList();
     
     closeModal('characterManagerModal');
-    addLogEntry(`Now controlling: ${char.name}`, 'info');
+    addLogEntry(`Welcome! You're playing as ${char.name}.`, 'info');
     
-    // Update player info
+    // Update player info so they're always greeted with who they're playing as
     document.getElementById('playerInfo').textContent = `Playing as: ${char.name}`;
     
     // Show confirmation
-    alert(`✅ Character Selected!\n\n${char.name}\n${char.class} Level ${char.level}\n\nYou're ready to play!`);
+    alert(`✅ Character Selected!\n\nYou're playing as: ${char.name}\n${char.class} Level ${char.level}\n\nYou're ready to play!`);
 }
 
 function showCharacterSelect() {
@@ -10250,16 +10230,13 @@ let currentSheetSelectionMode = false;
 let characterEditMode = false;
 
 function showCharacterSheet(char, isSelectionMode = false) {
-    // PERMISSION CHECK: Players can only view their own character sheet
-    // DM can view any character sheet
-    // isSelectionMode allows viewing for selection purposes (like choosing a character)
-    if (!isSelectionMode && !isDM) {
-        // Check if this is the player's own character
-        if (char.id !== myCharacterId) {
-            console.warn('Players can only view their own character sheet');
-            alert('You can only view your own character sheet. Ask the DM if you need to see another player\'s character.');
-            return;
-        }
+    // DM can always view. Players can view any character sheet so they can choose/change
+    // who to play as (open list, view a character, click "Select This Character").
+    if (isDM) { /* always allow */ }
+    else if (char.id === myCharacterId) { /* own character, allow */ }
+    else {
+        // Player viewing another character: allow so they can select them to play as
+        isSelectionMode = true;
     }
     
     currentViewingCharacter = char;
@@ -11681,7 +11658,7 @@ function applyTheme(style) {
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #1a1a3a 0%, #0a0a2a 100%)');
         
         // Update header
-        document.querySelector('h1').innerHTML = '⭐ Gorgox Interactive <span style="background: #4a9eff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">STAR WARS v13.1</span>';
+        document.querySelector('h1').innerHTML = '⭐ Gorgox Interactive <span style="background: #4a9eff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">STAR WARS v14</span>';
     } else {
         // D&D theme - traditional fantasy green/gold
         root.style.setProperty('--primary-color', '#4CAF50');
@@ -11691,7 +11668,7 @@ function applyTheme(style) {
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%)');
         
         // Keep D&D header
-        document.querySelector('h1').innerHTML = '🎲 Gorgox Interactive <span style="background: #ffaa00; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v13.1 COMPLETE</span>';
+        document.querySelector('h1').innerHTML = '🎲 Gorgox Interactive <span style="background: #ffaa00; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v14 COMPLETE</span>';
     }
 }
 

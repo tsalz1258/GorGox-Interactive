@@ -1,0 +1,43 @@
+========================================
+  QUICK BUILD INSTRUCTIONS
+========================================
+
+The build fails because Windows Defender locks files during compilation.
+
+SOLUTION: Run BUILD.bat as Administrator (one time)
+
+1. Right-click BUILD.bat
+2. Select "Run as Administrator"
+3. Wait for build to complete
+
+That's it! The script automatically:
+- Adds the build folder to Windows Defender exclusions
+- Cleans previous builds
+- Builds the release version
+
+========================================
+  Alternative: Manual Method
+========================================
+
+If BUILD.bat doesn't work, manually add exclusion:
+
+1. Open Windows Security (Windows + I)
+2. Go to: Privacy & Security → Windows Security
+3. Click: Virus & threat protection → Manage settings
+4. Scroll to: Exclusions → Add or remove exclusions
+5. Click: + Add an exclusion → Folder
+6. Add this folder: [Your project path]\target
+7. Run: cargo build --release
+
+========================================
+  Why This Happens
+========================================
+
+Windows Defender scans .exe files as they're created during compilation.
+This causes file locks that prevent the linker from working.
+
+Adding the exclusion tells Windows Defender to ignore the build folder.
+
+========================================
+
+

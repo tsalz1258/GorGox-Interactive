@@ -34,3 +34,8 @@ open = "5.0"
 
 [dev-dependencies]
 
+[profile.release]
+# Reduce file locking issues with incremental builds
+incremental = false
+# Use fewer threads to reduce file contention
+codegen-units = 1

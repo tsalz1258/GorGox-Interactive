@@ -1,0 +1,51 @@
+========================================
+  EXACT PATHS OF FILES BEING EDITED
+========================================
+
+All paths are under this project folder (where start.bat lives):
+
+  C:\Users\tyler\OneDrive\Desktop\DND\gorgox-interactive-github\GorGox-Interactive
+
+FILES THAT WERE CHANGED:
+------------------------
+
+1) JavaScript (character select, no sheet on Select Character):
+   C:\Users\tyler\OneDrive\Desktop\DND\gorgox-interactive-github\GorGox-Interactive\static\app.js
+
+2) HTML (modal title, DM buttons wrapper):
+   C:\Users\tyler\OneDrive\Desktop\DND\gorgox-interactive-github\GorGox-Interactive\static\index.html
+
+The server started by start.bat serves from the "static" folder
+inside the SAME folder where start.bat is located.
+
+========================================
+  CRITICAL: Same folder as start.bat?
+========================================
+
+When you double-click start.bat, it does:
+  cd /d "%~dp0"
+  ... then runs target\release\gorgox_interactive.exe
+
+So the server runs with "current directory" = the folder that
+contains start.bat. The Rust server then serves:
+  ./static/app.js
+  ./static/index.html
+
+If your start.bat is in a DIFFERENT folder (e.g. a copy of the
+project somewhere else), then the server is serving THAT folder's
+static files, NOT the folder you're editing in Cursor.
+
+CHECK:
+------
+1. Right-click start.bat -> Open file location (or note the path
+   in the title bar when the command window opens).
+2. That folder must be exactly:
+   C:\Users\tyler\OneDrive\Desktop\DND\gorgox-interactive-github\GorGox-Interactive
+3. In Cursor, your workspace should be that same folder. Check
+   File -> Open Folder and confirm the path.
+
+If they differ, either:
+- Run start.bat from the folder you're editing in Cursor, or
+- Open in Cursor the same folder where start.bat lives.
+
+========================================

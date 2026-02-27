@@ -1,0 +1,45 @@
+========================================
+  SEEING JAVASCRIPT CHANGES (NO REBUILD)
+========================================
+
+YES - start.bat is correct. Use it to run the server.
+
+JavaScript (static/app.js) is NOT compiled. The server serves it as-is.
+You do NOT need to rebuild. You only need the browser to load the NEW file.
+
+----------------------------------------
+STEP 1: Hard refresh so the browser loads new app.js
+----------------------------------------
+1. Close ALL browser tabs that have http://localhost:3000 open.
+2. Start the app: double-click start.bat.
+3. Open ONE new tab and go to: http://localhost:3000
+4. Press:  Ctrl + Shift + R   (or  Ctrl + F5 )
+   This forces the browser to skip cache and load the latest app.js.
+
+   If you STILL don't see changes: In static/index.html find the line
+   <script src="/static/app.js?v=14"></script>  and change ?v=14 to
+   ?v=15 (or any new number). Save, then refresh. The ?v= number
+   busts cache so the browser fetches app.js again.
+
+----------------------------------------
+STEP 2: Confirm the new code is running
+----------------------------------------
+1. Press F12 to open Developer Tools.
+2. Open the "Console" tab.
+3. You should see a blue message:
+   [GorGox] app.js loaded - character select required (no auto Jaster)
+
+   If you see that = you have the latest code.
+   If you do NOT see it = you're still on cached old code. Try:
+   - Close all tabs, run start.bat again, open a new tab to localhost:3000, Ctrl+Shift+R again.
+   - Or in DevTools: Application (or Storage) > Clear site data for localhost.
+
+----------------------------------------
+Expected behavior with the latest code
+----------------------------------------
+- When you log in as a player, you should see ONLY your name (no "Jaster" or "Playing as" until you choose).
+- Click "Select Character" to open the list.
+- Click a character, then "Select" (or "Select This Character" in the sheet) to become that character.
+- Then the UI shows "Playing as: [that character]".
+
+========================================
