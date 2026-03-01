@@ -27,6 +27,15 @@ let turnStartPosition = null;
 let initiativePromptParticipant = null;
 let initiativePromptReminderTimeout = null;
 
+// Only auto-show "Select Character" once per connection; after that only the button opens it
+let hasAutoShownCharacterSelectThisSession = false;
+
+// WebSocket reconnection for slow/unstable connections (e.g. remote players)
+let reconnectAttempts = 0;
+let reconnectTimeoutId = null;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_INITIAL_DELAY_MS = 2000;
+
 // Spell data cache
 let spellCache = {};
 let spellTooltipTimeout = null;
@@ -135,6 +144,7 @@ function performConnection(playerName, isDmValue, style) {
     myPlayerName = playerName;
     isDM = isDmValue;
     selectedStyle = style;
+    cancelReconnect();
     
     // Connect WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -170,18 +180,6 @@ function performConnection(playerName, isDmValue, style) {
     ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         updateConnectionStatus(false);
-        
-        // If auto-reconnecting and connection fails, show connection modal
-        const autoReconnect = localStorage.getItem('autoReconnect');
-        if (autoReconnect === 'true') {
-            console.log('⚠️ Auto-reconnect failed, showing connection modal');
-            const connectionModal = document.getElementById('connectionModal');
-            if (connectionModal) {
-                connectionModal.classList.add('active');
-                connectionModal.style.display = '';
-            }
-            localStorage.removeItem('autoReconnect'); // Clear flag so it doesn't retry
-        }
     };
     
     ws.onclose = (event) => {
@@ -189,19 +187,41 @@ function performConnection(playerName, isDmValue, style) {
         if (typeof addLogEntry === 'function') {
             addLogEntry('Disconnected from server', 'info');
         }
+        ws = null;
         
-        // If auto-reconnecting and connection closes unexpectedly, show connection modal
+        // Auto-reconnect for dropped connections (e.g. slow/unstable network) so players see updates again
         const autoReconnect = localStorage.getItem('autoReconnect');
-        if (autoReconnect === 'true' && !event.wasClean) {
-            console.log('⚠️ Auto-reconnect closed unexpectedly, showing connection modal');
-            const connectionModal = document.getElementById('connectionModal');
-            if (connectionModal) {
-                connectionModal.classList.add('active');
-                connectionModal.style.display = '';
-            }
-            localStorage.removeItem('autoReconnect'); // Clear flag so it doesn't retry
+        if (autoReconnect === 'true' && !event.wasClean && myPlayerName) {
+            scheduleReconnect();
         }
     };
+}
+
+function scheduleReconnect() {
+    if (reconnectTimeoutId) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        reconnectAttempts = 0;
+        return;
+    }
+    const delay = Math.min(RECONNECT_INITIAL_DELAY_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_DELAY_MS);
+    reconnectAttempts++;
+    console.log('🔄 Reconnecting in ' + (delay / 1000) + 's (attempt ' + reconnectAttempts + ')...');
+    addLogEntry('Reconnecting in ' + (delay / 1000) + 's...', 'info');
+    reconnectTimeoutId = setTimeout(() => {
+        reconnectTimeoutId = null;
+        if (ws && ws.readyState === WebSocket.OPEN) return;
+        console.log('🔄 Attempting to reconnect...');
+        addLogEntry('Reconnecting...', 'info');
+        performConnection(myPlayerName, isDM, selectedStyle);
+    }, delay);
+}
+
+function cancelReconnect() {
+    if (reconnectTimeoutId) {
+        clearTimeout(reconnectTimeoutId);
+        reconnectTimeoutId = null;
+    }
+    reconnectAttempts = 0;
 }
 
 // Also assign to window for global access
@@ -239,8 +259,55 @@ function buildCharacterUpdatePayload(character) {
     };
 }
 
+// Parse custom enemy actions from any supported format into [{ name, description }]
+function parseCustomEnemyActions(enemy) {
+    if (!enemy) return [];
+    let raw = enemy.actions;
+    if (raw === undefined || raw === null) return [];
+    if (typeof raw !== 'string') {
+        raw = JSON.stringify(raw);
+    }
+    raw = (raw || '').trim();
+    if (!raw) return [];
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (_) {
+        return [];
+    }
+    if (Array.isArray(parsed)) {
+        return parsed.map(a => ({
+            name: (a && (a.name || a.title)) || 'Action',
+            description: (a && (a.description || a.desc || a.text)) != null ? String(a.description || a.desc || a.text) : ''
+        }));
+    }
+    if (parsed && typeof parsed === 'object') {
+        if (Array.isArray(parsed.actions)) {
+            return parsed.actions.map(a => ({
+                name: (a && (a.name || a.title)) || 'Action',
+                description: (a && (a.description || a.desc || a.text)) != null ? String(a.description || a.desc || a.text) : ''
+            }));
+        }
+        const obj = parsed.actions && typeof parsed.actions === 'object' ? parsed.actions : parsed;
+        return Object.entries(obj).filter(([k]) => k && typeof k === 'string').map(([name, val]) => ({
+            name: name,
+            description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
+        }));
+    }
+    return [];
+}
+
+// True if name looks like a placed token instance (e.g. "Goblin 1") — never save these to the database
+function isInstanceStyleName(name) {
+    if (!name || typeof name !== 'string') return false;
+    const t = name.trim();
+    const idx = t.lastIndexOf(' ');
+    return idx > 0 && /^\d+$/.test(t.slice(idx + 1));
+}
+
 function buildEnemyServerPayload(enemy) {
     if (!enemy) return null;
+    const portrait = enemy.portrait_url || enemy.local_portrait || null;
     return {
         id: enemy.id,
         name: enemy.name,
@@ -258,6 +325,7 @@ function buildEnemyServerPayload(enemy) {
         speed: enemy.speed,
         actions: typeof enemy.actions === 'string' ? enemy.actions : JSON.stringify(enemy.actions || {}),
         description: enemy.description || '',
+        portrait_url: portrait,
         style: enemy.style
     };
 }
@@ -316,6 +384,7 @@ function handleServerMessage(message) {
         case 'Connected':
             console.log('✅ Connected message received! Session ID:', message.session_id);
             sessionId = message.session_id;
+            reconnectAttempts = 0; // Reset so next drop uses initial backoff
             // DON'T overwrite isDM - it's already set correctly from connect()
             updateConnectionStatus(true);
             
@@ -354,16 +423,19 @@ function handleServerMessage(message) {
             if (isDM) {
                 // Ensure DM controls are ALWAYS visible and NEVER show character selection
                 document.getElementById('dmControls').classList.remove('hidden');
+                const shutdownSection = document.getElementById('dmShutdownSection');
+                if (shutdownSection) shutdownSection.classList.remove('hidden');
+                updatePlayerConnectionLink();
                 document.getElementById('playerControls').classList.add('hidden');
                 console.log('DM MODE ACTIVATED - Full controls enabled, NO character selection');
             } else {
-                // Players: ensure no stale character selection so popup will show when characters load
+                // Players: allow one auto-open of character select this session; then only button opens it
+                hasAutoShownCharacterSelectThisSession = false;
                 myCharacterId = null;
-                // Show character selection for players (not DM)
                 document.getElementById('playerControls').classList.remove('hidden');
-                // Show character selection modal soon; will show again when characters load if needed
                 setTimeout(() => {
-                    if (!isDM && !myCharacterId) {
+                    if (!isDM && !myCharacterId && !hasAutoShownCharacterSelectThisSession) {
+                        hasAutoShownCharacterSelectThisSession = true;
                         console.log('🎭 Auto-opening character selection for player (on connect)');
                         showCharacterManager();
                     }
@@ -379,11 +451,22 @@ function handleServerMessage(message) {
             document.getElementById('playerInfo').textContent = 
                 `${myPlayerName} ${message.is_dm ? '(DM)' : ''}`;
             
-            addLogEntry('Connected to game! Waiting for game state...', 'info');
-            // Clear characters on connect to ensure fresh start
+            addLogEntry('Connected to game! Requesting game state...', 'info');
             characters = [];
-            // Load data with current selected style
             loadInitialData();
+            // Request full state so slow/high-latency players get map, tokens, combat reliably
+            setTimeout(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    console.log('🔄 Requesting full state (join sync)');
+                    sendMessage({ type: 'RequestFullState' });
+                }
+            }, 400);
+            setTimeout(() => {
+                if (ws && ws.readyState === WebSocket.OPEN && tokens.length === 0 && !currentMap) {
+                    console.log('🔄 Re-requesting full state (slow connection)');
+                    sendMessage({ type: 'RequestFullState' });
+                }
+            }, 2500);
             break;
             
         case 'PlayerJoined':
@@ -435,13 +518,13 @@ function handleServerMessage(message) {
             
         case 'MapLoaded':
             currentMap = message.map;
-            if (currentMap.width && currentMap.height) {
+            if (canvas && currentMap.width && currentMap.height) {
                 canvas.width = currentMap.width;
                 canvas.height = currentMap.height;
             }
-            // Log the path we receive
             console.log('🗺️ MapLoaded - image_path:', message.map.image_path);
             loadMapImage(message.map.image_path);
+            renderCanvas(); // Draw immediately so tokens show even before map image loads
             addLogEntry(`Map loaded: ${message.map.name}`, 'info');
             break;
             
@@ -943,7 +1026,8 @@ function handleServerMessage(message) {
             
             if (isDM) {
                 // Show DM controls
-                document.getElementById('dmCombatControls').classList.remove('hidden');
+                const dmCtrl = document.getElementById('dmCombatControls');
+                if (dmCtrl) dmCtrl.classList.remove('hidden');
                 console.log('✅ DM combat controls shown');
                 
                 // Auto-roll for all enemies/NPCs automatically
@@ -1237,8 +1321,10 @@ function handleServerMessage(message) {
             updateInitiativeList();
             updateCombatStatus();
             addLogEntry('⚔️ Combat has ended', 'info');
-            document.getElementById('dmCombatControls').classList.add('hidden');
-            document.getElementById('playerCombatControls').classList.add('hidden');
+            const dmCombatEl = document.getElementById('dmCombatControls');
+            const playerCombatEl = document.getElementById('playerCombatControls');
+            if (dmCombatEl) dmCombatEl.classList.add('hidden');
+            if (playerCombatEl) playerCombatEl.classList.add('hidden');
             renderCanvas(); // Redraw to clear movement range
             break;
             
@@ -1533,11 +1619,11 @@ function handleServerMessage(message) {
                     updateInitiativeList();
                 }
                 
-                // For players: show character selection modal when characters load. Do NOT restore from localStorage
-                // so the player stays "blank" until they click Select Character and choose who they're playing as.
-                if (!isDM && characters.length > 0) {
+                // For players: auto-show character selection at most ONCE per session when characters first load.
+                if (!isDM && characters.length > 0 && !hasAutoShownCharacterSelectThisSession) {
                     const modal = document.getElementById('characterManagerModal');
                     if (modal && !modal.classList.contains('active')) {
+                        hasAutoShownCharacterSelectThisSession = true;
                         console.log('🎭 Auto-opening character selection - characters loaded (CharacterList)');
                         setTimeout(() => showCharacterManager(), 50);
                     }
@@ -1582,14 +1668,17 @@ function handleServerMessage(message) {
             
             const finalNPCInstances = Array.from(npcInstanceMap.values());
             
-            // Merge: server templates + ALL local NPC instances
-            // NPC instances are NEVER overwritten by server templates (they have unique IDs)
+            // Preserve custom enemy instances (spawned from Enemy Database) - same as NPC instances
+            const customEnemyInstances = enemies.filter(e => e && e.isCustomInstance === true);
+            
+            // Merge: server templates + ALL local NPC instances + ALL custom enemy instances
             enemies = [
                 ...serverEnemies.filter(e => !npcInstanceMap.has(e.id)), // Server templates that aren't NPC instances
-                ...finalNPCInstances // ALL NPC instances preserved
+                ...finalNPCInstances, // ALL NPC instances preserved
+                ...customEnemyInstances // ALL custom enemy instances (multiple of same type allowed)
             ];
             
-            console.log('✅ Merged enemies: ', serverEnemies.length, 'server templates +', finalNPCInstances.length, 'NPC instances =', enemies.length, 'total');
+            console.log('✅ Merged enemies: ', serverEnemies.length, 'server templates +', finalNPCInstances.length, 'NPC instances +', customEnemyInstances.length, 'custom instances =', enemies.length, 'total');
             console.log('📋 NPC instance IDs preserved:', finalNPCInstances.map(n => `${n.id}:${n.name}${n.npcData ? ' (has data)' : ' (no data)'}`));
             renderEnemyList();
             break;
@@ -1791,14 +1880,16 @@ function loadInitialData() {
         })
         .then(data => {
             console.log('📥 API returned', data ? data.length : 0, 'characters for style:', selectedStyle);
-            // Force update with API data - this is the authoritative source
-            characters = data || [];
+            // Prefer server-sent CharacterList if we already have characters (avoids overwriting state from RequestFullState/Connect)
+            const fromServer = characters.length > 0;
+            if (!fromServer) characters = data || [];
             renderCharacterList();
             syncCharactersWithServer();
-            // For players: show character selection modal when characters load. Do NOT restore from localStorage.
-            if (!isDM && characters.length > 0) {
+            // For players: auto-show character selection at most ONCE per session when characters first load.
+            if (!isDM && characters.length > 0 && !hasAutoShownCharacterSelectThisSession) {
                 const modal = document.getElementById('characterManagerModal');
                 if (modal && !modal.classList.contains('active')) {
+                    hasAutoShownCharacterSelectThisSession = true;
                     console.log('🎭 Auto-opening character selection - characters loaded (API)');
                     setTimeout(() => showCharacterManager(), 50);
                 }
@@ -2603,17 +2694,19 @@ function drawToken(token) {
             portraitImg = tokenImages[char.id];
         }
     } else if (token.entity_type === 'Enemy') {
-        // Check enemies list for portrait
-        const enemy = enemies.find(e => e.id === token.entity_id);
-        if (enemy && enemy.local_portrait) {
+        // Portrait: token.entity_id can be template id or instance id; check both
+        const enemyByTemplate = enemies.find(e => e.id === token.entity_id);
+        const portraitSrc = enemyByTemplate && (enemyByTemplate.portrait_url || enemyByTemplate.local_portrait);
+        if (portraitSrc) {
             hasPortrait = true;
             borderColor = '#ff4444'; // Red for enemies
-            if (!tokenImages[enemy.id]) {
-                tokenImages[enemy.id] = new Image();
-                tokenImages[enemy.id].src = enemy.local_portrait;
-                tokenImages[enemy.id].onload = () => renderCanvas();
+            const cacheKey = 'enemy-' + (enemyByTemplate.id || token.entity_id);
+            if (!tokenImages[cacheKey]) {
+                tokenImages[cacheKey] = new Image();
+                tokenImages[cacheKey].src = portraitSrc;
+                tokenImages[cacheKey].onload = () => renderCanvas();
             }
-            portraitImg = tokenImages[enemy.id];
+            portraitImg = tokenImages[cacheKey];
         }
     }
     
@@ -3222,11 +3315,12 @@ function updateTokenInfo() {
                          (participant ? participant.max_hp : entityData.max_hp);
             
             if (canViewFullDetails) {
-                // DM or own token: Show full details
+                // DM or own token: Show full details with editable HP (persists even outside combat)
+                const escapedEntityId = escapeJs(selectedToken.entity_id);
                 info += `<h4>⚔️ ${entityData.name}</h4>`;
                 info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
                 info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
-                info += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#44ff44'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
+                info += `<div class="token-stat"><span>HP:</span><input type="number" min="0" max="${maxHp}" value="${currentHp}" style="width: 50px; padding: 2px 6px; background: #2a2a2a; color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#44ff44'}; border: 1px solid #444; border-radius: 3px; font-weight: bold;" onchange="persistTokenCharacterHP('${escapedEntityId}', this.value)" onblur="persistTokenCharacterHP('${escapedEntityId}', this.value)"/> / <span>${maxHp}</span></div>`;
                 const hpPercent = (currentHp / maxHp) * 100;
                 const hpBarId = `hp-bar-${selectedToken.entity_id}`;
                 const previousHp = previousHpValues.get(selectedToken.entity_id);
@@ -3374,8 +3468,8 @@ function updateTokenInfo() {
                     }
                 }
                 
-                // Add button to view full character sheet if this is an NPC (only for DM)
-                if (enemy.isNPC && enemy.npcData && isDM) {
+                // Add button to view full character sheet (NPC or custom enemy, DM only)
+                if (isDM) {
                     info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
                     info += `<button onclick="showNPCCharacterSheet('${selectedToken.entity_id}')" style="width: 100%; padding: 8px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; margin-top: 10px;">📋 View Full Character Sheet</button>`;
                 }
@@ -3438,7 +3532,11 @@ function toggleCombat() {
     
     if (combatState.active) {
         if (confirm('End combat?')) {
+            console.log('Sending EndCombat (from Toggle Combat)');
             sendMessage({ type: 'EndCombat' });
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                console.warn('WebSocket not open — EndCombat may not have been sent');
+            }
         }
     } else {
         if (!tokens || tokens.length === 0) {
@@ -3782,8 +3880,20 @@ function manuallyAdvanceTurn() {
 
 function endCombat() {
     if (confirm('End combat?')) {
+        console.log('Sending EndCombat');
         sendMessage({ type: 'EndCombat' });
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.warn('WebSocket not open — EndCombat may not have been sent');
+        }
     }
+}
+
+/** DM only: request the server to shut down gracefully. Server will stop after handling this. */
+function requestServerShutdown() {
+    if (!isDM) return;
+    if (!confirm('Shut down the server? All players will be disconnected.')) return;
+    sendMessage({ type: 'RequestShutdown' });
+    addLogEntry('Shutdown requested. Server will stop shortly.', 'info');
 }
 
 // Player ends their turn
@@ -3831,7 +3941,7 @@ function updatePlayerTurnControls() {
         // Only show "End Turn" button on your turn
         if (isMyTurn) {
             console.log('🎯 IT\'S MY TURN! Showing end turn button');
-            controlsDiv.classList.remove('hidden');
+            if (controlsDiv) controlsDiv.classList.remove('hidden');
         } else {
             controlsDiv.classList.add('hidden');
         }
@@ -4672,9 +4782,9 @@ function updatePlayerTurnControls() {
     const controlsDiv = document.getElementById('playerCombatControls');
     
     if (combatState.active && isMyTurn) {
-        controlsDiv.classList.remove('hidden');
+        if (controlsDiv) controlsDiv.classList.remove('hidden');
     } else {
-        controlsDiv.classList.add('hidden');
+        if (controlsDiv) controlsDiv.classList.add('hidden');
     }
 }
 
@@ -4716,6 +4826,27 @@ function animateHealthBar(token, oldHp, newHp, maxHp) {
     }, 10);
 }
 
+/** When HP is edited in the token info panel (outside combat), update character and persist to server. */
+function persistTokenCharacterHP(characterId, value) {
+    const num = parseInt(value, 10);
+    if (isNaN(num) || num < 0) return;
+    const char = characters.find(c => c.id === characterId);
+    if (!char) return;
+    const newHp = Math.min(Math.max(0, num), char.max_hp || 999);
+    char.current_hp = newHp;
+    const token = tokens.find(t => t.entity_type === 'Player' && t.entity_id === characterId);
+    if (token) {
+        const participant = combatState.participants.find(p => p.id === token.id);
+        if (participant) {
+            participant.current_hp = newHp;
+            updateInitiativeList();
+        }
+    }
+    sendMessage({ type: 'UpdateCharacterHP', character_id: characterId, current_hp: newHp });
+    if (selectedToken && selectedToken.entity_id === characterId) updateTokenInfo();
+    renderCanvas();
+}
+
 function updateCombatParticipantHP(targetId, newHp) {
     const participant = combatState.participants.find(p => p.id === targetId);
     if (participant) {
@@ -4723,12 +4854,14 @@ function updateCombatParticipantHP(targetId, newHp) {
         updateInitiativeList();
     }
     
-    // FIX: Also update character data for players
+    // FIX: Also update character data for players and persist to server so HP survives refresh
     const token = tokens.find(t => t.id === targetId);
     if (token && token.entity_type === 'Player') {
         const char = characters.find(c => c.id === token.entity_id);
         if (char) {
             char.current_hp = newHp;
+            const payload = buildCharacterUpdatePayload(char);
+            if (payload) sendMessage({ type: 'UpdateCharacter', character: payload });
         }
     }
     
@@ -5430,7 +5563,56 @@ function filterNPCList() {
 }
 
 function showCreateEnemy() {
+    document.getElementById('createEnemyModalTitle').textContent = 'Create Enemy';
+    document.getElementById('enemyFormSubmitBtn').textContent = 'Create';
+    document.getElementById('enemyEditId').value = '';
+    document.getElementById('enemyForm').reset();
+    document.getElementById('enemyPortrait').value = '';
+    const preview = document.getElementById('enemyPortraitPreview');
+    if (preview) preview.innerHTML = '';
     document.getElementById('createEnemyModal').classList.add('active');
+}
+
+function showEditEnemy(enemy) {
+    if (!enemy || !enemy.id) return;
+    document.getElementById('createEnemyModalTitle').textContent = 'Edit Enemy';
+    document.getElementById('enemyFormSubmitBtn').textContent = 'Save changes';
+    document.getElementById('enemyEditId').value = enemy.id;
+    document.getElementById('enemyName').value = enemy.name || '';
+    document.getElementById('enemyType').value = enemy.creature_type || '';
+    document.getElementById('enemyCR').value = enemy.challenge_rating ?? '';
+    document.getElementById('enemyHP').value = enemy.max_hp ?? '';
+    document.getElementById('enemyAC').value = enemy.armor_class ?? '';
+    document.getElementById('enemyInitBonus').value = enemy.initiative_bonus ?? 0;
+    document.getElementById('enemyStr').value = enemy.strength ?? 10;
+    document.getElementById('enemyDex').value = enemy.dexterity ?? 10;
+    document.getElementById('enemyCon').value = enemy.constitution ?? 10;
+    document.getElementById('enemyInt').value = enemy.intelligence ?? 10;
+    document.getElementById('enemyWis').value = enemy.wisdom ?? 10;
+    document.getElementById('enemyCha').value = enemy.charisma ?? 10;
+    document.getElementById('enemySpeed').value = enemy.speed ?? 30;
+    document.getElementById('enemyActions').value = enemy.actions || '{}';
+    document.getElementById('enemyDescription').value = enemy.description || '';
+    document.getElementById('enemyPortrait').value = '';
+    const preview = document.getElementById('enemyPortraitPreview');
+    if (preview) {
+        const portraitSrc = enemy.portrait_url || enemy.local_portrait;
+        if (portraitSrc) {
+            preview.innerHTML = '<img src="' + portraitSrc + '" alt="Current portrait" style="max-width: 100px; max-height: 100px; border-radius: 8px; border: 2px solid #4a9eff;">';
+        } else {
+            preview.innerHTML = '<span style="opacity: 0.7;">No portrait</span>';
+        }
+    }
+    document.getElementById('createEnemyModal').classList.add('active');
+}
+
+function saveEnemyForm() {
+    const editId = document.getElementById('enemyEditId').value.trim();
+    if (editId) {
+        updateEnemy();
+    } else {
+        createEnemy();
+    }
 }
 
 function showImportEnemy() {
@@ -5462,27 +5644,80 @@ async function createEnemy() {
     let localPortrait = null;
     if (portraitFile) {
         localPortrait = await fileToBase64(portraitFile);
-        console.log('🖼️ Enemy portrait attached (local only)');
+        baseEnemy.portrait_url = localPortrait;
+        console.log('🖼️ Enemy portrait attached');
     }
     
+    if (isInstanceStyleName(baseEnemy.name)) {
+        console.warn('Refusing to create enemy with instance-style name (map token only):', baseEnemy.name);
+        return;
+    }
     const serverPayload = buildEnemyServerPayload(baseEnemy);
-    console.log('🔼 Sending CreateEnemy payload:', serverPayload);
-    sendMessage({
-        type: 'CreateEnemy',
-        enemy: serverPayload
-    });
+    sendMessage({ type: 'CreateEnemy', enemy: serverPayload });
     
-    // Keep local copy with portrait for UI rendering
     const localEnemy = { ...baseEnemy };
-    if (localPortrait) {
-        localEnemy.local_portrait = localPortrait;
-    }
+    if (localPortrait) localEnemy.local_portrait = localPortrait;
     enemies.push(localEnemy);
     renderEnemyList();
-    
     closeModal('createEnemyModal');
     document.getElementById('enemyForm').reset();
+    document.getElementById('enemyEditId').value = '';
+    document.getElementById('enemyPortraitPreview').innerHTML = '';
     addLogEntry(`Created enemy: ${baseEnemy.name}`, 'info');
+}
+
+async function updateEnemy() {
+    const editId = document.getElementById('enemyEditId').value.trim();
+    if (!editId) return;
+    const existing = enemies.find(e => e.id === editId);
+    if (!existing) {
+        alert('Enemy not found. It may have been deleted.');
+        return;
+    }
+    if (existing.isCustomInstance) {
+        alert('This is a placed token, not a database template. Edit the original enemy from the list (the one without a number).');
+        return;
+    }
+    const portraitFile = document.getElementById('enemyPortrait').files[0];
+    let portraitToUse = existing.portrait_url || existing.local_portrait || null;
+    if (portraitFile) {
+        portraitToUse = await fileToBase64(portraitFile);
+    }
+    const updated = {
+        id: existing.id,
+        name: document.getElementById('enemyName').value,
+        creature_type: document.getElementById('enemyType').value,
+        challenge_rating: parseFloat(document.getElementById('enemyCR').value),
+        max_hp: parseInt(document.getElementById('enemyHP').value),
+        armor_class: parseInt(document.getElementById('enemyAC').value),
+        initiative_bonus: parseInt(document.getElementById('enemyInitBonus').value),
+        strength: parseInt(document.getElementById('enemyStr').value),
+        dexterity: parseInt(document.getElementById('enemyDex').value),
+        constitution: parseInt(document.getElementById('enemyCon').value),
+        intelligence: parseInt(document.getElementById('enemyInt').value),
+        wisdom: parseInt(document.getElementById('enemyWis').value),
+        charisma: parseInt(document.getElementById('enemyCha').value),
+        speed: parseInt(document.getElementById('enemySpeed').value),
+        actions: document.getElementById('enemyActions').value || '{}',
+        description: document.getElementById('enemyDescription').value || '',
+        style: existing.style || selectedStyle
+    };
+    updated.portrait_url = portraitToUse;
+    if (portraitToUse) updated.local_portrait = portraitToUse;
+    if (isInstanceStyleName(updated.name)) {
+        console.warn('Refusing to save enemy with instance-style name:', updated.name);
+        return;
+    }
+    const serverPayload = buildEnemyServerPayload(updated);
+    sendMessage({ type: 'CreateEnemy', enemy: serverPayload });
+    const idx = enemies.findIndex(e => e.id === editId);
+    if (idx !== -1) enemies[idx] = updated;
+    renderEnemyList();
+    closeModal('createEnemyModal');
+    document.getElementById('enemyForm').reset();
+    document.getElementById('enemyEditId').value = '';
+    document.getElementById('enemyPortraitPreview').innerHTML = '';
+    addLogEntry(`Updated enemy: ${updated.name}`, 'info');
 }
 
 async function importEnemy() {
@@ -5515,11 +5750,16 @@ async function importEnemy() {
         let localPortrait = null;
         if (portraitFile) {
             localPortrait = await fileToBase64(portraitFile);
-            console.log('🖼️ Enemy portrait attached (local only)');
+            baseEnemy.portrait_url = localPortrait;
+            console.log('🖼️ Enemy portrait attached');
         }
         
         console.log('📥 Importing enemy:', baseEnemy.name);
         
+        if (isInstanceStyleName(baseEnemy.name)) {
+            console.warn('Refusing to import enemy with instance-style name (map token only):', baseEnemy.name);
+            return;
+        }
         const serverPayload = buildEnemyServerPayload(baseEnemy);
         console.log('🔼 Sending CreateEnemy payload (import):', serverPayload);
         sendMessage({
@@ -5552,9 +5792,11 @@ function renderEnemyList() {
     const searchInput = document.getElementById('npcSearchInput');
     const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
     
-    // Filter custom enemies
+    // Filter custom enemies: only show TEMPLATES (from database), not placed instances (Goblin 1, Goblin 2, etc.)
+    // Instances are for map tokens only; clicking should always use the one template to place many tokens
     const filteredEnemies = (enemies || []).filter(enemy => {
         if (!enemy) return false;
+        if (enemy.isCustomInstance) return false; // Hide instances — only list the template once
         if (enemy.style && enemy.style !== selectedStyle) return false;
         if (searchTerm && !enemy.name.toLowerCase().includes(searchTerm)) return false;
         return true;
@@ -5629,7 +5871,6 @@ function renderEnemyList() {
             const content = document.createElement('div');
             content.className = 'entity-item';
             content.style.position = 'relative';
-            content.onclick = () => spawnEnemy(enemy.id, enemy.name);
             content.innerHTML = `
                 <h4>${enemy.name}</h4>
                 <div class="entity-stats">
@@ -5642,15 +5883,25 @@ function renderEnemyList() {
             
             item.appendChild(content);
             
-            // Delete button (DM only)
+            const btnRow = document.createElement('div');
+            btnRow.style.cssText = 'position: absolute; top: 8px; right: 8px; display: flex; gap: 6px;';
+            const editBtn = document.createElement('button');
+            editBtn.textContent = '✏️ Edit';
+            editBtn.style.cssText = 'background: #4a9eff; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;';
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                showEditEnemy(enemy);
+            };
+            btnRow.appendChild(editBtn);
             const deleteBtn = document.createElement('button');
             deleteBtn.textContent = '🗑️ Delete';
-            deleteBtn.style.cssText = 'position: absolute; top: 10px; right: 10px; background: #ff4444; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;';
+            deleteBtn.style.cssText = 'background: #ff4444; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;';
             deleteBtn.onclick = (e) => {
                 e.stopPropagation();
                 deleteEnemy(enemy.id, enemy.name);
             };
-            item.appendChild(deleteBtn);
+            btnRow.appendChild(deleteBtn);
+            item.appendChild(btnRow);
             
             list.appendChild(item);
         });
@@ -6025,21 +6276,45 @@ function parseNPCRawBlock(rawBlock) {
         /techcaster.*?tech powers[:\s]+(.*?)(?:Actions|Traits|Challenge|$)/is
     ];
     
+    const techPowersSet = new Set(); // Use Set to track unique normalized keys
+    
     for (const pattern of techPatterns) {
         const match = rawBlock.match(pattern);
         if (match) {
             const powersText = match[1];
-            // Extract power names (look for patterns like "power name" or "power name,")
-            const powerMatches = powersText.matchAll(/(?:At will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?:\d+[a-z-]*-level|Actions|Traits|$)/gi);
-            for (const powerMatch of powerMatches) {
-                const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p);
-                result.techPowers.push(...powers);
-            }
-            // Also try simple comma-separated list
-            if (result.techPowers.length === 0) {
+            // Extract power names with their levels (look for patterns like "1st-level: power name" or "At will: power name")
+            const powerMatches = Array.from(powersText.matchAll(/(?:At will|At-will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?=\d+[a-z-]*-level|At will|At-will|Actions|Traits|$)/gi));
+            
+            // If we found level-based matches, process them
+            if (powerMatches.length > 0) {
+                for (const powerMatch of powerMatches) {
+                    const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p && p.length > 2);
+                    powers.forEach(power => {
+                        if (power) {
+                            // Normalize: lowercase, trim, remove extra spaces
+                            const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                            // Only add if not already present
+                            if (!techPowersSet.has(normalized)) {
+                                techPowersSet.add(normalized);
+                                result.techPowers.push(power.trim());
+                            }
+                        }
+                    });
+                }
+            } else {
+                // Fallback: simple comma-separated list
                 const simplePowers = powersText.split(',').map(p => p.trim()).filter(p => p && p.length > 2);
-                result.techPowers.push(...simplePowers);
+                simplePowers.forEach(power => {
+                    if (power) {
+                        const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                        if (!techPowersSet.has(normalized)) {
+                            techPowersSet.add(normalized);
+                            result.techPowers.push(power.trim());
+                        }
+                    }
+                });
             }
+            break; // Only process first match to avoid duplicates
         }
     }
     
@@ -6051,21 +6326,45 @@ function parseNPCRawBlock(rawBlock) {
         /innate forcecasting.*?force powers[:\s]+(.*?)(?:Actions|Traits|Challenge|$)/is
     ];
     
+    const forcePowersSet = new Set(); // Use Set to track unique normalized keys
+    
     for (const pattern of forcePatterns) {
         const match = rawBlock.match(pattern);
         if (match) {
             const powersText = match[1];
-            // Extract power names
-            const powerMatches = powersText.matchAll(/(?:At will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?:\d+[a-z-]*-level|Actions|Traits|$)/gi);
-            for (const powerMatch of powerMatches) {
-                const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p);
-                result.forcePowers.push(...powers);
-            }
-            // Also try simple comma-separated list
-            if (result.forcePowers.length === 0) {
+            // Extract power names with their levels
+            const powerMatches = Array.from(powersText.matchAll(/(?:At will|At-will|1st-level|2nd-level|3rd-level|4th-level|5th-level|6th-level|7th-level|8th-level|9th-level)[:\s]+(.*?)(?=\d+[a-z-]*-level|At will|At-will|Actions|Traits|$)/gi));
+            
+            // If we found level-based matches, process them
+            if (powerMatches.length > 0) {
+                for (const powerMatch of powerMatches) {
+                    const powers = powerMatch[1].split(',').map(p => p.trim()).filter(p => p && p.length > 2);
+                    powers.forEach(power => {
+                        if (power) {
+                            // Normalize: lowercase, trim, remove extra spaces
+                            const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                            // Only add if not already present
+                            if (!forcePowersSet.has(normalized)) {
+                                forcePowersSet.add(normalized);
+                                result.forcePowers.push(power.trim());
+                            }
+                        }
+                    });
+                }
+            } else {
+                // Fallback: simple comma-separated list
                 const simplePowers = powersText.split(',').map(p => p.trim()).filter(p => p && p.length > 2);
-                result.forcePowers.push(...simplePowers);
+                simplePowers.forEach(power => {
+                    if (power) {
+                        const normalized = power.toLowerCase().trim().replace(/\s+/g, ' ');
+                        if (!forcePowersSet.has(normalized)) {
+                            forcePowersSet.add(normalized);
+                            result.forcePowers.push(power.trim());
+                        }
+                    }
+                });
             }
+            break; // Only process first match to avoid duplicates
         }
     }
     
@@ -6101,11 +6400,149 @@ function showNPCCharacterSheet(entityId) {
         return;
     }
     
+    // Ensure tech and force powers are loaded for NPC tooltips
+    if (!techPowersLoaded) {
+        loadTechPowers();
+    }
+    if (!forcePowersLoaded) {
+        loadForcePowers();
+    }
+    
     const enemy = enemies.find(e => e.id === entityId);
     console.log('🔍 Found enemy:', enemy ? { id: enemy.id, name: enemy.name, isNPC: enemy.isNPC, hasNpcData: !!enemy.npcData } : 'NOT FOUND');
-    if (!enemy || !enemy.isNPC || !enemy.npcData) {
-        console.error('NPC not found or invalid', { enemy: !!enemy, isNPC: enemy?.isNPC, hasNpcData: !!enemy?.npcData });
-        alert('NPC not found or invalid. Make sure the enemy is an NPC with valid data.');
+    if (!enemy) {
+        alert('Enemy not found.');
+        return;
+    }
+    
+    // Custom enemy (from Enemy Database) - show sheet from enemy.* fields
+    if (!enemy.isNPC || !enemy.npcData) {
+        const participant = combatState.participants.find(p => p.id === selectedToken?.id);
+        const currentHp = participant ? participant.current_hp : (enemy.current_hp ?? enemy.max_hp);
+        const maxHp = participant ? participant.max_hp : enemy.max_hp;
+        const escapedEnemyName = escapeJs(enemy.name);
+        let html = '<div style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">';
+        html += `<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 15px; margin-bottom: 15px;">
+            <div class="panel" style="padding: 15px;">
+                <h4 style="color: #4a9eff;">👹 Enemy Info</h4>
+                <div class="token-stat"><span>Name:</span><span>${escapeHtml(enemy.name)}</span></div>
+                <div class="token-stat"><span>Type:</span><span>${escapeHtml(enemy.creature_type || 'Unknown')}</span></div>
+                <div class="token-stat"><span>Challenge:</span><span>${escapeHtml(String(enemy.challenge_rating ?? '0'))}</span></div>
+            </div>
+            <div class="panel" style="padding: 15px; text-align: center;">
+                <h4 style="color: #ff4444;">💚 HP</h4>
+                <div style="font-size: 32px; font-weight: bold; color: #44ff44;">${currentHp}</div>
+                <div style="opacity: 0.7;">/ ${maxHp}</div>
+                <div class="hp-bar" style="margin-top: 10px;"><div class="hp-fill" style="width: ${maxHp ? (currentHp / maxHp) * 100 : 0}%"></div></div>
+            </div>
+        </div>`;
+        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+            <h4 style="color: #4a9eff;">📊 Ability Scores <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
+            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;">`;
+        const abilities = ['strength', 'dexterity', 'constitution', 'intelligence', 'wisdom', 'charisma'];
+        const abilityNames = { strength: 'STR', dexterity: 'DEX', constitution: 'CON', intelligence: 'INT', wisdom: 'WIS', charisma: 'CHA' };
+        const abKeys = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+        abilities.forEach((ab, i) => {
+            const score = enemy[ab] ?? enemy[abKeys[i]] ?? 10;
+            const mod = Math.floor((score - 10) / 2);
+            const key = abKeys[i];
+            html += `<div onclick="rollAbilityCheck('${key}', ${mod}, '${escapedEnemyName}')" style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(74,158,255,0.2)'; this.style.transform='scale(1.05)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'; this.style.transform='scale(1)'">
+                <div style="font-size: 24px; font-weight: bold;">${score}</div>
+                <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase;">${abilityNames[ab]}</div>
+                <div style="font-size: 12px; margin-top: 5px;">${mod >= 0 ? '+' : ''}${mod}</div>
+            </div>`;
+        });
+        html += `</div></div>`;
+        html += buildDiceRollSectionForNPC(enemy.name);
+        html += `<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
+            <div class="panel" style="padding: 15px; text-align: center;">
+                <div style="font-size: 11px; opacity: 0.7;">AC</div>
+                <div style="font-size: 28px; font-weight: bold; color: #4a9eff;">${enemy.armor_class ?? '—'}</div>
+            </div>
+            <div class="panel" style="padding: 15px; text-align: center;">
+                <div style="font-size: 11px; opacity: 0.7;">INIT</div>
+                <div style="font-size: 28px; font-weight: bold; color: #ffaa44;">${(enemy.initiative_bonus ?? 0) >= 0 ? '+' : ''}${enemy.initiative_bonus ?? 0}</div>
+            </div>
+            <div class="panel" style="padding: 15px; text-align: center;">
+                <div style="font-size: 11px; opacity: 0.7;">SPEED</div>
+                <div style="font-size: 28px; font-weight: bold; color: #44ff44;">${enemy.speed ?? '—'}</div>
+            </div>
+            <div class="panel" style="padding: 15px; text-align: center;">
+                <div style="font-size: 11px; opacity: 0.7;">CR</div>
+                <div style="font-size: 28px; font-weight: bold; color: #aa88ff;">${escapeHtml(String(enemy.challenge_rating ?? '0'))}</div>
+            </div>
+        </div>`;
+        // Resolve actions: use this enemy, or if instance with no actions, try template with same base name
+        let actionsData = parseCustomEnemyActions(enemy);
+        if (actionsData.length === 0 && enemy.isCustomInstance && enemy.name) {
+            const baseName = enemy.name.replace(/\s+\d+$/, '').trim();
+            const template = enemies.find(e => !e.isCustomInstance && e.name && (e.name === baseName || e.name.replace(/\s+\d+$/, '').trim() === baseName));
+            if (template) actionsData = parseCustomEnemyActions(template);
+        }
+        // Fallback: if enemy.actions is an object (e.g. from server as parsed JSON), build actionsData directly
+        if (actionsData.length === 0 && enemy.actions && typeof enemy.actions === 'object' && !Array.isArray(enemy.actions)) {
+            actionsData = Object.entries(enemy.actions).filter(([k]) => k && typeof k === 'string').map(([name, val]) => ({
+                name: name,
+                description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
+            }));
+        }
+        // Parse each action individually (one "Name. Description" per call) so we always get attacks when format matches
+        let customAttacks = [];
+        if (actionsData.length > 0) {
+            actionsData.forEach(a => {
+                const oneActionText = `${a.name || 'Action'}. ${a.description || ''}`;
+                const parsed = parseAttacksFromActions(oneActionText);
+                customAttacks = customAttacks.concat(parsed);
+            });
+        }
+        // Show Attacks section (clickable) when we parsed any
+        if (customAttacks.length > 0) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #ff4444;">⚔️ Attacks <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>`;
+            customAttacks.forEach((attack) => {
+                const escapedWeapon = escapeJs(attack.name);
+                const escapedDamage = escapeJs(attack.damage || '');
+                const escapedType = escapeJs(attack.damageType || '');
+                const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
+                const escapedDescription = attack.description ? escapeJs(attack.description) : '';
+                if (attack.type === 'weapon' && attack.toHit !== null) {
+                    html += `<div onclick='rollAttack("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div><div style="font-size: 13px; margin-top: 5px;"><span style="color: #44ff44;">⚔️ To Hit: ${formatMod(attack.toHit)}</span> | <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage || '')}</span> ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div></div>`;
+                } else if (attack.type === 'saving_throw' && attack.saveDC) {
+                    const damageRollCode = attack.damage ? `const dmgResult = rollDice("${escapedDamage}"); addLogEntry("${escapedWeapon} damage: " + dmgResult.breakdown + " ${escapedType} = " + dmgResult.total, "damage");` : '';
+                    html += `<div onclick='${damageRollCode}addLogEntry("${escapedWeapon}: DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save - ${escapedDamage ? escapedDamage + ' ' + escapedType : 'No damage'} damage", "info")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,170,68,0.1); border-left: 3px solid #ffaa44; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,170,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,170,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div><div style="font-size: 13px; margin-top: 5px;"><span style="color: #ffaa44;">🛡️ DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save</span> ${attack.damage ? `| <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage)}</span>` : ''} ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div></div>`;
+                } else {
+                    html += `<div onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(170,136,255,0.1); border-left: 3px solid #aa88ff; border-radius: 3px; cursor: help;"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div>${attack.description ? `<div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">${escapeHtml(attack.description.substring(0, 100))}${attack.description.length > 100 ? '...' : ''}</div>` : ''}</div>`;
+                }
+            });
+            html += `</div>`;
+        }
+        // Always show Actions section when we have actions (list with descriptions) — clickable like attacks (tooltip + roll dice if present)
+        if (actionsData.length > 0) {
+            window.__customEnemyActionsSheet = actionsData;
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #ff4444;">⚔️ Actions <span style="font-size: 12px; opacity: 0.6;">(Click to roll dice, hover for full text)</span></h4>`;
+            actionsData.forEach((a, idx) => {
+                const name = escapeHtml(String(a.name || 'Action'));
+                const descStr = a.description != null ? String(a.description) : '';
+                const desc = escapeHtml(descStr.substring(0, 500));
+                const fullLen = descStr.length;
+                const escapedDescForTooltip = escapeJs(descStr);
+                html += `<div onclick="rollActionFromSheet(${idx})" onmouseover="showAttackTooltip('${escapedDescForTooltip}', event)" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.08); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,68,68,0.2)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,68,68,0.08)'; this.style.transform='translateX(0)'"><div style="font-weight: bold;">${name}</div>${desc ? `<div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">${desc}${fullLen > 500 ? '...' : ''}</div>` : ''}</div>`;
+            });
+            html += `</div>`;
+        } else if (enemy.actions && (typeof enemy.actions === 'string' ? enemy.actions.trim() : true)) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #ff4444;">⚔️ Actions</h4><div style="white-space: pre-wrap; font-size: 12px; line-height: 1.5;">${escapeHtml(typeof enemy.actions === 'string' ? enemy.actions : JSON.stringify(enemy.actions, null, 2))}</div></div>`;
+        }
+        if (enemy.description) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #4a9eff;">📄 Description</h4><div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6;">${escapeHtml(enemy.description)}</div></div>`;
+        }
+        html += '</div>';
+        const sheetTitleEl = document.getElementById('sheetCharacterName');
+        const contentEl = document.getElementById('characterSheetContent');
+        if (sheetTitleEl && contentEl) {
+            sheetTitleEl.textContent = `${enemy.name} - Character Sheet`;
+            contentEl.innerHTML = html;
+            document.getElementById('characterSheetModal').classList.add('active');
+            setTimeout(() => setupDiceRollButtons(contentEl), 100);
+        }
         return;
     }
     
@@ -6224,28 +6661,61 @@ function showNPCCharacterSheet(entityId) {
         html += `</div></div>`;
     }
     
-    // Tech Powers
-    if (parsedData.techPowers && parsedData.techPowers.length > 0) {
+    // Tech Powers - Use same logic as player sheets
+    const allTechPowers = [];
+    const allForcePowers = [];
+    const ensureUnique = (list, name) => {
+        if (!name) return;
+        if (!list.includes(name)) {
+            list.push(name);
+        }
+    };
+    
+    // Collect tech powers from parsed data (same approach as players)
+    if (parsedData.techPowers && Array.isArray(parsedData.techPowers)) {
+        parsedData.techPowers.forEach(name => ensureUnique(allTechPowers, name));
+    }
+    if (parsedData.forcePowers && Array.isArray(parsedData.forcePowers)) {
+        parsedData.forcePowers.forEach(name => ensureUnique(allForcePowers, name));
+    }
+    
+    if (allTechPowers.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #00d4ff;">⚡ Tech Powers <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
             <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
-        parsedData.techPowers.forEach(powerName => {
+        allTechPowers.forEach(powerName => {
             if (!powerName) return;
-            const escapedPower = escapeHtml(powerName);
+            // Use fuzzy matching to handle spacing differences (NPC names come from parsed text)
+            const lookup = findTechPowerInCacheGlobal(powerName);
+            const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
+                ? (lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level))
+                : null;
+            const baseLabel = levelDisplay
+                ? `${powerName} (${levelDisplay})`
+                : powerName;
+            const escapedPower = escapeHtml(baseLabel);
             const attrPower = powerName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
             html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 6px 12px; background: rgba(0,212,255,0.12); border-radius: 4px; font-size: 12px; border: 1px solid rgba(0,212,255,0.35); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(0,212,255,0.25)'; this.style.borderColor='#00d4ff'" onmouseleave="this.style.background='rgba(0,212,255,0.12)'; this.style.borderColor='rgba(0,212,255,0.35)'">${escapedPower}</div>`;
         });
         html += `</div></div>`;
     }
     
-    // Force Powers
-    if (parsedData.forcePowers && parsedData.forcePowers.length > 0) {
+    // Force Powers - Use same logic as player sheets
+    if (allForcePowers.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ff00ff;">✨ Force Powers <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
             <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
-        parsedData.forcePowers.forEach(powerName => {
+        allForcePowers.forEach(powerName => {
             if (!powerName) return;
-            const escapedPower = escapeHtml(powerName);
+            // Use fuzzy matching to handle spacing differences (NPC names come from parsed text)
+            const lookup = findForcePowerInCacheGlobal(powerName);
+            const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
+                ? (lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level))
+                : null;
+            const baseLabel = levelDisplay
+                ? `${powerName} (${levelDisplay})`
+                : powerName;
+            const escapedPower = escapeHtml(baseLabel);
             const attrPower = powerName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
             html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,0,255,0.2); border-radius: 3px; font-size: 12px; border: 1px solid rgba(255,0,255,0.4); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,0,255,0.4)'; this.style.borderColor='#ff00ff'" onmouseleave="this.style.background='rgba(255,0,255,0.2)'; this.style.borderColor='rgba(255,0,255,0.4)'">${escapedPower}</div>`;
         });
@@ -6760,7 +7230,7 @@ function parseAttacksFromActions(actionsText) {
             return; // Skip duplicates
         }
         
-        // Pattern 1: Standard weapon attacks (Melee/Ranged Weapon Attack)
+        // Pattern 1: Standard weapon attacks (Melee/Ranged Weapon Attack: +3 to hit. ... Hit: 2 (1d4+2) piercing)
         const weaponMatch = description.match(/(?:Melee|Ranged)\s+Weapon\s+Attack:\s*([+-]?\d+)\s+to\s+hit.*?Hit:\s*(\d+)\s*\(([^)]+)\)\s*(\w+)?\s*damage/i);
         if (weaponMatch) {
             const toHit = parseInt(weaponMatch[1]);
@@ -6772,6 +7242,36 @@ function parseAttacksFromActions(actionsText) {
                 toHit: toHit,
                 damage: damage,
                 damageType: damageType,
+                type: 'weapon',
+                description: description
+            });
+            foundNames.add(name.toLowerCase());
+            return;
+        }
+        
+        // Pattern 1b: Weapon attack with dice in Hit (no to-hit): "Hit: 1d4 bludgeoning damage"
+        const weaponDiceMatch = description.match(/(?:Melee|Ranged)\s+Weapon\s+Attack:[^.]*\.\s*Hit:\s*(\d+d\d+(?:\s*[+-]\s*\d+)?)\s+(\w+)\s*damage/i);
+        if (weaponDiceMatch) {
+            attacks.push({
+                name: name,
+                toHit: 0,
+                damage: weaponDiceMatch[1].trim(),
+                damageType: (weaponDiceMatch[2] || '').trim() || 'damage',
+                type: 'weapon',
+                description: description
+            });
+            foundNames.add(name.toLowerCase());
+            return;
+        }
+        
+        // Pattern 1c: Weapon attack with flat damage: "Hit: 2 piercing damage"
+        const weaponFlatMatch = description.match(/Hit:\s*(\d+)\s+(\w+)\s*damage/i);
+        if (weaponFlatMatch && /(?:Melee|Ranged)\s+Weapon\s+Attack/i.test(description)) {
+            attacks.push({
+                name: name,
+                toHit: 0,
+                damage: weaponFlatMatch[1],
+                damageType: (weaponFlatMatch[2] || '').trim() || 'damage',
                 type: 'weapon',
                 description: description
             });
@@ -7095,19 +7595,14 @@ function spawnEnemy(enemyId, enemyName) {
     console.log('Generated instance ID:', instanceId);
     console.log('Instance name:', instanceName);
     
-    // Create enemy instance with the instance ID
-    console.log('📤 Sending SpawnEnemy message...');
-    sendMessage({
-        type: 'SpawnEnemy',
-        enemy_id: enemyId,
-        instance_id: instanceId, // Send the ID to server
-        name: instanceName
-    });
-    
-    // Add to local enemies list with the instance ID
-    const enemy = enemies.find(e => e.id === enemyId);
+    // Resolve template: enemyId must be the DATABASE template id. Never send an instance id to the server (no DB entry).
+    const template = enemies.find(e => e.id === enemyId && !e.isCustomInstance);
+    const enemy = template || enemies.find(e => e.id === enemyId);
     if (enemy) {
-        const tempEnemy = {...enemy, id: instanceId, name: instanceName};
+        const templateId = enemy.isCustomInstance ? (enemy.enemy_id || enemyId) : enemyId;
+        console.log('📤 Sending SpawnEnemy (template id only, no DB write):', templateId);
+        sendMessage({ type: 'SpawnEnemy', enemy_id: templateId, instance_id: instanceId, name: instanceName });
+        const tempEnemy = {...enemy, id: instanceId, name: instanceName, isCustomInstance: true};
         enemies.push(tempEnemy);
         console.log('✅ Added enemy instance locally:', tempEnemy);
         
@@ -7130,7 +7625,6 @@ function spawnEnemy(enemyId, enemyName) {
         });
     } else {
         console.error('❌ Base enemy not found:', enemyId);
-        // Still try to place token with default size
         const tokenSize = 1.0;
         sendMessage({
             type: 'PlaceToken',
@@ -7141,14 +7635,6 @@ function spawnEnemy(enemyId, enemyName) {
             size: tokenSize
         });
     }
-    sendMessage({
-        type: 'PlaceToken',
-        entity_id: instanceId, // Same ID!
-        entity_type: 'Enemy',
-        x: 5,
-        y: 5,
-        size: tokenSize
-    });
     
     closeModal('enemyManagerModal');
     addLogEntry(`Spawned ${instanceName}`, 'info');
@@ -7199,6 +7685,9 @@ function showInfoSection(section) {
     
     // Load and display the selected section
     switch(section) {
+        case 'connection':
+            renderConnectionSection();
+            break;
         case 'conditions':
             renderConditionsSection();
             break;
@@ -7206,6 +7695,59 @@ function showInfoSection(section) {
         default:
             content.innerHTML = `<div style="text-align: center; padding: 40px; opacity: 0.7;">Section "${section}" coming soon!</div>`;
     }
+}
+
+function getPlayerConnectionUrl() {
+    return window.location.origin || (window.location.protocol + '//' + window.location.hostname + (window.location.port ? ':' + window.location.port : ''));
+}
+
+function updatePlayerConnectionLink() {
+    const input = document.getElementById('playerConnectionLink');
+    if (input) input.value = getPlayerConnectionUrl();
+}
+
+function copyPlayerConnectionLink() {
+    const url = getPlayerConnectionUrl();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(() => {
+            addLogEntry('Connection link copied to clipboard', 'info');
+        }).catch(() => { fallbackCopyLink(url); });
+    } else {
+        fallbackCopyLink(url);
+    }
+}
+function fallbackCopyLink(url) {
+    const input = document.getElementById('playerConnectionLink');
+    if (input) {
+        input.value = url;
+        input.select();
+        input.setSelectionRange(0, 99999);
+        try {
+            document.execCommand('copy');
+            addLogEntry('Connection link copied to clipboard', 'info');
+        } catch (e) {
+            addLogEntry('Copy failed; share this URL: ' + url, 'warning');
+        }
+    }
+}
+
+function renderConnectionSection() {
+    const content = document.getElementById('infoContent');
+    if (!content) return;
+    const url = getPlayerConnectionUrl();
+    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(url);
+    content.innerHTML = `
+        <div style="margin-bottom: 24px;">
+            <h3 style="color: #4a9eff; margin-bottom: 12px;">🔗 How other players connect</h3>
+            <p style="opacity: 0.9; margin-bottom: 12px;">Share this link with players on the same network (e.g. same Wi‑Fi). They open it in their browser and enter their name to join.</p>
+            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+                <input type="text" id="infoConnectionUrl" readonly value="${url.replace(/"/g, '&quot;')}" style="flex: 1; padding: 10px; background: #1a1a2e; color: #eee; border: 1px solid #444; border-radius: 5px; font-size: 14px;">
+                <button type="button" onclick="copyPlayerConnectionLink()" style="padding: 10px 16px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer;">Copy link</button>
+            </div>
+            ${isLocalhost ? '<p style="color: #ffaa44; font-size: 13px;">⚠️ You are using <strong>localhost</strong>. Other devices cannot use this link. On this PC, find your IP (e.g. <code>ipconfig</code> → IPv4), then share <strong>http://YOUR_IP:3000</strong> instead.</p>' : ''}
+            <p style="opacity: 0.8; font-size: 12px; margin-top: 12px;">Server runs on port <strong>3000</strong>. If your firewall blocks it, allow the app through.</p>
+        </div>
+    `;
 }
 
 function renderConditionsSection() {
@@ -8727,38 +9269,125 @@ function showSpellTooltip(spellName, event) {
     }
 }
 
+// Helper function to find tech power in cache with fuzzy matching (used by both display and tooltip)
+function findTechPowerInCacheGlobal(powerName) {
+    if (!techPowersCache || !powerName) {
+        console.log(`⚠️ findTechPowerInCacheGlobal: cache=${!!techPowersCache}, powerName=${powerName}`);
+        return null;
+    }
+    
+    // Normalize the search term (same normalization as when loading cache)
+    const normalizedSearch = powerName.toLowerCase().trim().replace(/\s+/g, ' ');
+    console.log(`🔍 Looking up tech power: "${powerName}" -> normalized: "${normalizedSearch}"`);
+    
+    // Try exact match first
+    if (techPowersCache[normalizedSearch]) {
+        console.log(`✅ Found exact match for "${powerName}"`);
+        return techPowersCache[normalizedSearch];
+    }
+    
+    // Try fuzzy match - search all cache keys (case-insensitive, space-normalized)
+    for (const [key, value] of Object.entries(techPowersCache)) {
+        const keyNormalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+        // Check if keys match exactly (after normalization)
+        if (keyNormalized === normalizedSearch) {
+            console.log(`✅ Found normalized match for "${powerName}" (key: "${key}")`);
+            return value;
+        }
+        // Check if one contains the other (for partial matches)
+        if (keyNormalized.includes(normalizedSearch) || normalizedSearch.includes(keyNormalized)) {
+            // Only return if it's a close match (not too different in length)
+            const lengthDiff = Math.abs(keyNormalized.length - normalizedSearch.length);
+            if (lengthDiff <= 3 || normalizedSearch.length > 5) { // Allow small differences or longer names
+                console.log(`✅ Found fuzzy match for "${powerName}" -> "${value.name}" (key: "${key}")`);
+                return value;
+            }
+        }
+    }
+    
+    console.log(`❌ No match found for "${powerName}" in ${Object.keys(techPowersCache).length} tech powers`);
+    console.log(`📋 Available keys (first 10):`, Object.keys(techPowersCache).slice(0, 10));
+    return null;
+}
+
+function findForcePowerInCacheGlobal(powerName) {
+    if (!forcePowersCache || !powerName) return null;
+    
+    // Normalize the search term
+    const normalizedSearch = powerName.toLowerCase().trim().replace(/\s+/g, ' ');
+    
+    // Try exact match first
+    if (forcePowersCache[normalizedSearch]) {
+        return forcePowersCache[normalizedSearch];
+    }
+    
+    // Try fuzzy match - search all cache keys (case-insensitive, space-normalized)
+    for (const [key, value] of Object.entries(forcePowersCache)) {
+        const keyNormalized = key.toLowerCase().trim().replace(/\s+/g, ' ');
+        // Check if keys match exactly (after normalization)
+        if (keyNormalized === normalizedSearch) {
+            return value;
+        }
+        // Check if one contains the other (for partial matches)
+        if (keyNormalized.includes(normalizedSearch) || normalizedSearch.includes(keyNormalized)) {
+            // Only return if it's a close match (not too different in length)
+            const lengthDiff = Math.abs(keyNormalized.length - normalizedSearch.length);
+            if (lengthDiff <= 3 || normalizedSearch.length > 5) { // Allow small differences or longer names
+                return value;
+            }
+        }
+    }
+    
+    return null;
+}
+
 // Separate async function for fetching
 async function fetchSpellDataAndDisplay(spellName, tooltip, content, event) {
     try {
-        const cacheKey = spellName.toLowerCase().trim();
-        if (selectedStyle === 'starwars' && techPowersCache && techPowersCache[cacheKey]) {
-            content.innerHTML = formatTechPowerTooltip(techPowersCache[cacheKey]);
+        // CRITICAL: Check tech powers cache first (for both players and NPCs) with fuzzy matching
+        const techPower = findTechPowerInCacheGlobal(spellName);
+        if (techPower) {
+            console.log(`✅ Found tech power in cache: ${spellName} -> ${techPower.name}`);
+            content.innerHTML = formatTechPowerTooltip(techPower);
             adjustTooltipPosition(tooltip, event);
             return;
         }
-        if (selectedStyle === 'starwars') {
-            const importedDetail = findImportedTechPowerDetail(spellName);
-            if (importedDetail) {
-                if (!techPowersCache) techPowersCache = {};
-                techPowersCache[cacheKey] = importedDetail;
-                content.innerHTML = formatTechPowerTooltip(importedDetail);
-                adjustTooltipPosition(tooltip, event);
-                return;
-            }
-            if (forcePowersCache && forcePowersCache[cacheKey]) {
-                content.innerHTML = formatSpellTooltip(forcePowersCache[cacheKey]);
-                adjustTooltipPosition(tooltip, event);
-                return;
-            }
-            const importedForceDetail = findImportedForcePowerDetail(spellName);
-            if (importedForceDetail) {
-                if (!forcePowersCache) forcePowersCache = {};
-                forcePowersCache[cacheKey] = importedForceDetail;
-                content.innerHTML = formatSpellTooltip(importedForceDetail);
-                adjustTooltipPosition(tooltip, event);
-                return;
-            }
+        
+        // Check imported tech powers
+        const importedTechDetail = findImportedTechPowerDetail(spellName);
+        if (importedTechDetail) {
+            console.log(`✅ Found tech power in imported data: ${spellName}`);
+            if (!techPowersCache) techPowersCache = {};
+            const cacheKey = spellName.toLowerCase().trim();
+            techPowersCache[cacheKey] = importedTechDetail;
+            content.innerHTML = formatTechPowerTooltip(importedTechDetail);
+            adjustTooltipPosition(tooltip, event);
+            return;
         }
+        
+        // CRITICAL: Check force powers cache (for both players and NPCs) with fuzzy matching
+        const forcePower = findForcePowerInCacheGlobal(spellName);
+        if (forcePower) {
+            console.log(`✅ Found force power in cache: ${spellName} -> ${forcePower.name}`);
+            content.innerHTML = formatSpellTooltip(forcePower);
+            adjustTooltipPosition(tooltip, event);
+            return;
+        }
+        
+        // Check imported force powers
+        const importedForceDetail = findImportedForcePowerDetail(spellName);
+        if (importedForceDetail) {
+            console.log(`✅ Found force power in imported data: ${spellName}`);
+            if (!forcePowersCache) forcePowersCache = {};
+            const cacheKey = spellName.toLowerCase().trim();
+            forcePowersCache[cacheKey] = importedForceDetail;
+            content.innerHTML = formatSpellTooltip(importedForceDetail);
+            adjustTooltipPosition(tooltip, event);
+            return;
+        }
+        
+        // For Star Wars style, we've already checked tech/force, so continue to spell lookup
+        // For NPCs, if we get here, the power wasn't found in tech/force caches
         
         console.log('🌐 Fetching spell data...');
         const spell = await fetchSpellData(spellName);
@@ -9421,6 +10050,23 @@ function calculateSkillMod(abilityMod, profBonus, isProficient, hasExpertise) {
         mod += profBonus;
     }
     return mod;
+}
+
+// Roll dice from an action (used by custom enemy Actions section). Call with index into window.__customEnemyActionsSheet.
+function rollActionFromSheet(index) {
+    const list = window.__customEnemyActionsSheet;
+    if (!list || !list[index]) return;
+    const a = list[index];
+    const name = a.name || 'Action';
+    const desc = a.description || '';
+    const diceMatch = desc.match(/(\d+)d(\d+)([+-]\d+)?/i);
+    if (diceMatch) {
+        const notation = diceMatch[0];
+        const result = rollDice(notation);
+        addLogEntry(`${name}: ${notation} → ${result.breakdown} = ${result.total}`, 'damage');
+    } else {
+        addLogEntry(desc ? `${name}: ${desc.substring(0, 80)}${desc.length > 80 ? '...' : ''}` : name, 'info');
+    }
 }
 
 // Roll dice notation (e.g., "1d12+4", "2d6+5", "1d8")
@@ -11848,7 +12494,8 @@ async function loadTechPowers(force = false) {
             techPowersCache = {};
             powers.forEach(raw => {
                 if (!raw || !raw.name) return;
-                const key = raw.name.toLowerCase();
+                // Normalize key: lowercase, trim, normalize spaces (same as lookup)
+                const key = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
                 const levelInfo = normalizePowerLevel(raw.level, raw.category || raw.power_type || raw.type);
                 const castingTime = raw.casting_time || raw.casting_period || raw.castingPeriod || raw.castingTime || '';
                 const description = raw.description || raw.effect || '';
@@ -11874,6 +12521,7 @@ async function loadTechPowers(force = false) {
             });
             techPowersLoaded = true;
             console.log(`✅ Loaded ${Object.keys(techPowersCache).length} tech powers from ${url}`);
+            console.log(`📋 Sample tech power keys:`, Object.keys(techPowersCache).slice(0, 5));
             if (currentViewingCharacter && selectedStyle === 'starwars') {
                 renderCharacterSheetContent();
             }
@@ -11905,7 +12553,8 @@ async function loadForcePowers(force = false) {
             forcePowersCache = {};
             powers.forEach(raw => {
                 if (!raw || !raw.name) return;
-                const key = raw.name.toLowerCase();
+                // Normalize key: lowercase, trim, normalize spaces (same as lookup)
+                const key = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
                 const levelInfo = normalizePowerLevel(raw.level, raw.category || raw.power_type || raw.type);
                 const castingTime = raw.casting_time || raw.casting_period || raw.castingPeriod || raw.castingTime || '';
                 const description = raw.description || raw.effect || '';
@@ -13759,20 +14408,21 @@ function playHpDamageSoundLocally() {
 }
 
 function refreshApplication() {
-    console.log('🔄 Refreshing game state (tokens, HP, map)...');
-    addLogEntry('🔄 Refreshing game state...', 'info');
+    console.log('🔄 Refreshing game state (full sync from server)...');
+    addLogEntry('🔄 Syncing with server (map, tokens, combat)...', 'info');
     
-    // Refresh map and tokens
-    if (currentMap && currentMap.id) {
-        console.log('🔄 Requesting map reload:', currentMap.id);
-        sendMessage({ type: 'LoadMap', map_id: currentMap.id, clear_tokens: false });
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        addLogEntry('⚠️ Not connected. Reconnect to sync.', 'warning');
+        return;
     }
     
-    // Request token update
-    requestTokenRefresh();
+    // Single request that pushes full state – reliable for slow/high-latency connections
+    sendMessage({ type: 'RequestFullState' });
     
-    // Request updated characters (to get current HP)
-    console.log('🔄 Requesting updated characters...');
+    // Fallback requests in case server doesn't support RequestFullState
+    if (currentMap && currentMap.id) {
+        sendMessage({ type: 'LoadMap', map_id: currentMap.id, clear_tokens: false });
+    }
     sendMessage({ type: 'ListCharacters' });
     
     // Also fetch from API for immediate update
@@ -13813,18 +14463,17 @@ function refreshApplication() {
     
     // Update token info if a token is selected
     if (selectedToken) {
-        setTimeout(() => {
-            updateTokenInfo();
-        }, 500);
+        setTimeout(() => updateTokenInfo(), 800);
     }
     
-    // Re-render canvas after a short delay to allow server responses
+    // Re-render after delay so slow connections have time to receive MapLoaded/TokenUpdate/CombatStarted
     setTimeout(() => {
         renderCanvas();
         updateInitiativeList();
-        addLogEntry('✅ Game state refreshed', 'success');
+        updateCombatStatus();
+        addLogEntry('✅ Synced', 'success');
         console.log('✅ Game state refresh complete');
-    }, 500);
+    }, 1500);
 }
 
 function autoConnect() {

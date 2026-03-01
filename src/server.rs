@@ -15,6 +15,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::signal;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -134,6 +135,7 @@ pub async fn start_server(
     game_state: Arc<RwLock<GameState>>,
 ) -> anyhow::Result<()> {
     let clients: Clients = Arc::new(RwLock::new(HashMap::new()));
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
     // CRITICAL: Load all characters from database on startup
     info!("🔄 Loading characters from databases on startup...");
@@ -175,7 +177,7 @@ pub async fn start_server(
             tower::ServiceBuilder::new()
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(50 * 1024 * 1024)) // 50MB limit
         )
-        .with_state((dnd_db, starwars_db, game_state, clients.clone()));
+        .with_state((dnd_db, starwars_db, game_state, clients.clone(), shutdown_tx.clone()));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     let addr = listener.local_addr()?;
@@ -196,20 +198,55 @@ pub async fn start_server(
         info!("✅ Browser opened successfully!");
     }
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(shutdown_rx))
+        .await?;
+    info!("Server shut down.");
     Ok(())
+}
+
+/// Waits for Ctrl+C, Unix SIGTERM, or DM shutdown request. Does not panic so normal
+/// client actions cannot stop the server.
+async fn shutdown_signal(mut shutdown_rx: broadcast::Receiver<()>) {
+    let ctrl_c = async {
+        if let Err(e) = signal::ctrl_c().await {
+            warn!("Ctrl+C handler not available: {}. Use DM Shutdown button to stop server.", e);
+            std::future::pending::<()>().await
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => { sig.recv().await; }
+            Err(e) => {
+                warn!("SIGTERM handler not available: {}", e);
+                std::future::pending::<()>().await
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => { info!("Shutdown: Ctrl+C"); }
+        _ = terminate => { info!("Shutdown: SIGTERM"); }
+        _ = shutdown_rx.recv() => { info!("Shutdown: DM requested"); }
+    }
 }
 
 async fn websocket_handler(
     ws: WebSocketUpgrade,
-    State((dnd_db, starwars_db, game_state, clients)): State<(
+    State((dnd_db, starwars_db, game_state, clients, shutdown_tx)): State<(
         Database,
         Database,
         Arc<RwLock<GameState>>,
         Clients,
+        broadcast::Sender<()>,
     )>,
 ) -> Response {
-    ws.on_upgrade(|socket| handle_socket(socket, dnd_db, starwars_db, game_state, clients))
+    ws.on_upgrade(|socket| handle_socket(socket, dnd_db, starwars_db, game_state, clients, shutdown_tx))
 }
 
 async fn handle_socket(
@@ -218,11 +255,13 @@ async fn handle_socket(
     starwars_db: Database,
     game_state: Arc<RwLock<GameState>>,
     clients: Clients,
+    shutdown_tx: broadcast::Sender<()>,
 ) {
     let (mut sender, mut receiver) = socket.split();
     let session_id = Uuid::new_v4().to_string();
     
-    let (tx, mut rx) = broadcast::channel(100);
+    // Large buffer so slow/high-latency clients don't drop map/tokens/combat (broadcast sends can fail if buffer full)
+    let (tx, mut rx) = broadcast::channel(512);
     clients.write().await.insert(session_id.clone(), tx.clone());
 
     // Send initial connection message
@@ -251,6 +290,7 @@ async fn handle_socket(
     // Handle incoming messages
     let dnd_db_clone = dnd_db.clone();
     let starwars_db_clone = starwars_db.clone();
+    let shutdown_tx_clone = shutdown_tx.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
@@ -261,6 +301,7 @@ async fn handle_socket(
                     &clients,
                     &dnd_db_clone,
                     &starwars_db_clone,
+                    &shutdown_tx_clone,
                 ).await;
             }
         }
@@ -286,6 +327,7 @@ async fn handle_client_message(
     clients: &Clients,
     dnd_db: &Database,
     starwars_db: &Database,
+    shutdown_tx: &broadcast::Sender<()>,
 ) {
     use crate::models::{CombatParticipant, Character, Enemy, Map};
     use uuid::Uuid;
@@ -650,9 +692,84 @@ async fn handle_client_message(
         }
         
         ClientMessage::EndCombat => {
+            info!("⚔️ EndCombat received from session {}", session_id);
             game_state.write().await.combat.end_combat();
             let combat_ended = ServerMessage::CombatEnded;
             broadcast_message(clients, &combat_ended).await;
+        }
+
+        ClientMessage::RequestShutdown => {
+            let is_dm = game_state.read().await.players.get(session_id).map(|p| p.is_dm).unwrap_or(false);
+            if is_dm {
+                info!("Shutdown requested by DM (session {}). Stopping server.", session_id);
+                let _ = shutdown_tx.send(());
+            } else {
+                warn!("Non-DM session {} tried to request shutdown; ignored.", session_id);
+            }
+        }
+
+        ClientMessage::RequestFullState => {
+            // Send full game state to this client (for slow connections / Refresh button)
+            let gs = game_state.read().await;
+            if let Some(ref map) = gs.current_map {
+                let map_loaded = ServerMessage::MapLoaded { map: map.clone() };
+                send_to_client(clients, session_id, &map_loaded).await;
+            }
+            if !gs.tokens.is_empty() {
+                let token_update = ServerMessage::TokenUpdate { tokens: gs.tokens.clone() };
+                send_to_client(clients, session_id, &token_update).await;
+            }
+            let characters: Vec<crate::models::Character> = gs.characters.values().cloned().collect();
+            if !characters.is_empty() {
+                let character_list = ServerMessage::CharacterList { characters, style: None };
+                send_to_client(clients, session_id, &character_list).await;
+            }
+            if gs.combat.active {
+                let participants: Vec<crate::models::CombatParticipant> = gs.tokens.iter()
+                    .filter_map(|token| {
+                        if let Some(character) = gs.characters.get(&token.entity_id) {
+                            Some(crate::models::CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: character.name.clone(),
+                                initiative: gs.combat.participants.iter()
+                                    .find(|p| p.id == token.id)
+                                    .map(|p| p.initiative)
+                                    .unwrap_or(0),
+                                initiative_bonus: character.initiative_bonus,
+                                entity_type: crate::models::TokenType::Player,
+                                current_hp: character.current_hp,
+                                max_hp: character.max_hp,
+                                armor_class: character.armor_class,
+                            })
+                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            Some(crate::models::CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: enemy.name.clone(),
+                                initiative: gs.combat.participants.iter()
+                                    .find(|p| p.id == token.id)
+                                    .map(|p| p.initiative)
+                                    .unwrap_or(0),
+                                initiative_bonus: enemy.initiative_bonus,
+                                entity_type: crate::models::TokenType::Enemy,
+                                current_hp: enemy.current_hp,
+                                max_hp: enemy.max_hp,
+                                armor_class: enemy.armor_class,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let combat_started = ServerMessage::CombatStarted { participants };
+                send_to_client(clients, session_id, &combat_started).await;
+            }
+            info!("📤 Full state sent to session {} (map: {}, tokens: {}, combat: {})",
+                session_id,
+                gs.current_map.is_some(),
+                gs.tokens.len(),
+                gs.combat.active);
         }
         
         ClientMessage::DealDamage { target_id, damage } => {
@@ -1253,6 +1370,15 @@ async fn handle_client_message(
         
         // Enemy handlers
         ClientMessage::CreateEnemy { enemy } => {
+            // Never add "instance" names to the database (e.g. "Goblin 1", "Goblin 2") — those are map tokens only
+            let name_trim = enemy.name.trim();
+            let looks_like_instance = name_trim.rsplit_once(' ')
+                .map(|(_, suffix)| suffix.parse::<u32>().is_ok())
+                .unwrap_or(false);
+            if looks_like_instance {
+                info!("Ignoring CreateEnemy for instance-style name (not adding to DB): {:?}", name_trim);
+                return;
+            }
             let db = dnd_db; // Use appropriate DB based on style
             if let Err(e) = sqlx::query(
                 "INSERT OR REPLACE INTO enemies (id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url, style) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -1817,11 +1943,17 @@ async fn get_sound_file(Path(filename): Path<String>) -> Result<impl axum::respo
                 "audio/mpeg"
             };
             
-            Ok(axum::response::Response::builder()
+            match axum::response::Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", content_type)
                 .body(axum::body::Body::from(data))
-                .unwrap())
+            {
+                Ok(resp) => Ok(resp),
+                Err(e) => {
+                    error!("Failed to build sound response: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
         }
         Err(e) => {
             error!("❌ Failed to read sound file {}: {}", filename, e);

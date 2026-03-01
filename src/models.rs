@@ -134,6 +134,8 @@ pub enum ClientMessage {
     RollInitiative { entity_id: String, roll: i32 },
     NextTurn,
     EndCombat,
+    RequestShutdown, // DM only: request server to shut down gracefully
+    RequestFullState, // Client wants full sync (map, tokens, characters, combat) without reconnecting
     DealDamage { target_id: String, damage: i32 },
     HealTarget { target_id: String, healing: i32 },
     

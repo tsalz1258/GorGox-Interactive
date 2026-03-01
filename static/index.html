@@ -125,6 +125,17 @@
                             </div>
                         </div>
                     </div>
+                    <!-- DM only: player connection link and shutdown (at very bottom of left sidebar) -->
+                    <div id="dmShutdownSection" class="panel hidden" style="margin-top: auto;">
+                        <div style="margin-bottom: 10px;">
+                            <div style="font-weight: bold; color: #ffaa44; margin-bottom: 6px; font-size: 12px;">🔗 Link for players</div>
+                            <div style="display: flex; gap: 4px;">
+                                <input type="text" id="playerConnectionLink" readonly style="flex: 1; padding: 6px; font-size: 11px; background: #1a1a2e; color: #aaa; border: 1px solid #444; border-radius: 4px;" title="Share this URL with players">
+                                <button type="button" onclick="copyPlayerConnectionLink()" style="padding: 6px 10px; background: #4a9eff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Copy</button>
+                            </div>
+                        </div>
+                        <button id="shutdownServerBtn" onclick="requestServerShutdown()" style="width: 100%; background: #660000; color: white; font-weight: bold; padding: 10px; border: none; border-radius: 5px; cursor: pointer;">🛑 Shutdown Server</button>
+                    </div>
                 </aside>
 
                 <!-- Center - Map View -->
@@ -216,11 +227,12 @@
             </div>
         </div>
 
-        <!-- Create Enemy Modal -->
+        <!-- Create / Edit Enemy Modal -->
         <div id="createEnemyModal" class="modal">
             <div class="modal-content">
-                <h2>Create Enemy</h2>
+                <h2 id="createEnemyModalTitle">Create Enemy</h2>
                 <form id="enemyForm">
+                    <input type="hidden" id="enemyEditId" value="">
                     <input type="text" id="enemyName" placeholder="Name" required>
                     <input type="text" id="enemyType" placeholder="Type (e.g., Humanoid)" required>
                     <input type="number" id="enemyCR" placeholder="Challenge Rating" step="0.5" required>
@@ -242,11 +254,12 @@
                     <textarea id="enemyActions" placeholder="Actions (JSON format)"></textarea>
                     <textarea id="enemyDescription" placeholder="Description"></textarea>
                     
-                    <label style="margin-top: 10px;">Enemy Portrait (Optional):</label>
+                    <label style="margin-top: 10px;">Enemy Portrait (optional; leave empty to keep current):</label>
+                    <div id="enemyPortraitPreview" style="margin: 8px 0; min-height: 60px;"></div>
                     <input type="file" id="enemyPortrait" accept="image/*">
                     
                     <div class="modal-actions">
-                        <button type="button" onclick="createEnemy()">Create</button>
+                        <button type="button" id="enemyFormSubmitBtn" onclick="saveEnemyForm()">Create</button>
                         <button type="button" onclick="closeModal('createEnemyModal')">Cancel</button>
                     </div>
                 </form>
@@ -612,6 +625,7 @@
                 
                 <!-- Info Type Navigation Buttons -->
                 <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; border-bottom: 2px solid #444; padding-bottom: 15px;">
+                    <button id="infoBtnConnection" onclick="showInfoSection('connection')" style="background: #4a9eff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#5ab0ff'" onmouseout="this.style.background='#4a9eff'">🔗 Connection</button>
                     <button id="infoBtnConditions" onclick="showInfoSection('conditions')" style="background: #4a9eff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#5ab0ff'" onmouseout="this.style.background='#4a9eff'">⚡ Conditions</button>
                     <!-- Future info buttons can be added here -->
                 </div>
@@ -891,7 +905,7 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
-    <script src="/static/app.js?v=14"></script>
+    <script src="/static/app.js?v=16"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {
@@ -907,9 +921,10 @@
         });
     </script>
     
-    <!-- Refresh Button -->
+    <!-- Sync / Refresh Button - for all players (especially remote) to pull latest state without reloading -->
     <div id="refreshButton" class="hidden" style="position: fixed; bottom: 20px; right: 20px; z-index: 10000;">
         <button onclick="refreshApplication()" 
+                title="Sync with server – get latest map, tokens, and combat (use if your view is behind)"
                 style="padding: 12px 20px; background: linear-gradient(135deg, #4a9eff 0%, #aa88ff 100%); 
                        color: white; border: 2px solid rgba(255,255,255,0.3); border-radius: 8px; 
                        cursor: pointer; font-weight: bold; font-size: 14px; 
@@ -917,7 +932,7 @@
                        transition: all 0.3s ease;"
                 onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 20px rgba(74, 158, 255, 0.6)'"
                 onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 15px rgba(74, 158, 255, 0.4)'">
-            🔄 Refresh
+            🔄 Sync now
         </button>
     </div>
 </body>
