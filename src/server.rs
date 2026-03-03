@@ -320,6 +320,65 @@ async fn handle_socket(
     info!("Client {} disconnected", session_id_clone);
 }
 
+/// Fill in token.display_name and token.image_url (portrait) from enemy_instances or DB so players see names and pictures.
+async fn enrich_tokens_with_display_names(
+    mut tokens: Vec<crate::models::Token>,
+    game_state: &Arc<RwLock<GameState>>,
+    dnd_db: &Database,
+) -> Vec<crate::models::Token> {
+    use crate::models::TokenType;
+    let gs = game_state.read().await;
+    let mut need_portrait: Vec<(usize, String)> = Vec::new();
+    for (i, t) in tokens.iter_mut().enumerate() {
+        if !matches!(t.entity_type, TokenType::Enemy | TokenType::NPC) {
+            continue;
+        }
+        if t.display_name.is_none() {
+            if let Some(name) = gs.enemy_instances.get(&t.entity_id).map(|e| e.name.clone()) {
+                t.display_name = Some(name);
+            }
+        }
+        if t.image_url.is_none() {
+            let template_id = gs.enemy_instances.get(&t.entity_id).map(|e| e.enemy_id.clone()).unwrap_or_else(|| t.entity_id.clone());
+            need_portrait.push((i, template_id));
+        }
+    }
+    drop(gs);
+    for (i, template_id) in need_portrait {
+        if let Ok(Some(row)) = sqlx::query("SELECT portrait_url FROM enemies WHERE id = ?")
+            .bind(&template_id)
+            .fetch_optional(dnd_db)
+            .await
+        {
+            if let Ok(Some(url)) = row.try_get::<Option<String>, _>("portrait_url") {
+                tokens[i].image_url = Some(url);
+            }
+        }
+    }
+    for t in tokens.iter_mut() {
+        if t.display_name.is_some() {
+            continue;
+        }
+        if matches!(t.entity_type, TokenType::Enemy | TokenType::NPC) {
+            if let Ok(Some(row)) = sqlx::query("SELECT name, portrait_url FROM enemies WHERE id = ?")
+                .bind(&t.entity_id)
+                .fetch_optional(dnd_db)
+                .await
+            {
+                if let Ok(n) = row.try_get::<String, _>("name") {
+                    t.display_name = Some(n);
+                }
+                if t.image_url.is_none() {
+                    if let Ok(Some(url)) = row.try_get::<Option<String>, _>("portrait_url") {
+                        t.image_url = Some(url);
+                    }
+                }
+            }
+        }
+    }
+    tokens
+}
+
 async fn handle_client_message(
     msg: ClientMessage,
     session_id: &str,
@@ -348,12 +407,7 @@ async fn handle_client_message(
                 info!("📤 Sent current map to new player: {}", map.name);
             }
             
-            // Send current tokens
-            if !gs.tokens.is_empty() {
-                let token_update = ServerMessage::TokenUpdate { tokens: gs.tokens.clone() };
-                send_to_client(clients, session_id, &token_update).await;
-                info!("📤 Sent {} tokens to new player", gs.tokens.len());
-            }
+            let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
             
             // Send current characters list
             let characters: Vec<Character> = gs.characters.values().cloned().collect();
@@ -374,7 +428,14 @@ async fn handle_client_message(
                 info!("📤 Sent combat state to new player");
             }
             
-            drop(gs); // Release read lock
+            drop(gs);
+            
+            if let Some(tokens) = tokens_to_send {
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let token_update = ServerMessage::TokenUpdate { tokens: tokens.clone() };
+                send_to_client(clients, session_id, &token_update).await;
+                info!("📤 Sent {} tokens to new player", tokens.len());
+            }
             
             // Broadcast player joined to all other clients
             let player_joined = ServerMessage::PlayerJoined {
@@ -400,24 +461,58 @@ async fn handle_client_message(
         }
         
         // Essential token management handlers
-        ClientMessage::PlaceToken { entity_id, entity_type, x, y, size } => {
-            use crate::models::Token;
-            
+        ClientMessage::PlaceToken { entity_id, entity_type, x, y, size, display_name: client_display_name } => {
+            use crate::models::{Token, TokenType};
+
+            let gs = game_state.read().await;
+            let map_id = gs
+                .current_map
+                .as_ref()
+                .map(|m| m.id.clone())
+                .unwrap_or_default();
+
+            let display_name = match entity_type {
+                TokenType::Player => client_display_name
+                    .or_else(|| gs.characters.get(&entity_id).map(|c| c.name.clone())),
+                TokenType::Enemy | TokenType::NPC => client_display_name
+                    .or_else(|| gs.enemy_instances.get(&entity_id).map(|e| e.name.clone())),
+                TokenType::Object => None,
+            };
+            drop(gs);
+
+            // Template token (no instance): look up name and portrait from DB (don't hold gs across await)
+            let (display_name, image_url) = if matches!(entity_type, TokenType::Enemy | TokenType::NPC) {
+                let gs2 = game_state.read().await;
+                let template_id = gs2.enemy_instances.get(&entity_id).map(|e| e.enemy_id.clone()).unwrap_or_else(|| entity_id.clone());
+                drop(gs2);
+                let row = sqlx::query("SELECT name, portrait_url FROM enemies WHERE id = ?")
+                    .bind(&template_id)
+                    .fetch_optional(dnd_db)
+                    .await
+                    .ok()
+                    .flatten();
+                let name = display_name.or_else(|| row.as_ref().and_then(|r| r.try_get("name").ok()));
+                let portrait = row.and_then(|r| r.try_get("portrait_url").ok());
+                (name, portrait)
+            } else {
+                (display_name, None)
+            };
+
             let token = Token {
                 id: uuid::Uuid::new_v4().to_string(),
-                map_id: game_state.read().await.current_map.as_ref().map(|m| m.id.clone()).unwrap_or_default(),
+                map_id,
                 entity_id,
                 entity_type,
                 x,
                 y,
-                size: size.unwrap_or(1.0), // Default to 1.0 (Medium) if not provided
-                image_url: None,
+                size: size.unwrap_or(1.0),
+                image_url,
+                display_name,
             };
-            
+
             game_state.write().await.add_token(token.clone());
-            
-            // Broadcast token update to all clients
             let tokens = game_state.read().await.tokens.clone();
+            let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
             let token_update = ServerMessage::TokenUpdate { tokens };
             broadcast_message(clients, &token_update).await;
         }
@@ -425,6 +520,7 @@ async fn handle_client_message(
         ClientMessage::MoveToken { token_id, x, y } => {
             if game_state.write().await.move_token(&token_id, x, y) {
                 let tokens = game_state.read().await.tokens.clone();
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             }
@@ -433,6 +529,7 @@ async fn handle_client_message(
         ClientMessage::RemoveToken { token_id } => {
             if game_state.write().await.remove_token(&token_id) {
                 let tokens = game_state.read().await.tokens.clone();
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             }
@@ -458,6 +555,7 @@ async fn handle_client_message(
                 
                 // Broadcast updated tokens to all clients
                 let tokens = game_state.read().await.tokens.clone();
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             }
@@ -833,10 +931,7 @@ async fn handle_client_message(
                 let map_loaded = ServerMessage::MapLoaded { map: map.clone() };
                 send_to_client(clients, session_id, &map_loaded).await;
             }
-            if !gs.tokens.is_empty() {
-                let token_update = ServerMessage::TokenUpdate { tokens: gs.tokens.clone() };
-                send_to_client(clients, session_id, &token_update).await;
-            }
+            let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
             let characters: Vec<crate::models::Character> = gs.characters.values().cloned().collect();
             if !characters.is_empty() {
                 let character_list = ServerMessage::CharacterList { characters, style: None };
@@ -853,6 +948,12 @@ async fn handle_client_message(
                 gs.current_map.is_some(),
                 gs.tokens.len(),
                 gs.combat.active);
+            drop(gs);
+            if let Some(tokens) = tokens_to_send {
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let token_update = ServerMessage::TokenUpdate { tokens };
+                send_to_client(clients, session_id, &token_update).await;
+            }
         }
         
         ClientMessage::DealDamage { target_id, damage } => {

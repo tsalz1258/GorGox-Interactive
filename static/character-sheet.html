@@ -96,11 +96,9 @@
     </div>
 
     <script>
-        // CRITICAL: Define roll functions FIRST (before any HTML is loaded)
-        // These functions send roll requests to the parent window via postMessage
-        // The parent window then executes the actual roll via WebSocket
-        
-        // Send roll request to parent window
+        // Standalone character sheet: all clickable roll/tooltip handlers run here and forward to parent via postMessage.
+        // Do NOT load app.js in this window so these handlers are never overwritten.
+
         function sendRollToParent(rollType, params) {
             const parent = window.opener;
             if (parent && parent !== window && !parent.closed) {
@@ -109,112 +107,113 @@
                     rollType: rollType,
                     ...params
                 }, window.location.origin);
-                console.log('📤 Sent roll request to parent window:', rollType, params);
                 return true;
-            } else {
-                console.warn('⚠️ Parent window not available, cannot send roll request');
-                alert('⚠️ Cannot roll dice: Parent game window is not available. Please keep the main game window open.');
-                return false;
             }
+            console.warn('⚠️ Parent window not available');
+            alert('⚠️ Cannot roll dice: Parent game window is not available. Please keep the main game window open.');
+            return false;
         }
 
-        // Define roll functions globally - these will be called by onclick handlers
+        // Roll handlers (forward to parent)
         window.rollAbilityCheck = function(ability, modifier, characterName) {
             sendRollToParent('abilityCheck', { ability, modifier, characterName });
         };
-
         window.rollSavingThrow = function(ability, modifier, characterName) {
             sendRollToParent('savingThrow', { ability, modifier, characterName });
         };
-
         window.rollSkill = function(skillName, modifier, characterName) {
             sendRollToParent('skill', { skillName, modifier, characterName });
         };
-
         window.rollAttack = function(weaponName, toHitMod, damageNotation, damageType, characterName) {
             sendRollToParent('attack', { weaponName, toHitMod, damageNotation, damageType, characterName });
         };
+        window.rollActionFromSheet = function(index) {
+            sendRollToParent('actionFromSheet', { index: index });
+        };
+        window.resetLegendaryActions = function(enemyId, storageKey) {
+            sendRollToParent('resetLegendaryActions', { enemyId: enemyId, storageKey: storageKey });
+        };
 
-        console.log('✅ Roll functions defined for standalone character sheet');
-    </script>
-    <script src="/static/app.js"></script>
-    <script>
-        // Character sheet rendering functions (simplified version for standalone page)
+        // rollDice: run locally so inline onclicks like "const dmgResult = rollDice('2d6'); addLogEntry(...)" work; addLogEntry sends to parent
+        window.rollDice = function(notation) {
+            const flatMatch = (notation || '').match(/^(\d+)$/);
+            if (flatMatch) {
+                return { total: parseInt(flatMatch[1], 10), rolls: [], breakdown: String(notation) };
+            }
+            const match = (notation || '').match(/(\d+)d(\d+)([+-]\d+)?/i);
+            if (!match) {
+                return { total: 0, rolls: [], breakdown: String(notation) };
+            }
+            const numDice = parseInt(match[1], 10);
+            const diceSize = parseInt(match[2], 10);
+            const modifier = match[3] ? parseInt(match[3], 10) : 0;
+            let rolls = [];
+            let total = modifier;
+            for (let i = 0; i < numDice; i++) {
+                const r = Math.floor(Math.random() * diceSize) + 1;
+                rolls.push(r);
+                total += r;
+            }
+            const breakdown = '(' + rolls.join('+') + ')' + (modifier !== 0 ? (modifier >= 0 ? '+' + modifier : modifier) : '') + ' = ' + total;
+            return { total, rolls, breakdown };
+        };
+        window.addLogEntry = function(text, type) {
+            sendRollToParent('addLogEntry', { text: String(text), type: type || 'info' });
+        };
+
+        // Tooltips: show in this window (no app.js dependency)
+        let spellTooltipTimeout = null;
+        window.showSpellTooltip = function(spellName, event) {
+            const tooltip = document.getElementById('spellTooltip');
+            const content = document.getElementById('spellTooltipContent');
+            if (!tooltip || !content) return;
+            if (spellTooltipTimeout) {
+                clearTimeout(spellTooltipTimeout);
+                spellTooltipTimeout = null;
+            }
+            content.innerHTML = '<div style="padding:12px; white-space:pre-wrap;">' + escapeHtml(spellName) + '</div>';
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.clientX + 15) + 'px';
+            tooltip.style.top = (event.clientY + 15) + 'px';
+        };
+        window.showAttackTooltip = function(description, event) {
+            const tooltip = document.getElementById('spellTooltip');
+            const content = document.getElementById('spellTooltipContent');
+            if (!tooltip || !content) return;
+            if (spellTooltipTimeout) {
+                clearTimeout(spellTooltipTimeout);
+                spellTooltipTimeout = null;
+            }
+            content.innerHTML = '<div style="padding:12px; white-space:pre-wrap; max-width:400px;">' + escapeHtml(description) + '</div>';
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.clientX + 15) + 'px';
+            tooltip.style.top = (event.clientY + 15) + 'px';
+        };
+        window.hideSpellTooltip = function() {
+            const tooltip = document.getElementById('spellTooltip');
+            if (!tooltip) return;
+            spellTooltipTimeout = setTimeout(function() {
+                tooltip.style.display = 'none';
+                spellTooltipTimeout = null;
+            }, 150);
+        };
+        window.keepSpellTooltip = function() {
+            if (spellTooltipTimeout) {
+                clearTimeout(spellTooltipTimeout);
+                spellTooltipTimeout = null;
+            }
+        };
+        function escapeHtml(text) {
+            if (!text) return '';
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Character sheet data and load (no app.js – we always use stored HTML from parent)
         let characterData = null;
         let characterFullData = null;
         let lastTimestamp = 0;
-
-        // Re-define roll functions after app.js loads to ensure they send to parent
-        // (app.js might override them, so we override again)
-        setTimeout(() => {
-            window.rollAbilityCheck = function(ability, modifier, characterName) {
-                const parent = window.opener;
-                if (parent && !parent.closed) {
-                    parent.postMessage({
-                        type: 'characterSheetRoll',
-                        rollType: 'abilityCheck',
-                        ability: ability,
-                        modifier: modifier,
-                        characterName: characterName
-                    }, window.location.origin);
-                    console.log('📤 Sent ability check to parent:', ability);
-                } else {
-                    alert('⚠️ Cannot roll: Parent game window is not available.');
-                }
-            };
-
-            window.rollSavingThrow = function(ability, modifier, characterName) {
-                const parent = window.opener;
-                if (parent && !parent.closed) {
-                    parent.postMessage({
-                        type: 'characterSheetRoll',
-                        rollType: 'savingThrow',
-                        ability: ability,
-                        modifier: modifier,
-                        characterName: characterName
-                    }, window.location.origin);
-                    console.log('📤 Sent saving throw to parent:', ability);
-                } else {
-                    alert('⚠️ Cannot roll: Parent game window is not available.');
-                }
-            };
-
-            window.rollSkill = function(skillName, modifier, characterName) {
-                const parent = window.opener;
-                if (parent && !parent.closed) {
-                    parent.postMessage({
-                        type: 'characterSheetRoll',
-                        rollType: 'skill',
-                        skillName: skillName,
-                        modifier: modifier,
-                        characterName: characterName
-                    }, window.location.origin);
-                    console.log('📤 Sent skill check to parent:', skillName);
-                } else {
-                    alert('⚠️ Cannot roll: Parent game window is not available.');
-                }
-            };
-
-            window.rollAttack = function(weaponName, toHitMod, damageNotation, damageType, characterName) {
-                const parent = window.opener;
-                if (parent && !parent.closed) {
-                    parent.postMessage({
-                        type: 'characterSheetRoll',
-                        rollType: 'attack',
-                        weaponName: weaponName,
-                        toHitMod: toHitMod,
-                        damageNotation: damageNotation,
-                        damageType: damageType,
-                        characterName: characterName
-                    }, window.location.origin);
-                    console.log('📤 Sent attack to parent:', weaponName);
-                } else {
-                    alert('⚠️ Cannot roll: Parent game window is not available.');
-                }
-            };
-            
-            console.log('✅ Roll functions re-defined for standalone window');
-        }, 100);
 
         function loadCharacterSheet() {
             try {
@@ -242,6 +241,7 @@
                 if (data.html) {
                     document.getElementById('characterSheetContent').innerHTML = data.html;
                     lastTimestamp = data.timestamp || 0;
+                    setupDiceRollButtonsInStandalone();
                 } else {
                     // Fallback: try to render using functions from app.js
                     renderStandaloneCharacterSheet();
@@ -254,26 +254,13 @@
         }
 
         function renderStandaloneCharacterSheet() {
-            const char = characterData;
-            const charData = characterFullData;
-
-            if (!char) {
-                document.getElementById('characterSheetContent').innerHTML = 
+            // Standalone page does not load app.js; use simple fallback if no stored HTML
+            if (!characterData) {
+                document.getElementById('characterSheetContent').innerHTML =
                     '<div class="error-message">❌ No character data available.</div>';
                 return;
             }
-
-            // Try to use build functions from app.js if available
-            if (typeof buildDetailedCharacterSheet === 'function' && charData) {
-                const html = buildDetailedCharacterSheet(char, charData);
-                document.getElementById('characterSheetContent').innerHTML = html;
-            } else if (typeof buildSimpleCharacterSheet === 'function') {
-                const html = buildSimpleCharacterSheet(char);
-                document.getElementById('characterSheetContent').innerHTML = html;
-            } else {
-                // Ultimate fallback: simple display
-                renderSimpleCharacterSheet();
-            }
+            renderSimpleCharacterSheet();
         }
 
         function renderSimpleCharacterSheet() {
@@ -310,6 +297,24 @@
         function refreshCharacterSheet() {
             // Reload from sessionStorage (parent window should update it)
             loadCharacterSheet();
+        }
+
+        // Dice tray (D4, D6, D8, D10, D12, D20, D100): wire clicks so they run in parent
+        function setupDiceRollButtonsInStandalone() {
+            const content = document.getElementById('characterSheetContent');
+            if (!content) return;
+            const container = content.querySelector('.dice-roll-container');
+            if (!container) return;
+            const characterName = container.getAttribute('data-character-name') || (characterData && characterData.name) || 'Character';
+            container.addEventListener('click', function(e) {
+                const btn = e.target.closest('.dice-roll-button');
+                if (!btn) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const sides = parseInt(btn.getAttribute('data-sides'), 10);
+                const name = container.getAttribute('data-character-name') || characterName;
+                if (sides && name) sendRollToParent('flatDice', { sides: sides, characterName: name });
+            });
         }
 
         // Listen for messages from parent window

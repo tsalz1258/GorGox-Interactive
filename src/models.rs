@@ -78,6 +78,8 @@ pub struct Token {
     pub y: f32,
     pub size: f32, // Size in grid squares (1.0 = medium, 2.0 = large, etc.)
     pub image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>, // Name to show on the map (e.g. "Goblin 1")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -124,7 +126,7 @@ pub enum ClientMessage {
     ClearMap, // Clear current map and all tokens
     
     // Token management
-    PlaceToken { entity_id: String, entity_type: TokenType, x: f32, y: f32, size: Option<f32> },
+    PlaceToken { entity_id: String, entity_type: TokenType, x: f32, y: f32, size: Option<f32>, #[serde(default)] display_name: Option<String> },
     MoveToken { token_id: String, x: f32, y: f32 },
     RemoveToken { token_id: String },
     UpdateTokenSize { token_id: String, size: f32 },

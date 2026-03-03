@@ -2617,13 +2617,15 @@ function drawToken(token) {
             portraitImg = tokenImages[char.id];
         }
     } else if (token.entity_type === 'Enemy') {
-        // Portrait: token.entity_id can be template id or instance id; check both
-        const enemyByTemplate = enemies.find(e => e.id === token.entity_id);
-        const portraitSrc = enemyByTemplate && (enemyByTemplate.portrait_url || enemyByTemplate.local_portrait);
+        // Portrait: prefer server-provided token.image_url so players see it without needing enemy list
+        const portraitSrc = token.image_url || (() => {
+            const enemyByTemplate = enemies.find(e => e.id === token.entity_id);
+            return enemyByTemplate && (enemyByTemplate.portrait_url || enemyByTemplate.local_portrait);
+        })();
         if (portraitSrc) {
             hasPortrait = true;
             borderColor = '#ff4444'; // Red for enemies
-            const cacheKey = 'enemy-' + (enemyByTemplate.id || token.entity_id);
+            const cacheKey = 'enemy-' + (token.id || token.entity_id);
             if (!tokenImages[cacheKey]) {
                 tokenImages[cacheKey] = new Image();
                 tokenImages[cacheKey].src = portraitSrc;
@@ -2738,41 +2740,28 @@ function drawToken(token) {
     ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
     ctx.shadowBlur = 4;
     
-    let displayName = 'Unknown';
+    let displayName = token.display_name || 'Unknown';
     if (token.entity_type === 'Player') {
         const char = characters.find(c => c.id === token.entity_id);
         displayName = char ? char.name : 'Player';
     } else if (token.entity_type === 'Enemy') {
-        // FIX: Look up enemy name - prioritize NPC instances, then combat participants, then enemies list
-        // For NPCs, always use the stored name from the enemies array
-        let enemy = enemies.find(e => e.id === token.entity_id);
-        
-        // If found and it's an NPC, use its name directly
-        if (enemy && enemy.isNPC && enemy.npcData) {
-            displayName = enemy.name; // NPC instance name (e.g., "Stormtrooper 1")
+        // Prefer server-provided display_name so players always see names without needing enemy list
+        const participantById = combatState.participants.find(p => p.id === token.id);
+        const participantByEntity = combatState.participants.find(p => p.entity_id === token.entity_id);
+        const enemy = enemies.find(e => e.id === token.entity_id);
+        const npcInstance = enemies.find(e => e.id === token.entity_id && (e.isNPC || e.npcData));
+        if (token.display_name) {
+            displayName = token.display_name;
+        } else if (participantById && participantById.name) {
+            displayName = participantById.name;
+        } else if (participantByEntity && participantByEntity.name) {
+            displayName = participantByEntity.name;
+        } else if (npcInstance && npcInstance.name) {
+            displayName = npcInstance.name;
+        } else if (enemy && enemy.name) {
+            displayName = enemy.name;
         } else {
-            // Check combat participants (for enemies in combat)
-            const participant = combatState.participants.find(p => p.entity_id === token.entity_id);
-            if (participant) {
-                displayName = participant.name; // Use combat participant name
-            } else if (enemy) {
-                // Regular enemy from enemies list
-                displayName = enemy.name;
-            } else {
-                // Fallback: try to find by checking if it's an NPC that might have lost its reference
-                // This is a defensive check for DM
-                if (isDM) {
-                    // For DM, try harder to find the name - check all NPCs
-                    const npcInstance = enemies.find(e => e.id === token.entity_id && (e.isNPC || e.npcData));
-                    if (npcInstance) {
-                        displayName = npcInstance.name;
-                    } else {
-                        displayName = 'Enemy'; // Last resort fallback
-                    }
-                } else {
-                    displayName = 'Enemy';
-                }
-            }
+            displayName = 'Enemy';
         }
     } else {
         displayName = token.entity_type;
@@ -6035,7 +6024,8 @@ function spawnNPC(npc) {
         entity_type: 'Enemy',
         x: 5,
         y: 5,
-        size: tokenSize
+        size: tokenSize,
+        display_name: instanceName
     });
     
     closeModal('enemyManagerModal');
@@ -7620,11 +7610,12 @@ function spawnEnemy(enemyId, enemyName) {
         console.log(`🎯 Placing enemy token ${instanceName} (${instanceId}) with size: ${tokenSize} squares`);
         sendMessage({
             type: 'PlaceToken',
-            entity_id: instanceId, // Same ID!
+            entity_id: instanceId,
             entity_type: 'Enemy',
             x: 5,
             y: 5,
-            size: tokenSize
+            size: tokenSize,
+            display_name: instanceName
         });
     } else {
         console.error('❌ Base enemy not found:', enemyId);
@@ -7635,7 +7626,8 @@ function spawnEnemy(enemyId, enemyName) {
             entity_type: 'Enemy',
             x: 5,
             y: 5,
-            size: tokenSize
+            size: tokenSize,
+            display_name: instanceName || 'Enemy'
         });
     }
     
@@ -10778,6 +10770,18 @@ window.addEventListener('message', (event) => {
             case 'attack':
                 rollAttack(params.weaponName, params.toHitMod, params.damageNotation, params.damageType, params.characterName);
                 break;
+            case 'actionFromSheet':
+                if (typeof params.index === 'number') rollActionFromSheet(params.index);
+                break;
+            case 'addLogEntry':
+                if (params.text != null) addLogEntry(params.text, params.type || 'info');
+                break;
+            case 'resetLegendaryActions':
+                if (params.enemyId != null && params.storageKey != null) resetLegendaryActions(params.enemyId, params.storageKey);
+                break;
+            case 'flatDice':
+                if (params.sides != null && params.characterName != null) rollFlatDice(params.sides, params.characterName);
+                break;
         }
     }
 });
@@ -12342,13 +12346,9 @@ function syncParticipantsWithTokens() {
                 if (enemy) {
                     participantName = enemy.name; // Use the actual NPC/enemy name
                 } else {
-                    // Fallback: for DM, try harder to find NPC
-                    if (isDM) {
-                        const npcInstance = enemies.find(e => e.id === token.entity_id && (e.isNPC || e.npcData));
-                        participantName = npcInstance ? npcInstance.name : 'Enemy';
-                    } else {
-                        participantName = 'Enemy'; // Players see generic "Enemy"
-                    }
+                    // Fallback: try NPC instance then generic name (same for DM and players so players see names)
+                    const npcInstance = enemies.find(e => e.id === token.entity_id && (e.isNPC || e.npcData));
+                    participantName = npcInstance ? npcInstance.name : 'Enemy';
                 }
             }
         }
@@ -13515,13 +13515,15 @@ async function loadGameStateFromData(gameState, sourceName) {
                 // Always calculate size - don't trust saved size, recalculate from entity data
                 const tokenSize = getTokenSize(token.entity_id, token.entity_type);
                 console.log(`📐 Restoring token ${token.entity_id} with calculated size: ${tokenSize}`);
+                const displayName = token.display_name || (token.entity_type === 'Enemy' || token.entity_type === 'NPC' ? (enemies.find(e => e.id === token.entity_id)?.name) : undefined);
                 sendMessage({
                     type: 'PlaceToken',
                     entity_id: token.entity_id,
                     entity_type: token.entity_type,
                     x: token.x,
                     y: token.y,
-                    size: tokenSize
+                    size: tokenSize,
+                    display_name: displayName || undefined
                 });
                 
                 // Small delay between tokens to avoid race conditions
