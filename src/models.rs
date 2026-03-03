@@ -130,10 +130,11 @@ pub enum ClientMessage {
     UpdateTokenSize { token_id: String, size: f32 },
     
     // Combat
-    StartCombat,
-    RollInitiative { entity_id: String, roll: i32 },
+    StartCombat { #[serde(default)] token_ids: Option<Vec<String>> },
+    RollInitiative { entity_id: String, roll: i32, #[serde(default)] silent: bool, #[serde(default)] participant_id: Option<String> },
     NextTurn,
     EndCombat,
+    RemoveFromCombat { participant_id: String },
     RequestShutdown, // DM only: request server to shut down gracefully
     RequestFullState, // Client wants full sync (map, tokens, characters, combat) without reconnecting
     DealDamage { target_id: String, damage: i32 },
@@ -224,7 +225,7 @@ pub enum ServerMessage {
     
     // Combat updates
     CombatStarted { participants: Vec<CombatParticipant> },
-    InitiativeRolled { entity_id: String, initiative: i32 },
+    InitiativeRolled { entity_id: String, initiative: i32, #[serde(default)] silent: bool, #[serde(default)] participant_id: Option<String> },
     TurnChanged { current_turn: String, participant_name: String },
     CombatEnded,
     DamageDealt { target_id: String, damage: i32, new_hp: i32 },

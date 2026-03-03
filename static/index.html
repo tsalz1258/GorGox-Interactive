@@ -31,7 +31,7 @@
         <div id="mainInterface" class="hidden">
             <!-- Header -->
     <header>
-        <h1>🎲 Gorgox Interactive <span style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v14 DUAL DB</span></h1>
+        <h1>🎲 Gorgox Interactive <span style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v15 DUAL DB</span></h1>
         <button onclick="showSpellTooltip('Fireball', {clientX: 300, clientY: 300})" style="background: #aa88ff; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🧪 Test Tooltip</button>
         <button onclick="populateCombatActionPanel()" style="background: #ff4444; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🔧 MANUAL POPULATE</button>
         <button onclick="console.log('CHARACTERS:', characters); console.log('MY CHARACTER ID:', myCharacterId);" style="background: #00ff00; color: black; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🐛 DEBUG DATA</button>
@@ -593,10 +593,13 @@
                         Enter your d20 roll:
                         <input type="number" id="initiativeRollInput" min="1" max="20" oninput="updateInitiativeTotalPreview()" onkeydown="if(event.key==='Enter'){submitInitiativePrompt();}" style="margin-top: 6px; width: 100%; padding: 8px; border-radius: 5px; background: #2a2a2a; color: white; border: 1px solid #444;">
                     </label>
+                    <div id="initiativeRollResult" style="font-size: 13px; color: #ffaa44; min-height: 20px;"></div>
                     <div id="initiativeTotalPreview" style="font-size: 13px; opacity: 0.8;"></div>
                 </div>
-                <div class="modal-actions" style="gap: 10px; margin-top: 15px;">
+                <div class="modal-actions" style="gap: 10px; margin-top: 15px; flex-wrap: wrap;">
                     <button onclick="rollInitiativeInPrompt()" style="background: #4a9eff; color: white; font-weight: bold;">🎲 Roll d20</button>
+                    <button onclick="rollInitiativeAdvantage()" style="background: #44ff44; color: #000; font-weight: bold;">⬆️ Advantage (2d20, use higher)</button>
+                    <button onclick="rollInitiativeDisadvantage()" style="background: #ff8844; color: #000; font-weight: bold;">⬇️ Disadvantage (2d20, use lower)</button>
                     <button onclick="submitInitiativePrompt()" style="background: #44ff44; color: #000; font-weight: bold;">✅ Submit</button>
                     <button onclick="cancelInitiativePrompt()" style="background: #555; color: white;">Cancel</button>
                 </div>

@@ -366,46 +366,9 @@ async fn handle_client_message(
                 info!("📤 Sent {} characters to new player", characters.len());
             }
             
-            // Send combat state if active
+            // Send combat state if active (use server's participant list so order and membership match)
             if gs.combat.active {
-                let participants: Vec<CombatParticipant> = gs.tokens.iter()
-                    .filter_map(|token| {
-                        if let Some(character) = gs.characters.get(&token.entity_id) {
-                            Some(CombatParticipant {
-                                id: token.id.clone(),
-                                entity_id: token.entity_id.clone(),
-                                name: character.name.clone(),
-                                initiative: gs.combat.participants.iter()
-                                    .find(|p| p.id == token.id)
-                                    .map(|p| p.initiative)
-                                    .unwrap_or(0),
-                                initiative_bonus: character.initiative_bonus,
-                                entity_type: crate::models::TokenType::Player,
-                                current_hp: character.current_hp,
-                                max_hp: character.max_hp,
-                                armor_class: character.armor_class,
-                            })
-                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
-                            Some(CombatParticipant {
-                                id: token.id.clone(),
-                                entity_id: token.entity_id.clone(),
-                                name: enemy.name.clone(),
-                                initiative: gs.combat.participants.iter()
-                                    .find(|p| p.id == token.id)
-                                    .map(|p| p.initiative)
-                                    .unwrap_or(0),
-                                initiative_bonus: enemy.initiative_bonus,
-                                entity_type: crate::models::TokenType::Enemy,
-                                current_hp: enemy.current_hp,
-                                max_hp: enemy.max_hp,
-                                armor_class: enemy.armor_class,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                
+                let participants = gs.combat.participants.clone();
                 let combat_started = ServerMessage::CombatStarted { participants };
                 send_to_client(clients, session_id, &combat_started).await;
                 info!("📤 Sent combat state to new player");
@@ -624,13 +587,123 @@ async fn handle_client_message(
         }
         
         // Combat handlers
-        ClientMessage::StartCombat => {
+        ClientMessage::StartCombat { token_ids } => {
             let mut gs = game_state.write().await;
-            let participants: Vec<CombatParticipant> = gs.tokens.iter()
-                .filter_map(|token| {
-                    // Try to find character or enemy for this token
-                    if let Some(character) = gs.characters.get(&token.entity_id) {
-                        Some(CombatParticipant {
+            let participants: Vec<CombatParticipant> = if let Some(ref ids) = token_ids {
+                info!("⚔️ StartCombat: client sent token_ids count = {}", ids.len());
+                if ids.is_empty() {
+                    gs.tokens.iter().filter_map(|token| {
+                        if token.entity_type == crate::models::TokenType::Object {
+                            return None;
+                        }
+                        Some(if let Some(character) = gs.characters.get(&token.entity_id) {
+                            CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: character.name.clone(),
+                                initiative: 0,
+                                initiative_bonus: character.initiative_bonus,
+                                entity_type: crate::models::TokenType::Player,
+                                current_hp: character.current_hp,
+                                max_hp: character.max_hp,
+                                armor_class: character.armor_class,
+                            }
+                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: enemy.name.clone(),
+                                initiative: 0,
+                                initiative_bonus: enemy.initiative_bonus,
+                                entity_type: crate::models::TokenType::Enemy,
+                                current_hp: enemy.current_hp,
+                                max_hp: enemy.max_hp,
+                                armor_class: enemy.armor_class,
+                            }
+                        } else {
+                            CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: token.entity_id.clone(),
+                                initiative: 0,
+                                initiative_bonus: 0,
+                                entity_type: token.entity_type.clone(),
+                                current_hp: 1,
+                                max_hp: 1,
+                                armor_class: 10,
+                            }
+                        })
+                    }).collect()
+                } else {
+                // Client sent token list: one participant per id. Use server token data when present, else placeholder.
+                let mut list = Vec::with_capacity(ids.len());
+                for id in ids {
+                    if let Some(token) = gs.tokens.iter().find(|t| t.id == *id) {
+                        let p = if let Some(character) = gs.characters.get(&token.entity_id) {
+                            CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: character.name.clone(),
+                                initiative: 0,
+                                initiative_bonus: character.initiative_bonus,
+                                entity_type: crate::models::TokenType::Player,
+                                current_hp: character.current_hp,
+                                max_hp: character.max_hp,
+                                armor_class: character.armor_class,
+                            }
+                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: enemy.name.clone(),
+                                initiative: 0,
+                                initiative_bonus: enemy.initiative_bonus,
+                                entity_type: crate::models::TokenType::Enemy,
+                                current_hp: enemy.current_hp,
+                                max_hp: enemy.max_hp,
+                                armor_class: enemy.armor_class,
+                            }
+                        } else {
+                            CombatParticipant {
+                                id: token.id.clone(),
+                                entity_id: token.entity_id.clone(),
+                                name: token.entity_id.clone(),
+                                initiative: 0,
+                                initiative_bonus: 0,
+                                entity_type: token.entity_type.clone(),
+                                current_hp: 1,
+                                max_hp: 1,
+                                armor_class: 10,
+                            }
+                        };
+                        list.push(p);
+                    } else {
+                        // Unique placeholder id so multiple enemies get separate turns (e.g. goblin -> goblin-0, goblin-1)
+                        let placeholder_id = format!("{}-{}", id, list.len());
+                        list.push(CombatParticipant {
+                            id: placeholder_id,
+                            entity_id: id.clone(),
+                            name: id.clone(),
+                            initiative: 0,
+                            initiative_bonus: 0,
+                            entity_type: crate::models::TokenType::Enemy,
+                            current_hp: 1,
+                            max_hp: 1,
+                            armor_class: 10,
+                        });
+                    }
+                }
+                info!("⚔️ StartCombat: built {} participants from client token_ids", list.len());
+                list
+                }
+            } else {
+                info!("⚔️ StartCombat: no token_ids, using server tokens (count = {})", gs.tokens.len());
+                gs.tokens.iter().filter_map(|token| {
+                    if token.entity_type == crate::models::TokenType::Object {
+                        return None;
+                    }
+                    Some(if let Some(character) = gs.characters.get(&token.entity_id) {
+                        CombatParticipant {
                             id: token.id.clone(),
                             entity_id: token.entity_id.clone(),
                             name: character.name.clone(),
@@ -640,9 +713,9 @@ async fn handle_client_message(
                             current_hp: character.current_hp,
                             max_hp: character.max_hp,
                             armor_class: character.armor_class,
-                        })
+                        }
                     } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
-                        Some(CombatParticipant {
+                        CombatParticipant {
                             id: token.id.clone(),
                             entity_id: token.entity_id.clone(),
                             name: enemy.name.clone(),
@@ -652,22 +725,38 @@ async fn handle_client_message(
                             current_hp: enemy.current_hp,
                             max_hp: enemy.max_hp,
                             armor_class: enemy.armor_class,
-                        })
+                        }
                     } else {
-                        None
-                    }
-                })
-                .collect();
-            
+                        CombatParticipant {
+                            id: token.id.clone(),
+                            entity_id: token.entity_id.clone(),
+                            name: token.entity_id.clone(),
+                            initiative: 0,
+                            initiative_bonus: 0,
+                            entity_type: token.entity_type.clone(),
+                            current_hp: 1,
+                            max_hp: 1,
+                            armor_class: 10,
+                        }
+                    })
+                }).collect()
+            };
+
+            info!("⚔️ StartCombat: starting combat with {} participants", participants.len());
             gs.combat.start_combat(participants.clone());
             let combat_started = ServerMessage::CombatStarted { participants };
             broadcast_message(clients, &combat_started).await;
         }
         
-        ClientMessage::RollInitiative { entity_id, roll } => {
+        ClientMessage::RollInitiative { entity_id, roll, silent, participant_id } => {
             let mut gs = game_state.write().await;
-            gs.combat.update_initiative(&entity_id, roll);
-            let initiative_rolled = ServerMessage::InitiativeRolled { entity_id, initiative: roll };
+            gs.combat.update_initiative(&entity_id, roll, participant_id.as_deref());
+            let initiative_rolled = ServerMessage::InitiativeRolled {
+                entity_id: entity_id.clone(),
+                initiative: roll,
+                silent,
+                participant_id: participant_id.clone(),
+            };
             broadcast_message(clients, &initiative_rolled).await;
             
             // If all have rolled, send turn update
@@ -698,6 +787,35 @@ async fn handle_client_message(
             broadcast_message(clients, &combat_ended).await;
         }
 
+        ClientMessage::RemoveFromCombat { participant_id } => {
+            let is_dm = game_state.read().await.players.get(session_id).map(|p| p.is_dm).unwrap_or(false);
+            if !is_dm {
+                warn!("Non-DM session {} tried to remove from combat; ignored.", session_id);
+                return;
+            }
+            let mut gs = game_state.write().await;
+            if !gs.combat.active {
+                return;
+            }
+            gs.combat.remove_participant(&participant_id);
+            if gs.combat.participants.is_empty() {
+                gs.combat.end_combat();
+                let combat_ended = ServerMessage::CombatEnded;
+                drop(gs);
+                broadcast_message(clients, &combat_ended).await;
+            } else {
+                let participants = gs.combat.participants.clone();
+                let current = gs.combat.get_current_participant().map(|p| (p.id.clone(), p.name.clone()));
+                drop(gs);
+                let combat_started = ServerMessage::CombatStarted { participants };
+                broadcast_message(clients, &combat_started).await;
+                if let Some((current_turn, participant_name)) = current {
+                    let turn_changed = ServerMessage::TurnChanged { current_turn, participant_name };
+                    broadcast_message(clients, &turn_changed).await;
+                }
+            }
+        }
+
         ClientMessage::RequestShutdown => {
             let is_dm = game_state.read().await.players.get(session_id).map(|p| p.is_dm).unwrap_or(false);
             if is_dm {
@@ -725,43 +843,8 @@ async fn handle_client_message(
                 send_to_client(clients, session_id, &character_list).await;
             }
             if gs.combat.active {
-                let participants: Vec<crate::models::CombatParticipant> = gs.tokens.iter()
-                    .filter_map(|token| {
-                        if let Some(character) = gs.characters.get(&token.entity_id) {
-                            Some(crate::models::CombatParticipant {
-                                id: token.id.clone(),
-                                entity_id: token.entity_id.clone(),
-                                name: character.name.clone(),
-                                initiative: gs.combat.participants.iter()
-                                    .find(|p| p.id == token.id)
-                                    .map(|p| p.initiative)
-                                    .unwrap_or(0),
-                                initiative_bonus: character.initiative_bonus,
-                                entity_type: crate::models::TokenType::Player,
-                                current_hp: character.current_hp,
-                                max_hp: character.max_hp,
-                                armor_class: character.armor_class,
-                            })
-                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
-                            Some(crate::models::CombatParticipant {
-                                id: token.id.clone(),
-                                entity_id: token.entity_id.clone(),
-                                name: enemy.name.clone(),
-                                initiative: gs.combat.participants.iter()
-                                    .find(|p| p.id == token.id)
-                                    .map(|p| p.initiative)
-                                    .unwrap_or(0),
-                                initiative_bonus: enemy.initiative_bonus,
-                                entity_type: crate::models::TokenType::Enemy,
-                                current_hp: enemy.current_hp,
-                                max_hp: enemy.max_hp,
-                                armor_class: enemy.armor_class,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                // Send current combat participants (server is source of truth; includes everyone in combat)
+                let participants = gs.combat.participants.clone();
                 let combat_started = ServerMessage::CombatStarted { participants };
                 send_to_client(clients, session_id, &combat_started).await;
             }

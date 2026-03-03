@@ -1,5 +1,5 @@
-// GORGOX_APP_VERSION=select-character-required (no auto-assign) - if you see this in Sources, you have the latest JS
-(function () { try { console.log('%c[GorGox] app.js loaded - character select required (no auto Jaster)', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
+// GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
+(function () { try { console.log('%c[GorGox] app.js loaded - combat-cycles-all-tokens', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
 // Global state
 let ws = null;
 let selectedStyle = 'dnd'; // 'dnd' or 'starwars'
@@ -913,17 +913,25 @@ function handleServerMessage(message) {
             
             combatState.active = true;
             combatState.participants = message.participants || [];
-            combatState.currentTurn = null; // No turn set yet
-            
-            // CRITICAL: Update participant names, HP, AC, and ensure IDs match tokens
-            // This ensures NPC data is preserved for DM when combat starts
-            combatState.participants.forEach(participant => {
-                // First, ensure participant.id matches token.id (critical for turn logic)
-                const token = tokens.find(t => t.entity_id === participant.entity_id || t.id === participant.id);
-                if (token && token.id && participant.id !== token.id) {
-                    console.log('🔧 Fixing participant ID mismatch:', participant.id, '->', token.id);
-                    participant.id = token.id; // Use token.id as the authoritative ID
+
+            // CRITICAL: Patch participant ids BEFORE sort. Server sends participants in same order as our token_ids.
+            // If we sent placeholders (token-0, token-1) or server returned duplicate entity_id, set participant.id = tokens[i].id so each has a unique id and Next Turn cycles every token.
+            combatState.participants.forEach((participant, i) => {
+                const tokenById = tokens.find(t => t.id === participant.id);
+                const tokenByIndex = tokens[i];
+                if (tokenById && tokenById.id && participant.id !== tokenById.id) {
+                    participant.id = tokenById.id;
+                } else if (tokenByIndex && tokenByIndex.id && (!tokens.find(t => t.id === participant.id) || participant.id === 'token-' + i || participant.id === participant.entity_id || String(participant.id).endsWith('-' + i))) {
+                    participant.id = tokenByIndex.id;
+                    console.log('✅ Patched participant', i, 'to token id:', tokenByIndex.id);
                 }
+            });
+
+            combatState.currentTurn = null; // No turn set yet
+            sortParticipantsByInitiative();
+
+            // Update participant names, HP, AC from local data
+            combatState.participants.forEach(participant => {
                 
                 // Update names, HP, AC from local enemies/characters arrays
                 if (participant.entity_type === 'Enemy' || participant.entity_type === 'NPC') {
@@ -1030,57 +1038,30 @@ function handleServerMessage(message) {
                 if (dmCtrl) dmCtrl.classList.remove('hidden');
                 console.log('✅ DM combat controls shown');
                 
-                // Auto-roll for all enemies/NPCs automatically
-                setTimeout(() => {
-                    console.log('🎲 ========== DM AUTO-ROLLING FOR ENEMIES/NPCs ==========');
-                    console.log('Participants to check:', combatState.participants.length);
-                    
-                    combatState.participants.forEach((p, index) => {
-                        console.log(`Participant ${index + 1}:`, p.name, 'Type:', p.entity_type);
-                        
-                        const type = (p.entity_type || '').toLowerCase();
-                        if (type === 'player') {
-                            return; // Skip players - they roll manually
-                        }
-                        
-                        // Get initiative bonus from participant, or look it up from enemies array
+                // Auto-roll for all enemies/NPCs; stagger sends so server processes each (combat v2)
+                const toRoll = combatState.participants.filter(p => (p.entity_type || '').toLowerCase() !== 'player');
+                console.log('🎲 [Combat v2] Auto-rolling for', toRoll.length, 'enemies/NPCs');
+                toRoll.forEach((p, index) => {
+                    const run = () => {
                         let bonus = typeof p.initiative_bonus === 'number' ? p.initiative_bonus : 0;
                         if (bonus === 0 || p.initiative_bonus === undefined) {
-                            // Try to get from enemies array
                             const enemy = enemies.find(e => e.id === p.entity_id);
                             if (enemy && enemy.initiative_bonus !== undefined) {
                                 bonus = enemy.initiative_bonus;
-                                p.initiative_bonus = bonus; // Update participant
-                                console.log(`   Found initiative bonus from enemy data: ${bonus}`);
+                                p.initiative_bonus = bonus;
                             }
                         }
-                        
-                        // Roll d20 + bonus
                         const roll = Math.floor(Math.random() * 20) + 1;
                         const total = roll + bonus;
-                            
-                        console.log(`🎲 ${p.name} auto-rolls ${roll} + ${bonus} = ${total}`);
-                        console.log(`   Sending RollInitiative for entity_id: ${p.entity_id}`);
-
-                        // Update local state immediately so tracker reflects the roll
                         p.initiative = total;
-                            
-                        // Send to server (server will broadcast InitiativeRolled to all clients)
-                        sendMessage({
-                            type: 'RollInitiative',
-                            entity_id: p.entity_id,
-                            roll: total
-                        });
-                        
-                        // Note: Log entry will be added by InitiativeRolled handler to avoid duplicates
-                    });
-
-                    // Re-render list with newly rolled enemies
-                    setTimeout(() => {
-                        updateInitiativeList();
-                        updateCombatStatus();
-                    }, 100);
-                }, 500);
+                        sendMessage({ type: 'RollInitiative', entity_id: p.entity_id, roll: total, participant_id: p.id });
+                    };
+                    setTimeout(run, 500 + index * 100);
+                });
+                setTimeout(() => {
+                    updateInitiativeList();
+                    updateCombatStatus();
+                }, 500 + Math.max(0, toRoll.length) * 100 + 150);
             } else {
                 // NON-DM PLAYER: Prompt for initiative
                 console.log('👤 ========== PLAYER INITIATIVE PROMPT ==========');
@@ -1134,17 +1115,14 @@ function handleServerMessage(message) {
             
         case 'InitiativeRolled':
             console.log('🎲 ========== INITIATIVE ROLLED ==========');
-            console.log('Entity ID:', message.entity_id);
+            console.log('Entity ID:', message.entity_id, 'Participant ID:', message.participant_id);
             console.log('Initiative total:', message.initiative);
             console.log('Current participants:', combatState.participants.length);
             
-            // Update the participant's initiative in our local state
-            // Try to find by entity_id first, then by id
-            let participant = combatState.participants.find(p => p.entity_id === message.entity_id);
-            if (!participant) {
-                // Try finding by id (token id)
-                participant = combatState.participants.find(p => p.id === message.entity_id);
-            }
+            // Update the participant's initiative; use participant_id when set so the correct row is updated (multiple with same entity_id)
+            let participant = message.participant_id
+                ? combatState.participants.find(p => p.id === message.participant_id)
+                : (combatState.participants.find(p => p.entity_id === message.entity_id) || combatState.participants.find(p => p.id === message.entity_id));
             
             if (participant) {
                 participant.initiative = message.initiative;
@@ -1157,8 +1135,7 @@ function handleServerMessage(message) {
                 const rollWithoutBonus = message.initiative - bonus;
                 console.log(`   D20 roll was: ${rollWithoutBonus} + ${bonus} = ${message.initiative}`);
                 
-                // Only add log entry if not already logged (to avoid duplicates from auto-roll)
-                // The auto-roll already logs it, so we skip here to avoid double logging
+                // Only add log entry if not already logged (to avoid duplicates from auto-roll) or if not a silent/manual update
                 if (!message.silent) {
                     const isInitiativeNat20 = rollWithoutBonus === 20;
                     const isInitiativeNat1 = rollWithoutBonus === 1;
@@ -1171,19 +1148,16 @@ function handleServerMessage(message) {
                     } else if (isInitiativeNat1) {
                         playNat1Sound();
                     }
+                } else {
+                    addLogEntry(`Initiative updated: ${participant.name} → ${message.initiative}`, 'info');
                 }
             } else {
                 console.error('⚠️ Participant not found for entity:', message.entity_id);
                 console.error('Available participants:', combatState.participants.map(p => `${p.name} (entity_id: ${p.entity_id}, id: ${p.id})`));
             }
             
-            // Sort by initiative (highest first)
-            combatState.participants.sort((a, b) => {
-                const aInit = a.initiative || 0;
-                const bInit = b.initiative || 0;
-                return bInit - aInit;
-            });
-            console.log('📊 Sorted participants:', combatState.participants.map(p => `${p.name}:${p.initiative || 'not rolled'}`));
+            sortParticipantsByInitiative();
+            console.log('📊 Sorted participants:', combatState.participants.map(p => `${p.name}:${p.initiative ?? 'not rolled'}`));
             
             updateInitiativeList();
             updateCombatStatus();
@@ -1216,89 +1190,36 @@ function handleServerMessage(message) {
                 return; // Don't process this TurnChanged message
             }
             
-            // First, find the token
+            // Server sends current_turn = participant.id (unique per token). Match by id so every token gets its turn.
+            let turnParticipant = combatState.participants.find(p => p.id === message.current_turn);
             const turnToken = tokens.find(t => t.id === message.current_turn);
-            if (!turnToken) {
+            if (!turnToken && message.current_turn) {
                 console.warn('⚠️ Turn token not found for ID:', message.current_turn);
             }
-            
-            // Find the participant - server sends token ID, we need to match by token.entity_id
-            let turnParticipant = null;
-            if (turnToken) {
-                // Find participant by entity_id (the actual character/enemy ID)
-                turnParticipant = combatState.participants.find(p => p.entity_id === turnToken.entity_id);
-                if (turnParticipant) {
-                    // Ensure participant.id matches token.id for consistency
-                    turnParticipant.id = turnToken.id;
-                    combatState.currentTurn = turnToken.id; // Use token ID
-                    console.log('   ✅ Found participant by token:', turnParticipant.name, 'token ID:', turnToken.id);
-                }
-            }
-            
-            // Fallback: try direct ID match
-            if (!turnParticipant) {
-                turnParticipant = combatState.participants.find(p => p.id === message.current_turn);
+            if (turnParticipant) {
+                combatState.currentTurn = turnParticipant.id;
+                console.log('   ✅ Turn: ', turnParticipant.name, '(id:', turnParticipant.id, ')');
+            } else {
+                // Fallback: entity_id (single match only) or participant_name
+                const byEntity = combatState.participants.find(p => p.entity_id === message.current_turn);
+                const byName = message.participant_name && combatState.participants.find(p => p.name === message.participant_name);
+                turnParticipant = byEntity || byName;
                 if (turnParticipant) {
                     combatState.currentTurn = turnParticipant.id;
-                    console.log('   ✅ Found participant by direct ID match:', turnParticipant.name);
+                    console.log('   ✅ Turn (fallback):', turnParticipant.name);
+                } else {
+                    console.error('❌ Turn participant not found for id:', message.current_turn);
+                    combatState.currentTurn = message.current_turn;
                 }
             }
-            
-            // Fallback: try entity_id match
-            if (!turnParticipant) {
-                turnParticipant = combatState.participants.find(p => p.entity_id === message.current_turn);
-                if (turnParticipant) {
-                    // Find the token for this entity
-                    const entityToken = tokens.find(t => t.entity_id === turnParticipant.entity_id);
-                    if (entityToken) {
-                        turnParticipant.id = entityToken.id;
-                        combatState.currentTurn = entityToken.id;
-                    } else {
-                        combatState.currentTurn = turnParticipant.id || turnParticipant.entity_id;
-                    }
-                    console.log('   ✅ Found participant by entity_id:', turnParticipant.name);
-                }
-            }
-            
-            // Last resort: find by name
-            if (!turnParticipant && message.participant_name) {
-                turnParticipant = combatState.participants.find(p => p.name === message.participant_name);
-                if (turnParticipant) {
-                    // Find token for this participant
-                    const entityToken = tokens.find(t => t.entity_id === turnParticipant.entity_id);
-                    if (entityToken) {
-                        turnParticipant.id = entityToken.id;
-                        combatState.currentTurn = entityToken.id;
-                    } else {
-                        combatState.currentTurn = turnParticipant.id || turnParticipant.entity_id;
-                    }
-                    console.log('   ✅ Found participant by name:', turnParticipant.name);
-                }
-            }
-            
-            if (!turnParticipant) {
-                console.error('❌ Turn participant not found!');
-                console.error('   Server turn ID:', message.current_turn);
-                console.error('   Participant name:', message.participant_name);
-                console.error('   Available participants:', combatState.participants.map(p => `${p.name} (id: ${p.id}, entity_id: ${p.entity_id})`));
-                console.error('   Available tokens:', tokens.map(t => `${t.entity_type} (id: ${t.id}, entity_id: ${t.entity_id})`));
-                // Still set currentTurn even if participant not found
-                combatState.currentTurn = message.current_turn;
-            }
-            
             console.log('   Final currentTurn:', combatState.currentTurn);
-            
-            // Save the starting position for movement range display
-            let finalToken = turnToken;
-            if (!finalToken && turnParticipant) {
-                // Try to find token by participant's entity_id
-                finalToken = tokens.find(t => t.entity_id === turnParticipant.entity_id);
+            // Token to highlight: by id, or by placeholder index (token-0 -> tokens[0]) when ids weren't patched
+            let finalToken = turnToken || (combatState.currentTurn ? tokens.find(t => t.id === combatState.currentTurn) : null);
+            const placeholderMatch = combatState.currentTurn && String(combatState.currentTurn).match(/^(?:token-|.+?-)(\d+)$/);
+            if (!finalToken && placeholderMatch) {
+                const idx = parseInt(placeholderMatch[1], 10);
+                if (tokens[idx]) finalToken = tokens[idx];
             }
-            if (!finalToken) {
-                // Last resort: find token by currentTurn ID
-                finalToken = tokens.find(t => t.id === combatState.currentTurn);
-            }
-            
             if (finalToken) {
                 turnStartPosition = { x: finalToken.x, y: finalToken.y };
                 console.log('📍 Saved turn start position:', turnStartPosition);
@@ -3539,20 +3460,21 @@ function toggleCombat() {
             }
         }
     } else {
-        if (!tokens || tokens.length === 0) {
+        const tokenList = Array.isArray(tokens) ? tokens.slice() : [];
+        if (tokenList.length === 0) {
             console.warn('⚠️ No tokens detected locally when starting combat. Attempting to start anyway.');
             addLogEntry('⚠️ No tokens detected locally — requesting combat start anyway.', 'warning');
             requestTokenRefresh();
         }
-        console.log('✅ Found', tokens.length, 'tokens, starting combat...');
-        tokens.forEach((t, i) => {
-            console.log(`  Token ${i + 1}: ${t.entity_type} (${t.entity_id})`);
+        // Combat v2: one participant per token. Use unique id per token so multiple enemies get separate turns.
+        // Prefer t.id (server UUID); never use entity_id for multiple tokens or we get duplicate ids and one turn.
+        const tokenIds = tokenList.map((t, i) => (t && t.id) ? t.id : ('token-' + i));
+        console.log('[Combat v2] Starting combat with', tokenIds.length, 'tokens. IDs:', tokenIds.slice(0, 20).join(', ') + (tokenIds.length > 20 ? '...' : ''));
+        tokenList.forEach((t, i) => {
+            if (t) console.log(`  Token ${i + 1}: id=${t.id} entity_id=${t.entity_id} type=${t.entity_type}`);
         });
-        
-        sendMessage({ type: 'StartCombat' });
-        
-        // Enemy auto-rolling and player prompting happens in CombatStarted handler
-        console.log('🎯 Combat toggle sent to server, waiting for CombatStarted response...');
+        sendMessage({ type: 'StartCombat', token_ids: tokenIds });
+        console.log('🎯 Combat toggle sent (token_ids count:', tokenIds.length, '). Waiting for CombatStarted...');
     }
 }
 
@@ -3612,6 +3534,8 @@ function showInitiativePrompt(participant) {
 
     textEl.innerHTML = `<strong>${participant.name}</strong><br>Initiative bonus: <strong>+${participant.initiative_bonus}</strong>`;
     inputEl.value = '';
+    const resultEl = document.getElementById('initiativeRollResult');
+    if (resultEl) resultEl.textContent = '';
     previewEl.textContent = `Total: +${participant.initiative_bonus}`;
 
     modal.classList.add('active');
@@ -3636,9 +3560,37 @@ function updateInitiativeTotalPreview() {
 
 function rollInitiativeInPrompt() {
     const inputEl = document.getElementById('initiativeRollInput');
+    const resultEl = document.getElementById('initiativeRollResult');
     if (!inputEl) return;
+    if (resultEl) resultEl.textContent = '';
     const roll = Math.floor(Math.random() * 20) + 1;
     inputEl.value = roll;
+    updateInitiativeTotalPreview();
+}
+
+function rollInitiativeAdvantage() {
+    const inputEl = document.getElementById('initiativeRollInput');
+    const resultEl = document.getElementById('initiativeRollResult');
+    if (!inputEl || !resultEl) return;
+    const a = Math.floor(Math.random() * 20) + 1;
+    const b = Math.floor(Math.random() * 20) + 1;
+    const used = Math.max(a, b);
+    inputEl.value = used;
+    resultEl.textContent = `Rolled ${a} and ${b} → using ${used} (advantage)`;
+    resultEl.style.color = '#44ff44';
+    updateInitiativeTotalPreview();
+}
+
+function rollInitiativeDisadvantage() {
+    const inputEl = document.getElementById('initiativeRollInput');
+    const resultEl = document.getElementById('initiativeRollResult');
+    if (!inputEl || !resultEl) return;
+    const a = Math.floor(Math.random() * 20) + 1;
+    const b = Math.floor(Math.random() * 20) + 1;
+    const used = Math.min(a, b);
+    inputEl.value = used;
+    resultEl.textContent = `Rolled ${a} and ${b} → using ${used} (disadvantage)`;
+    resultEl.style.color = '#ff8844';
     updateInitiativeTotalPreview();
 }
 
@@ -3665,11 +3617,12 @@ function submitInitiativePrompt() {
     clearTimeout(initiativePromptReminderTimeout);
 
     console.log(`📤 Sending initiative: ${roll} + ${participant.initiative_bonus} = ${total}`);
-            sendMessage({
-                type: 'RollInitiative',
+    sendMessage({
+        type: 'RollInitiative',
         entity_id: participant.entity_id,
-                roll: total
-            });
+        roll: total,
+        participant_id: participant.id
+    });
 }
 
 function cancelInitiativePrompt() {
@@ -3757,38 +3710,20 @@ function manuallyAdvanceTurn() {
         console.error('❌ Cannot manually advance: combat not active or no participants');
         return;
     }
-    
-    // Sort participants by initiative (highest first) - MUST match server's order
-    const sorted = [...combatState.participants].sort((a, b) => {
-        const aInit = a.initiative || 0;
-        const bInit = b.initiative || 0;
-        if (bInit !== aInit) {
-            return bInit - aInit; // Higher initiative first
-        }
-        // If same initiative, maintain original order (or use name as tiebreaker)
-        return 0;
-    });
-    
-    if (sorted.length === 0) {
-        console.error('❌ No sorted participants!');
-        return;
-    }
-    
+
+    sortParticipantsByInitiative();
+    const sorted = combatState.participants;
+
     console.log('🔧 Manual turn advance - Current turn:', combatState.currentTurn);
     console.log('🔧 Sorted participants:', sorted.map((p, i) => `${i}: ${p.name} (init: ${p.initiative}, id: ${p.id})`));
-    
+
     // Find current turn index - try multiple matching strategies
     let currentIndex = -1;
     if (combatState.currentTurn) {
-        // Try to find by participant ID
         currentIndex = sorted.findIndex(p => p.id === combatState.currentTurn);
-        
-        // If not found, try entity_id
         if (currentIndex === -1) {
             currentIndex = sorted.findIndex(p => p.entity_id === combatState.currentTurn);
         }
-        
-        // If still not found, try token matching
         if (currentIndex === -1) {
             const currentToken = tokens.find(t => t.id === combatState.currentTurn);
             if (currentToken) {
@@ -3796,16 +3731,11 @@ function manuallyAdvanceTurn() {
             }
         }
     }
-    
-    console.log('🔧 Current turn index found:', currentIndex);
-    
-    // If not found or no current turn, start with first participant (index 0)
+
     if (currentIndex === -1) {
-        console.log('🔧 No current turn found, starting with first participant');
         currentIndex = -1; // Will become 0 after increment
     }
-    
-    // Move to next participant (or first if no current turn)
+
     const nextIndex = (currentIndex + 1) % sorted.length;
     const nextParticipant = sorted[nextIndex];
     
@@ -3876,6 +3806,15 @@ function manuallyAdvanceTurn() {
     updateCurrentTurnDisplay(nextParticipant.name);
     addLogEntry(`⚔️ ${nextParticipant.name}'s turn`, 'info');
     renderCanvas();
+}
+
+/** DM only: remove a participant from combat immediately (e.g. when they die). Updates initiative order for everyone. */
+function removeFromCombat(participantId) {
+    if (!isDM) return;
+    if (!combatState.active || !combatState.participants.length) return;
+    const participant = combatState.participants.find(p => p.id === participantId);
+    if (!participant) return;
+    sendMessage({ type: 'RemoveFromCombat', participant_id: participantId });
 }
 
 function endCombat() {
@@ -4615,6 +4554,37 @@ function healTarget() {
     document.getElementById('healAmount').value = '';
 }
 
+// DM only: prompt to set a participant's initiative (used when clicking initiative value in the list)
+function promptSetInitiative(entityId, currentInit, participantId) {
+    if (!isDM || !combatState.active) return;
+    const p = participantId
+        ? combatState.participants.find(x => x.id === participantId)
+        : (combatState.participants.find(x => x.entity_id === entityId) || combatState.participants.find(x => x.id === entityId));
+    if (!p) return;
+    const name = p.name || 'Participant';
+    const current = currentInit !== undefined && currentInit !== null ? Number(currentInit) : (p.initiative ?? '');
+    const raw = window.prompt(`Set initiative for ${name}:`, String(current));
+    if (raw === null) return;
+    const num = parseInt(raw, 10);
+    if (isNaN(num) || num < 0 || num > 99) {
+        alert('Please enter a number between 0 and 99.');
+        return;
+    }
+    sendMessage({ type: 'RollInitiative', entity_id: p.entity_id, roll: num, silent: true, participant_id: p.id });
+    updateInitiativeList();
+}
+
+/** Sort participants by initiative (highest first), then by id for deterministic order. Must match server order. */
+function sortParticipantsByInitiative() {
+    if (!combatState.participants || !combatState.participants.length) return;
+    combatState.participants.sort((a, b) => {
+        const aInit = a.initiative ?? 0;
+        const bInit = b.initiative ?? 0;
+        if (bInit !== aInit) return bInit - aInit;
+        return (a.id || '').localeCompare(b.id || '');
+    });
+}
+
 function updateInitiativeList() {
     const list = document.getElementById('initiativeList');
     
@@ -4622,11 +4592,13 @@ function updateInitiativeList() {
         list.innerHTML = '<div style="padding: 10px;">No active combat</div>';
         return;
     }
+
+    sortParticipantsByInitiative();
     
     // FIX: Only DM sees full turn order, players see limited info
     if (isDM) {
-        // DM sees full initiative list with clear header
-        let html = '<div style="font-weight: bold; color: #4a9eff; margin-bottom: 10px; padding: 8px; background: rgba(74,158,255,0.2); border-radius: 5px;">🎯 Full Turn Order (DM Only)</div>';
+        // DM sees full initiative list with clear header; initiative values are clickable to change
+        let html = '<div style="font-weight: bold; color: #4a9eff; margin-bottom: 10px; padding: 8px; background: rgba(74,158,255,0.2); border-radius: 5px;">🎯 Full Turn Order (DM Only) — click initiative to change</div>';
         combatState.participants.forEach((p, index) => {
             const isActive = p.id === combatState.currentTurn;
             const typeClass = p.entity_type === 'Player' ? 'player' : 'enemy';
@@ -4677,14 +4649,19 @@ function updateInitiativeList() {
             // Format AC display
             const acDisplay = displayAC !== undefined ? `AC: ${displayAC}` : '';
             
+            const initVal = p.initiative !== undefined && p.initiative !== null ? p.initiative : '?';
+            const initNum = typeof p.initiative === 'number' ? p.initiative : null;
+            const escapedEntityId = escapeJs(p.entity_id);
+            const escapedParticipantId = escapeJs(p.id);
             html += `
                 <div class="initiative-item ${typeClass} ${isActive ? 'active' : ''}" style="position: relative;">
                     <div style="position: absolute; left: -25px; top: 50%; transform: translateY(-50%); font-size: 14px; font-weight: bold; opacity: 0.5;">${turnNumber}</div>
-                    <span style="flex: 1;">${p.name}</span>
+                    <span style="flex: 1;">${escapeHtml(p.name)}</span>
                     <div style="display: flex; gap: 10px; align-items: center;">
-                        <span class="initiative-roll">${p.initiative || '?'}</span>
+                        <span class="initiative-roll" onclick="promptSetInitiative('${escapedEntityId}', ${initNum !== null ? initNum : 'null'}, '${escapedParticipantId}')" title="Click to set initiative" style="cursor: pointer; padding: 2px 8px; border-radius: 4px; min-width: 24px; text-align: center;" onmouseover="this.style.background='rgba(74,158,255,0.3)'" onmouseout="this.style.background='transparent'">${initVal}</span>
                         <span style="margin-left: 5px;">${hpDisplay}</span>
                         ${acDisplay ? `<span style="margin-left: 5px; color: #4a9eff; font-weight: bold;">${acDisplay}</span>` : ''}
+                        <button type="button" onclick="event.stopPropagation(); removeFromCombat('${escapedParticipantId}')" title="Remove from combat" class="initiative-remove-btn" style="flex-shrink: 0; width: 22px; height: 22px; padding: 0; margin-left: 4px; border: none; border-radius: 50%; background: rgba(120,120,120,0.25); color: rgba(255,255,255,0.6); cursor: pointer; font-size: 14px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: background 0.15s, color 0.15s; outline: none;" onmouseover="this.style.background='rgba(200,80,80,0.4)'; this.style.color='#ffcccc';" onmouseout="this.style.background='rgba(120,120,120,0.25)'; this.style.color='rgba(255,255,255,0.6)';">×</button>
                     </div>
                 </div>
             `;
@@ -6472,6 +6449,16 @@ function showNPCCharacterSheet(entityId) {
                 <div style="font-size: 28px; font-weight: bold; color: #aa88ff;">${escapeHtml(String(enemy.challenge_rating ?? '0'))}</div>
             </div>
         </div>`;
+        // Saving Throws (same as other enemies - click to roll)
+        const parsedDataCustom = {
+            str: enemy.strength ?? enemy.str ?? 10,
+            dex: enemy.dexterity ?? enemy.dex ?? 10,
+            con: enemy.constitution ?? enemy.con ?? 10,
+            int: enemy.intelligence ?? enemy.int ?? 10,
+            wis: enemy.wisdom ?? enemy.wis ?? 10,
+            cha: enemy.charisma ?? enemy.cha ?? 10
+        };
+        html += buildSavingThrowsSectionForNPC(enemy, parsedDataCustom, escapedEnemyName);
         // Resolve actions: use this enemy, or if instance with no actions, try template with same base name
         let actionsData = parseCustomEnemyActions(enemy);
         if (actionsData.length === 0 && enemy.isCustomInstance && enemy.name) {
@@ -12128,7 +12115,7 @@ function applyTheme(style) {
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #1a1a3a 0%, #0a0a2a 100%)');
         
         // Update header
-        document.querySelector('h1').innerHTML = '⭐ Gorgox Interactive <span style="background: #4a9eff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">STAR WARS v14</span>';
+        document.querySelector('h1').innerHTML = '⭐ Gorgox Interactive <span style="background: #4a9eff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">STAR WARS v15</span>';
     } else {
         // D&D theme - traditional fantasy green/gold
         root.style.setProperty('--primary-color', '#4CAF50');
@@ -12138,7 +12125,7 @@ function applyTheme(style) {
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%)');
         
         // Keep D&D header
-        document.querySelector('h1').innerHTML = '🎲 Gorgox Interactive <span style="background: #ffaa00; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v14 COMPLETE</span>';
+        document.querySelector('h1').innerHTML = '🎲 Gorgox Interactive <span style="background: #ffaa00; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v15 COMPLETE</span>';
     }
 }
 
@@ -12170,6 +12157,8 @@ function showInitiativePrompt(participant) {
 
     textEl.innerHTML = `<strong>${participant.name}</strong><br>Initiative bonus: <strong>+${participant.initiative_bonus}</strong>`;
     inputEl.value = '';
+    const resultEl = document.getElementById('initiativeRollResult');
+    if (resultEl) resultEl.textContent = '';
     previewEl.textContent = `Total: +${participant.initiative_bonus}`;
 
     modal.classList.add('active');
@@ -12194,7 +12183,9 @@ function updateInitiativeTotalPreview() {
 
 function rollInitiativeInPrompt() {
     const inputEl = document.getElementById('initiativeRollInput');
+    const resultEl = document.getElementById('initiativeRollResult');
     if (!inputEl) return;
+    if (resultEl) resultEl.textContent = '';
     const roll = Math.floor(Math.random() * 20) + 1;
     inputEl.value = roll;
     updateInitiativeTotalPreview();
@@ -12249,15 +12240,10 @@ function syncParticipantsWithTokens() {
 
     const lowercase = (value) => (value || '').toString().toLowerCase();
 
-    // Enhance existing participants with token data when available
+    // Enhance existing participants with token data when available. Match by id only so multiple enemies (same entity_id) are not collapsed.
     combatState.participants.forEach(part => {
-        const token = tokens.find(t => t && (t.entity_id === part.entity_id || t.id === part.id));
+        const token = tokens.find(t => t && t.id === part.id);
         if (!token) return;
-
-        // CRITICAL: Ensure participant.id matches token.id (needed for turn logic)
-        if (token.id) {
-            part.id = token.id; // Always use token.id as authoritative
-        }
         if (!part.entity_id && token.entity_id) part.entity_id = token.entity_id;
         if (!part.entity_type && token.entity_type) part.entity_type = token.entity_type;
         if (part.initiative_bonus === undefined && token.initiative_bonus !== undefined) {

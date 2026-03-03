@@ -34,8 +34,13 @@ impl CombatState {
         }
     }
 
-    pub fn update_initiative(&mut self, entity_id: &str, initiative: i32) {
-        if let Some(participant) = self.participants.iter_mut().find(|p| p.entity_id == entity_id) {
+    /// Update one participant's initiative. Prefer participant_id when set (so multiple with same entity_id are updated correctly).
+    pub fn update_initiative(&mut self, entity_id: &str, initiative: i32, participant_id: Option<&str>) {
+        if let Some(id) = participant_id {
+            if let Some(participant) = self.participants.iter_mut().find(|p| p.id == id) {
+                participant.initiative = initiative;
+            }
+        } else if let Some(participant) = self.participants.iter_mut().find(|p| p.entity_id == entity_id) {
             participant.initiative = initiative;
         }
         if self.active {
@@ -43,8 +48,11 @@ impl CombatState {
         }
     }
 
+    /// Sort by initiative descending, then by id ascending so order is deterministic (no skipping when many have same initiative).
     pub fn sort_by_initiative(&mut self) {
-        self.participants.sort_by(|a, b| b.initiative.cmp(&a.initiative));
+        self.participants.sort_by(|a, b| {
+            b.initiative.cmp(&a.initiative).then_with(|| a.id.cmp(&b.id))
+        });
     }
 
     pub fn next_turn(&mut self) -> Option<&CombatParticipant> {
@@ -87,9 +95,17 @@ impl CombatState {
         }
     }
 
-    pub fn remove_participant(&mut self, entity_id: &str) {
-        self.participants.retain(|p| p.entity_id != entity_id);
-        if self.current_turn_index >= self.participants.len() && !self.participants.is_empty() {
+    /// Remove participant by token id (same id used for deal_damage/heal_target).
+    pub fn remove_participant(&mut self, participant_id: &str) {
+        let removed_index = self.participants.iter().position(|p| p.id == participant_id);
+        self.participants.retain(|p| p.id != participant_id);
+        if let Some(idx) = removed_index {
+            if idx < self.current_turn_index {
+                self.current_turn_index = self.current_turn_index.saturating_sub(1);
+            } else if self.current_turn_index >= self.participants.len() && !self.participants.is_empty() {
+                self.current_turn_index = 0;
+            }
+        } else if self.current_turn_index >= self.participants.len() && !self.participants.is_empty() {
             self.current_turn_index = 0;
         }
     }
