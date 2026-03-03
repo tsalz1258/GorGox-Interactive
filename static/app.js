@@ -17,7 +17,8 @@ let connectedPlayers = []; // Track all connected players
 let combatState = {
     active: false,
     participants: [],
-    currentTurn: null
+    currentTurn: null,
+    removedFromCombatIds: [] // token/participant ids removed by DM (X) this combat — don't re-add from sync
 };
 
 // Track where current turn started (for movement range display)
@@ -1237,6 +1238,7 @@ function handleServerMessage(message) {
         case 'CombatEnded':
             combatState.active = false;
             combatState.participants = [];
+            combatState.removedFromCombatIds = [];
             combatState.currentTurn = null;
             turnStartPosition = null; // Clear movement range
             updateInitiativeList();
@@ -3473,6 +3475,7 @@ function toggleCombat() {
         tokenList.forEach((t, i) => {
             if (t) console.log(`  Token ${i + 1}: id=${t.id} entity_id=${t.entity_id} type=${t.entity_type}`);
         });
+        combatState.removedFromCombatIds = []; // new combat — allow all tokens to be in tracker
         sendMessage({ type: 'StartCombat', token_ids: tokenIds });
         console.log('🎯 Combat toggle sent (token_ids count:', tokenIds.length, '). Waiting for CombatStarted...');
     }
@@ -3814,6 +3817,19 @@ function removeFromCombat(participantId) {
     if (!combatState.active || !combatState.participants.length) return;
     const participant = combatState.participants.find(p => p.id === participantId);
     if (!participant) return;
+    // Remove from local state immediately so the tracker row (name, HP, X button) disappears right away
+    combatState.participants = combatState.participants.filter(p => p.id !== participantId);
+    if (!Array.isArray(combatState.removedFromCombatIds)) combatState.removedFromCombatIds = [];
+    combatState.removedFromCombatIds.push(participantId);
+    if (combatState.participants.length === 0) {
+        combatState.active = false;
+        combatState.currentTurn = null;
+    } else if (combatState.currentTurn === participantId) {
+        combatState.currentTurn = null; // Server will send TurnChanged with new current
+    }
+    updateInitiativeList();
+    updateCombatStatus();
+    renderCanvas();
     sendMessage({ type: 'RemoveFromCombat', participant_id: participantId });
 }
 
@@ -12296,9 +12312,11 @@ function syncParticipantsWithTokens() {
         if (!part.name && token.name) part.name = token.name;
     });
 
-    // Ensure every non-player token appears as a combat participant
+    // Ensure every non-player token appears as a combat participant (unless DM removed them with X)
+    const removedSet = new Set(combatState.removedFromCombatIds || []);
     tokens.forEach(token => {
         if (!token) return;
+        if (removedSet.has(token.id)) return; // DM removed this one — don't re-add
         const type = lowercase(token.entity_type);
         if (!type) return;
 
