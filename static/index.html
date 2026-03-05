@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gorgox Interactive - D&D Battle Manager</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=20">
 </head>
 <body>
     <div id="app">
@@ -68,6 +68,7 @@
                         <div id="playerControls">
                             <button onclick="showCharacterSelect()">Select Character</button>
                             <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
+                            <button id="playerActionBarToggleBtn" onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold;" title="Toggle the action bar at the bottom (On/Off)">📊 Action Bar (On)</button>
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
                             <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
@@ -908,7 +909,7 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
-    <script src="/static/app.js?v=16"></script>
+    <script src="/static/app.js?v=20"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {
@@ -924,6 +925,19 @@
         });
     </script>
     
+    <!-- Player Action Bar: fixed to bottom of screen, direct child of body so it always shows for players -->
+    <div id="playerActionBar" class="player-action-bar hidden" aria-label="Player action bar">
+        <div class="player-bar-inner">
+            <div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>
+            <div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>
+            <div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>
+            <div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>
+            <div class="player-bar-section player-bar-actions" id="playerBarActions"></div>
+            <div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>
+            <div class="player-bar-section player-bar-dice" id="playerBarDice"></div>
+        </div>
+    </div>
+
     <!-- Sync / Refresh Button - for all players (especially remote) to pull latest state without reloading -->
     <div id="refreshButton" class="hidden" style="position: fixed; bottom: 20px; right: 20px; z-index: 10000;">
         <button onclick="refreshApplication()" 

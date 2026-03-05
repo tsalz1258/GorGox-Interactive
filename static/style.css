@@ -55,6 +55,233 @@ body {
     display: none !important;
 }
 
+/* Player Action Bar - fixed to bottom, gold trim on top and left */
+.player-action-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 140px;
+    background: linear-gradient(180deg, #1a1510 0%, #0f0c08 50%, #0a0806 100%);
+    border-top: 3px solid #c9a227;
+    border-left: 3px solid #c9a227;
+    box-shadow: 0 -6px 32px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(201, 162, 39, 0.15);
+    z-index: 500;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    overflow: hidden;
+    border-radius: 16px 16px 0 0;
+}
+.player-action-bar.hidden {
+    display: none !important;
+}
+.player-bar-inner {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+}
+.player-bar-inner::-webkit-scrollbar {
+    height: 8px;
+}
+.player-bar-inner::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 4px;
+}
+.player-bar-inner::-webkit-scrollbar-thumb {
+    background: linear-gradient(90deg, #8b7355, #c9a227);
+    border-radius: 4px;
+}
+/* BG3-style empty state when no character selected */
+.player-bar-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 20px;
+    color: #b8a88a;
+}
+.player-bar-empty-title {
+    font-size: 18px;
+    font-weight: bold;
+    color: #c9a227;
+    letter-spacing: 0.05em;
+    text-shadow: 0 0 12px rgba(201, 162, 39, 0.4);
+}
+.player-bar-empty-text {
+    margin: 0;
+    font-size: 14px;
+    opacity: 0.9;
+}
+.player-bar-empty-btn {
+    padding: 10px 24px;
+    background: linear-gradient(180deg, #3d3225 0%, #2a2218 100%);
+    border: 2px solid #c9a227;
+    border-radius: 8px;
+    color: #e8d5a3;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.player-bar-empty-btn:hover {
+    background: linear-gradient(180deg, #4a3d2e 0%, #352a1c 100%);
+    box-shadow: 0 0 16px rgba(201, 162, 39, 0.5);
+    transform: scale(1.03);
+}
+/* Section slots - BG3 carved/embossed look */
+.player-bar-section {
+    flex-shrink: 0;
+    min-width: 0;
+    padding: 10px 14px;
+    background: linear-gradient(180deg, rgba(45, 35, 25, 0.95) 0%, rgba(28, 22, 16, 0.98) 100%);
+    border-radius: 10px;
+    border: 1px solid #6b5344;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4), 0 1px 0 rgba(201, 162, 39, 0.08);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.player-bar-section .section-label {
+    font-size: 9px;
+    font-weight: bold;
+    color: #c9a227;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+    white-space: nowrap;
+    text-shadow: 0 0 8px rgba(201, 162, 39, 0.3);
+}
+.player-bar-name-hp { min-width: 100px; }
+.player-bar-abilities { min-width: 200px; }
+.player-bar-saves { min-width: 140px; }
+.player-bar-skills { min-width: 160px; }
+.player-bar-actions { min-width: 180px; }
+.player-bar-attacks { min-width: 160px; }
+.player-bar-dice { min-width: 220px; }
+.player-bar-section .bar-abilities-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+}
+.player-bar-section .bar-ability-btn {
+    padding: 5px 8px;
+    background: linear-gradient(180deg, rgba(139, 115, 85, 0.4) 0%, rgba(60, 48, 36, 0.8) 100%);
+    border: 1px solid #8b7355;
+    border-radius: 6px;
+    color: #e8d5a3;
+    font-size: 11px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.2s;
+}
+.player-bar-section .bar-ability-btn:hover {
+    background: linear-gradient(180deg, rgba(201, 162, 39, 0.25) 0%, rgba(139, 115, 85, 0.5) 100%);
+    border-color: #c9a227;
+    box-shadow: 0 0 10px rgba(201, 162, 39, 0.3);
+    transform: scale(1.05);
+}
+.player-bar-section .bar-save-btn, .player-bar-section .bar-skill-btn {
+    padding: 5px 10px;
+    margin: 3px 5px 3px 0;
+    background: linear-gradient(180deg, rgba(100, 85, 60, 0.45) 0%, rgba(55, 45, 32, 0.75) 100%);
+    border: 1px solid #8b7355;
+    border-radius: 6px;
+    color: #e8dcc4;
+    font-size: 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+}
+.player-bar-section .bar-save-btn:hover, .player-bar-section .bar-skill-btn:hover {
+    background: linear-gradient(180deg, rgba(201, 162, 39, 0.25) 0%, rgba(139, 115, 85, 0.5) 100%);
+    border-color: #c9a227;
+    box-shadow: 0 0 8px rgba(201, 162, 39, 0.25);
+}
+.player-bar-section .bar-action-btn {
+    padding: 6px 12px;
+    margin: 3px 5px 3px 0;
+    background: linear-gradient(180deg, rgba(74, 110, 60, 0.6) 0%, rgba(45, 70, 38, 0.85) 100%);
+    border: 1px solid #7a9e5c;
+    border-radius: 6px;
+    color: #d4e8c4;
+    font-size: 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+}
+.player-bar-section .bar-action-btn:hover {
+    background: linear-gradient(180deg, rgba(100, 145, 70, 0.65) 0%, rgba(60, 95, 48, 0.9) 100%);
+    border-color: #9bc77a;
+    box-shadow: 0 0 10px rgba(155, 199, 122, 0.35);
+}
+.player-bar-section .bar-action-bonus {
+    background: linear-gradient(180deg, rgba(255, 170, 68, 0.25) 0%, rgba(180, 120, 40, 0.6) 100%);
+    border-color: #ffaa44;
+}
+.player-bar-section .bar-action-bonus:hover {
+    background: linear-gradient(180deg, rgba(255, 170, 68, 0.4) 0%, rgba(200, 140, 50, 0.7) 100%);
+    border-color: #ffcc66;
+    box-shadow: 0 0 8px rgba(255, 170, 68, 0.3);
+}
+.player-bar-section .bar-attack-btn {
+    padding: 5px 10px;
+    margin: 3px 5px 3px 0;
+    background: linear-gradient(180deg, rgba(120, 55, 45, 0.55) 0%, rgba(70, 35, 30, 0.85) 100%);
+    border: 1px solid #9b6a5a;
+    border-radius: 6px;
+    color: #f0c8b8;
+    font-size: 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+}
+.player-bar-section .bar-attack-btn:hover {
+    background: linear-gradient(180deg, rgba(150, 75, 60, 0.6) 0%, rgba(95, 48, 40, 0.9) 100%);
+    border-color: #c97a5a;
+    box-shadow: 0 0 10px rgba(201, 122, 90, 0.35);
+}
+.player-bar-section .bar-dice-btn {
+    padding: 6px 12px;
+    margin: 3px 5px 3px 0;
+    background: linear-gradient(180deg, rgba(139, 115, 85, 0.5) 0%, rgba(80, 65, 50, 0.8) 100%);
+    border: 1px solid #c9a227;
+    border-radius: 6px;
+    color: #e8d5a3;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.player-bar-section .bar-dice-btn:hover {
+    background: linear-gradient(180deg, rgba(201, 162, 39, 0.35) 0%, rgba(139, 115, 85, 0.6) 100%);
+    box-shadow: 0 0 12px rgba(201, 162, 39, 0.4);
+    transform: scale(1.05);
+}
+.player-bar-section .bar-scroll {
+    max-height: 76px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-content: flex-start;
+}
+
+
 /* Modal Styles */
 .modal {
     display: none;
@@ -176,10 +403,24 @@ header h1 {
     color: #000;
 }
 
-/* Main Container */
+/* Main Interface */
+#mainInterface {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    position: relative;
+}
+
+/* Main Container: leave space at bottom for fixed action bar when visible */
 .main-container {
     display: flex;
+    flex: 1;
+    min-height: 0;
     height: calc(100vh - 70px);
+    overflow: hidden;
+}
+body.player-action-bar-visible .main-container {
+    height: calc(100vh - 70px - 140px);
 }
 
 /* Sidebars */

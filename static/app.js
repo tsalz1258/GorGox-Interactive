@@ -7,6 +7,7 @@ let sessionId = null;
 let isDM = false; // THIS NEVER CHANGES AFTER CONNECTION
 let myPlayerName = ''; // Store our player name
 let myCharacterId = null; // Track which character this player controls
+let playerActionBarVisible = true; // Toggle for bottom action bar (players only)
 let currentMap = null;
 let tokens = [];
 let characters = [];
@@ -434,6 +435,8 @@ function handleServerMessage(message) {
                 hasAutoShownCharacterSelectThisSession = false;
                 myCharacterId = null;
                 document.getElementById('playerControls').classList.remove('hidden');
+                updatePlayerActionBarVisibility();
+                setTimeout(() => { updatePlayerActionBarVisibility(); updateActionBarButtonLabel(); }, 400);
                 setTimeout(() => {
                     if (!isDM && !myCharacterId && !hasAutoShownCharacterSelectThisSession) {
                         hasAutoShownCharacterSelectThisSession = true;
@@ -3957,6 +3960,300 @@ function populateCombatActionPanel() {
     const movementInfo = document.getElementById('movementInfo');
     const speed = charData.speed?.walk || charData.speed || myCharacter.speed || 30;
     movementInfo.innerHTML = `🏃 <strong>Movement:</strong> ${speed} ft<br><small>Green squares show reachable area</small>`;
+
+    // Keep player action bar in sync
+    populatePlayerActionBar();
+}
+
+// Create the player action bar DOM and append to body (so it always exists when we need it)
+function ensurePlayerActionBarExists() {
+    let bar = document.getElementById('playerActionBar');
+    if (bar) return bar;
+    bar = document.createElement('div');
+    bar.id = 'playerActionBar';
+    bar.className = 'player-action-bar hidden';
+    bar.setAttribute('aria-label', 'Player action bar');
+    bar.innerHTML = '<div class="player-bar-inner">' +
+        '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
+        '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
+        '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
+        '<div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>' +
+        '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
+        '<div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>' +
+        '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
+        '</div>';
+    document.body.appendChild(bar);
+    return bar;
+}
+
+// Toggle the action bar on/off (called by the gold Action Bar button)
+function togglePlayerActionBar() {
+    if (isDM) return;
+    playerActionBarVisible = !playerActionBarVisible;
+    updatePlayerActionBarVisibility();
+    updateActionBarButtonLabel();
+}
+
+// Update the Action Bar button text to show current state (On/Off)
+function updateActionBarButtonLabel() {
+    const btn = document.getElementById('playerActionBarToggleBtn');
+    if (!btn) return;
+    btn.textContent = playerActionBarVisible ? '📊 Action Bar (On)' : '📊 Action Bar (Off)';
+}
+
+// Show/hide the horizontal player action bar (players only). Bar only covers area to the right of left sidebar (red area).
+function updatePlayerActionBarVisibility() {
+    const bar = ensurePlayerActionBarExists();
+    const shouldShow = !isDM && playerActionBarVisible;
+    if (shouldShow) {
+        bar.classList.remove('hidden');
+        bar.style.cssText = 'position:fixed!important;bottom:0!important;left:300px!important;right:0!important;width:auto!important;height:140px!important;display:flex!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#1a1510 0%,#0f0c08 50%,#0a0806 100%)!important;border-top:3px solid #c9a227!important;border-left:3px solid #c9a227!important;';
+        document.body.classList.add('player-action-bar-visible');
+        populatePlayerActionBar();
+    } else {
+        bar.classList.add('hidden');
+        bar.style.cssText = 'display:none!important;visibility:hidden!important;';
+        document.body.classList.remove('player-action-bar-visible');
+    }
+    updateActionBarButtonLabel();
+}
+
+// Populate the fixed bottom player action bar (stats, HP, abilities, saves, skills, actions, attacks, dice)
+function populatePlayerActionBar() {
+    const bar = document.getElementById('playerActionBar');
+    if (!bar || bar.classList.contains('hidden') || isDM) return;
+
+    // No character selected: show empty state so the bar is still visible (BG3-style)
+    if (!myCharacterId) {
+        const inner = bar.querySelector('.player-bar-inner');
+        if (inner) {
+            inner.innerHTML = '<div class="player-bar-empty-state">' +
+                '<span class="player-bar-empty-title">Action Bar</span>' +
+                '<p class="player-bar-empty-text">Select a character to see abilities, attacks, and dice.</p>' +
+                '<button type="button" class="player-bar-empty-btn" onclick="showCharacterSelect()">Select Character</button>' +
+                '</div>';
+        }
+        return;
+    }
+
+    const myCharacter = characters.find(c => c.id === myCharacterId);
+    if (!myCharacter) {
+        const inner = bar.querySelector('.player-bar-inner');
+        if (inner) {
+            inner.innerHTML = '<div class="player-bar-empty-state">' +
+                '<span class="player-bar-empty-title">Action Bar</span>' +
+                '<p class="player-bar-empty-text">Character data loading…</p>' +
+                '<button type="button" class="player-bar-empty-btn" onclick="showCharacterSelect()">Select Character</button>' +
+                '</div>';
+        }
+        return;
+    }
+
+    let charData = myCharacter;
+    if (myCharacter.character_data) {
+        try {
+            const fullData = JSON.parse(myCharacter.character_data);
+            charData = fullData.character || fullData;
+        } catch (e) { return; }
+    }
+
+    const charName = charData.name || myCharacter.name || 'Character';
+    const formatMod = (mod) => (mod >= 0 ? '+' + mod : '' + mod);
+    const calcMod = (score) => Math.floor((score - 10) / 2);
+
+    // Always build the full bar layout (Character, Actions, Attacks, Abilities, Saving Throws, Skill Checks, Dice)
+    const inner = bar.querySelector('.player-bar-inner');
+    if (inner) {
+        inner.innerHTML = '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
+            '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
+            '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
+            '<div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>' +
+            '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
+            '<div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>' +
+            '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>';
+    }
+
+    // Ability mods (D&D or Star Wars)
+    let abilityMods = {};
+    if (charData.baseAbilityScores && (charData.species || (Array.isArray(charData.classes) && charData.baseAbilityScores))) {
+        const abilityNames = { Strength: 'str', Dexterity: 'dex', Constitution: 'con', Intelligence: 'int', Wisdom: 'wis', Charisma: 'cha' };
+        Object.entries(charData.baseAbilityScores).forEach(([name, score]) => {
+            const ab = abilityNames[name];
+            if (ab) abilityMods[ab] = calcMod(score);
+        });
+    } else if (charData.abilities) {
+        ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
+            if (charData.abilities[ab]) abilityMods[ab] = charData.abilities[ab].mod;
+        });
+    } else {
+        abilityMods = {
+            str: calcMod(myCharacter.strength || 10),
+            dex: calcMod(myCharacter.dexterity || 10),
+            con: calcMod(myCharacter.constitution || 10),
+            int: calcMod(myCharacter.intelligence || 10),
+            wis: calcMod(myCharacter.wisdom || 10),
+            cha: calcMod(myCharacter.charisma || 10)
+        };
+    }
+    const profBonus = charData.proficiency_bonus || myCharacter.proficiency_bonus || 2;
+    const saveProfs = {};
+    if (charData.saving_throw_proficiencies) {
+        charData.saving_throw_proficiencies.forEach(ab => { saveProfs[ab.toLowerCase()] = true; });
+    } else if (charData.abilities) {
+        ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
+            if (charData.abilities[ab] && charData.abilities[ab].save_proficient) saveProfs[ab] = true;
+        });
+    }
+    const abilityLabels = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
+
+    const maxHP = charData.hp?.max || myCharacter.max_hp || 100;
+    const currentHP = myCharacter.current_hp !== undefined && myCharacter.current_hp !== null ? myCharacter.current_hp : maxHP;
+    const ac = charData.ac?.base || myCharacter.armor_class || 10;
+
+    // Name & HP
+    const nameHpEl = document.getElementById('playerBarNameHp');
+    if (nameHpEl) {
+        nameHpEl.innerHTML = '<span class="section-label">Character</span>' +
+            '<div style="font-weight:bold;font-size:13px;color:#4a9eff;">' + escapeHtml(charName) + '</div>' +
+            '<div style="font-size:12px;color:#44ff44;">HP ' + currentHP + '/' + maxHP + '</div>' +
+            '<div style="font-size:11px;opacity:0.8;">AC ' + ac + '</div>' +
+            '<button onclick="showMyCharacterSheet()" style="margin-top:4px;padding:2px 8px;font-size:10px;background:rgba(74,158,255,0.3);border:1px solid #4a9eff;border-radius:4px;color:#fff;cursor:pointer;">Sheet</button>';
+    }
+
+    // Abilities (click to roll check)
+    const abilitiesEl = document.getElementById('playerBarAbilities');
+    if (abilitiesEl) {
+        let html = '<span class="section-label">Abilities</span><div class="bar-abilities-grid">';
+        ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
+            const mod = abilityMods[ab] != null ? abilityMods[ab] : 0;
+            html += '<button type="button" class="bar-ability-btn" data-ab="' + ab + '" data-mod="' + mod + '" data-name="' + escapeHtml(charName) + '">' + abilityLabels[ab] + ' ' + formatMod(mod) + '</button>';
+        });
+        html += '</div>';
+        abilitiesEl.innerHTML = html;
+        abilitiesEl.querySelectorAll('.bar-ability-btn').forEach(btn => {
+            btn.onclick = function() {
+                rollAbilityCheck(this.dataset.ab, parseInt(this.dataset.mod, 10), this.dataset.name);
+            };
+        });
+    }
+
+    // Saves
+    const savesEl = document.getElementById('playerBarSaves');
+    if (savesEl) {
+        let html = '<span class="section-label">Saving Throws</span><div class="bar-scroll">';
+        ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
+            const base = abilityMods[ab] != null ? abilityMods[ab] : 0;
+            const saveMod = saveProfs[ab] ? base + profBonus : base;
+            const label = abilityLabels[ab];
+            html += '<button type="button" class="bar-save-btn" data-ab="' + ab + '" data-mod="' + saveMod + '" data-name="' + escapeHtml(charName) + '">' + label + ' ' + formatMod(saveMod) + '</button>';
+        });
+        html += '</div>';
+        savesEl.innerHTML = html;
+        savesEl.querySelectorAll('.bar-save-btn').forEach(btn => {
+            btn.onclick = function() {
+                rollSavingThrow(this.dataset.ab, parseInt(this.dataset.mod, 10), this.dataset.name);
+            };
+        });
+    }
+
+    // Skills (compact: use charData.skills if present, else a short list with ability mods)
+    const skillsEl = document.getElementById('playerBarSkills');
+    if (skillsEl) {
+        const skillList = charData.skills || [];
+        let html = '<span class="section-label">Skill Checks</span><div class="bar-scroll">';
+        if (skillList.length > 0) {
+            skillList.forEach(s => {
+                const name = (s && (s.name || s)) || '';
+                const bonus = (s && s.bonus != null) ? s.bonus : (abilityMods[(s && s.ability) || 'str'] != null ? abilityMods[s.ability] : 0);
+                if (name) html += '<button type="button" class="bar-skill-btn" data-skill="' + escapeHtml(name) + '" data-mod="' + bonus + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + ' ' + formatMod(bonus) + '</button>';
+            });
+        } else {
+            const shortList = [
+                { name: 'Athletics', ab: 'str' }, { name: 'Perception', ab: 'wis' }, { name: 'Stealth', ab: 'dex' },
+                { name: 'Persuasion', ab: 'cha' }, { name: 'Insight', ab: 'wis' }, { name: 'Acrobatics', ab: 'dex' }
+            ];
+            shortList.forEach(s => {
+                const mod = abilityMods[s.ab] != null ? abilityMods[s.ab] : 0;
+                html += '<button type="button" class="bar-skill-btn" data-skill="' + escapeHtml(s.name) + '" data-mod="' + mod + '" data-name="' + escapeHtml(charName) + '">' + s.name + ' ' + formatMod(mod) + '</button>';
+            });
+        }
+        html += '</div>';
+        skillsEl.innerHTML = html;
+        skillsEl.querySelectorAll('.bar-skill-btn').forEach(btn => {
+            btn.onclick = function() {
+                rollSkill(this.dataset.skill, parseInt(this.dataset.mod, 10), this.dataset.name);
+            };
+        });
+    }
+
+    // Actions: standard actions + character's bonus actions from sheet
+    const actionsEl = document.getElementById('playerBarActions');
+    if (actionsEl) {
+        const standardActions = [
+            { name: 'Attack', icon: '⚔️' }, { name: 'Cast Spell', icon: '🔮' }, { name: 'Dash', icon: '🏃' }, { name: 'Disengage', icon: '🚪' },
+            { name: 'Dodge', icon: '🛡️' }, { name: 'Help', icon: '🤝' }, { name: 'Hide', icon: '👁️' }, { name: 'Ready', icon: '⏸️' }, { name: 'Search', icon: '🔍' }, { name: 'Use Item', icon: '🎒' }
+        ];
+        const bonusFromSheet = (charData.actions && charData.actions.bonus_actions && Array.isArray(charData.actions.bonus_actions))
+            ? charData.actions.bonus_actions.map(function(a) { return { name: typeof a === 'string' ? a : (a.name || a), icon: '⭐' }; })
+            : [];
+        let html = '<span class="section-label">Actions</span><div class="bar-scroll">';
+        standardActions.forEach(a => {
+            html += '<button type="button" class="bar-action-btn" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + a.icon + ' ' + escapeHtml(a.name) + '</button>';
+        });
+        bonusFromSheet.forEach(a => {
+            html += '<button type="button" class="bar-action-btn bar-action-bonus" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + (a.icon || '⭐') + ' ' + escapeHtml(a.name) + '</button>';
+        });
+        html += '</div>';
+        actionsEl.innerHTML = html;
+        actionsEl.querySelectorAll('.bar-action-btn').forEach(btn => {
+            btn.onclick = function() {
+                const name = this.dataset.charName || charName;
+                addLogEntry(name + ' is taking the ' + this.dataset.action + ' action', 'info');
+            };
+        });
+    }
+
+    // Attacks: from character sheet (charData.attacks), support to_hit or toHit
+    const attacksEl = document.getElementById('playerBarAttacks');
+    if (attacksEl) {
+        const attacks = charData.attacks || [];
+        let html = '<span class="section-label">Attacks</span><div class="bar-scroll">';
+        if (attacks.length === 0) {
+            html += '<span style="font-size:10px;opacity:0.6;">None</span>';
+        } else {
+            attacks.forEach(atk => {
+                const name = atk.name || atk.weapon_name || 'Attack';
+                const toHit = atk.to_hit !== undefined ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : 0);
+                const dmg = atk.damage || atk.damage_dice || '1d4';
+                const dmgType = atk.type || atk.damage_type || 'damage';
+                html += '<button type="button" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + '</button>';
+            });
+        }
+        html += '</div>';
+        attacksEl.innerHTML = html;
+        attacksEl.querySelectorAll('.bar-attack-btn').forEach(btn => {
+            btn.onclick = function() {
+                rollAttack(this.dataset.weapon, parseInt(this.dataset.tohit, 10), this.dataset.damage, this.dataset.type, this.dataset.name);
+            };
+        });
+    }
+
+    // Dice
+    const diceEl = document.getElementById('playerBarDice');
+    if (diceEl) {
+        const diceTypes = [4, 6, 8, 10, 12, 20, 100];
+        let html = '<span class="section-label">Dice (D4–D100)</span><div style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;">';
+        diceTypes.forEach(sides => {
+            html += '<button type="button" class="bar-dice-btn" data-sides="' + sides + '" data-name="' + escapeHtml(charName) + '">D' + sides + '</button>';
+        });
+        html += '</div>';
+        diceEl.innerHTML = html;
+        diceEl.querySelectorAll('.bar-dice-btn').forEach(btn => {
+            btn.onclick = function() {
+                rollFlatDice(parseInt(this.dataset.sides, 10), this.dataset.name);
+            };
+        });
+    }
 }
 
 // Populate spell slots section
@@ -8134,6 +8431,8 @@ function selectCharacterForPlay(charId) {
     
     // Show confirmation
     alert(`✅ Character Selected!\n\nYou're playing as: ${char.name}\n${char.class} Level ${char.level}\n\nYou're ready to play!`);
+
+    updatePlayerActionBarVisibility();
 }
 
 function showCharacterSelect() {
