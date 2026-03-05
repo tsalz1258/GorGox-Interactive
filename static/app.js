@@ -9011,6 +9011,20 @@ function addRollEntry(message, isNat20 = false, isNat1 = false) {
     
     console.log('✅ Added to rolls log, total entries:', log.children.length);
     
+    // Mirror to standalone character sheet window if open (so players see rolls there too)
+    if (standaloneCharacterSheetWindow && !standaloneCharacterSheetWindow.closed) {
+        try {
+            standaloneCharacterSheetWindow.postMessage({
+                type: 'rollLogEntry',
+                text: message,
+                isNat20: !!isNat20,
+                isNat1: !!isNat1
+            }, window.location.origin);
+        } catch (e) {
+            console.warn('Could not send roll to standalone window:', e);
+        }
+    }
+    
     // Also add to main combat log (will be formatted there too)
     addLogEntry(message, isNat20 ? 'success' : (isNat1 ? 'damage' : 'info'));
 }
