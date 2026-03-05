@@ -1,0 +1,29 @@
+TO SEE THE LATEST CHANGES (v24, no scroll jump, resizable action bar)
+===============================================================
+
+1. STOP THE SERVER
+   - In the terminal where the app is running, press Ctrl+C
+   - Or close the window that's running Gorgox
+   - (The .exe must not be running or the rebuild will fail with "Access is denied")
+
+2. REBUILD THE CODE
+   - Open a terminal in this folder
+   - Run:  cargo build --release
+   - Wait until it says "Finished"
+   - (Or use:  cargo run --release   to build and start in one step)
+
+3. START THE SERVER AGAIN
+   - Run:  cargo run --release
+   - Or run:  target\release\gorgox_interactive.exe
+   - Wait until it says "Server listening on http://0.0.0.0:3000"
+
+4. REFRESH THE BROWSER
+   - Go to the app in your browser (e.g. http://localhost:3000)
+   - Do a HARD REFRESH:  Ctrl+Shift+R   (or Ctrl+F5)
+   - Check the BROWSER TAB TITLE: it should say "Gorgox Interactive (v24)"
+   - If it still shows an old version, try: F12 → Application → Clear site data → refresh
+
+WHY REBUILD?
+- The server (Rust) was changed to send "don't cache this page" so your browser loads fresh HTML/JS.
+- Those changes are only in the new .exe after you run "cargo build".
+- The static files (index.html, app.js, style.css) are read from the "static" folder when the server runs—no extra build step for those.

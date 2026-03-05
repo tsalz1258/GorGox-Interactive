@@ -7,9 +7,9 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State, Path, Multipart,
     },
-    response::Response,
+    response::{Response, IntoResponse},
     routing::{get, post, delete},
-    http::StatusCode,
+    http::{StatusCode, header},
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -156,9 +156,10 @@ pub async fn start_server(
     let app = Router::new()
         .route("/ws", get(websocket_handler))
         .route("/", get(|| async {
+            let no_cache = [(header::CACHE_CONTROL.as_str(), "no-store, no-cache, must-revalidate")];
             match tokio::fs::read_to_string("static/index.html").await {
-                Ok(content) => axum::response::Html(content),
-                Err(_) => axum::response::Html(include_str!("../static/index.html").to_string()),
+                Ok(content) => (no_cache, axum::response::Html(content)).into_response(),
+                Err(_) => (no_cache, axum::response::Html(include_str!("../static/index.html").to_string())).into_response(),
             }
         }))
         .route("/api/test", get(|| async { 

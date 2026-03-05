@@ -1,5 +1,8 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-(function () { try { console.log('%c[GorGox] app.js loaded - combat-cycles-all-tokens', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
+const APP_UI_VERSION = 'v29'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+var lastActionBarScrollBeforeClick = null; // Capture scroll on mousedown so we restore to pre-click position (avoid grid dragging down)
+var actionBarScrollLockUntil = 0; // Until this timestamp, we force-restore scroll on any scroll event (stops grid drag)
+(function () { try { console.log('%c[GorGox] app.js ' + APP_UI_VERSION + ' loaded', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
 // Global state
 let ws = null;
 let selectedStyle = 'dnd'; // 'dnd' or 'starwars'
@@ -8,6 +11,10 @@ let isDM = false; // THIS NEVER CHANGES AFTER CONNECTION
 let myPlayerName = ''; // Store our player name
 let myCharacterId = null; // Track which character this player controls
 let playerActionBarVisible = true; // Toggle for bottom action bar (players only)
+const PLAYER_ACTION_BAR_HEIGHT_MIN = 80;
+const PLAYER_ACTION_BAR_HEIGHT_MAX = 320;
+const PLAYER_ACTION_BAR_HEIGHT_DEFAULT = 100;
+let playerActionBarHeight = PLAYER_ACTION_BAR_HEIGHT_DEFAULT; // Resizable; persisted in localStorage
 let currentMap = null;
 let tokens = [];
 let characters = [];
@@ -113,6 +120,18 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     setupCanvas();
     loadNPCs(); // Load NPCs from npc.json
+    applyPlayerActionBarHeight(); // Apply saved action bar height (sets CSS var for main content)
+    var badge = document.getElementById('appVersionBadge');
+    if (badge) badge.textContent = typeof APP_UI_VERSION !== 'undefined' ? APP_UI_VERSION : 'v29';
+    if (typeof APP_UI_VERSION !== 'undefined') document.title = 'Gorgox Interactive (' + APP_UI_VERSION + ')';
+    function actionBarScrollRevert() {
+        if (typeof actionBarScrollLockUntil !== 'undefined' && Date.now() < actionBarScrollLockUntil && lastActionBarScrollBeforeClick) {
+            var s = lastActionBarScrollBeforeClick;
+            restoreWindowScroll(s.x, s.y, s.sidebar, s.sidebarLeft, s.docScrollTop, s.docScrollLeft);
+        }
+    }
+    document.addEventListener('scroll', actionBarScrollRevert, true);
+    window.addEventListener('scroll', actionBarScrollRevert, true);
 });
 
 // Connection - Define immediately so it's always available
@@ -3973,7 +3992,11 @@ function ensurePlayerActionBarExists() {
     bar.id = 'playerActionBar';
     bar.className = 'player-action-bar hidden';
     bar.setAttribute('aria-label', 'Player action bar');
-    bar.innerHTML = '<div class="player-bar-inner">' +
+    bar.style.display = 'flex';
+    bar.style.flexDirection = 'column';
+    bar.innerHTML = '<div class="player-action-bar-resize-handle" id="playerActionBarResizeHandle" title="Drag to resize action bar">' +
+        '<span class="player-action-bar-resize-grip">⋯</span></div>' +
+        '<div class="player-bar-inner">' +
         '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
         '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
         '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
@@ -3983,7 +4006,77 @@ function ensurePlayerActionBarExists() {
         '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
         '</div>';
     document.body.appendChild(bar);
+    setupPlayerActionBarResize(bar);
+    bar.addEventListener('mousedown', function(e) {
+        if (e.target.closest('button')) {
+            e.preventDefault(); /* stop browser from focusing button and scrolling view to show it */
+        }
+        var sbR = document.querySelector('.sidebar.right');
+        var sbL = document.querySelector('.sidebar.left');
+        var doc = document.documentElement;
+        lastActionBarScrollBeforeClick = {
+            x: window.scrollX,
+            y: window.scrollY,
+            docScrollTop: doc ? doc.scrollTop : 0,
+            docScrollLeft: doc ? doc.scrollLeft : 0,
+            sidebar: sbR ? sbR.scrollTop : 0,
+            sidebarLeft: sbL ? sbL.scrollTop : 0,
+            t: Date.now()
+        };
+        actionBarScrollLockUntil = Date.now() + 600; /* for 600ms, any scroll event will be reverted */
+    }, true);
+    bar.addEventListener('click', function(e) {
+        if (e.target.closest('button')) {
+            setTimeout(function() {
+                if (document.activeElement && bar.contains(document.activeElement)) document.activeElement.blur();
+            }, 0);
+        }
+    }, true);
     return bar;
+}
+
+// Load saved action bar height and apply to bar + main content
+function applyPlayerActionBarHeight() {
+    try {
+        const saved = localStorage.getItem('playerActionBarHeight');
+        if (saved !== null) {
+            const n = parseInt(saved, 10);
+            if (!isNaN(n) && n >= PLAYER_ACTION_BAR_HEIGHT_MIN && n <= PLAYER_ACTION_BAR_HEIGHT_MAX) {
+                playerActionBarHeight = n;
+            }
+        }
+    } catch (e) {}
+    const bar = document.getElementById('playerActionBar');
+    if (bar && !bar.classList.contains('hidden')) {
+        bar.style.height = playerActionBarHeight + 'px';
+    }
+    document.body.style.setProperty('--player-action-bar-height', playerActionBarHeight + 'px');
+}
+
+// Resize handle: drag up = taller bar, drag down = shorter
+function setupPlayerActionBarResize(bar) {
+    const handle = document.getElementById('playerActionBarResizeHandle');
+    if (!handle) return;
+    handle.onmousedown = function(e) {
+        e.preventDefault();
+        const startY = e.clientY;
+        const startH = playerActionBarHeight;
+        function onMove(e2) {
+            const dy = startY - e2.clientY; // drag up = positive dy = taller
+            let h = Math.round(startH + dy);
+            h = Math.max(PLAYER_ACTION_BAR_HEIGHT_MIN, Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, h));
+            playerActionBarHeight = h;
+            bar.style.height = h + 'px';
+            document.body.style.setProperty('--player-action-bar-height', h + 'px');
+        }
+        function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            try { localStorage.setItem('playerActionBarHeight', String(playerActionBarHeight)); } catch (e2) {}
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    };
 }
 
 // Toggle the action bar on/off (called by the gold Action Bar button)
@@ -4007,7 +4100,8 @@ function updatePlayerActionBarVisibility() {
     const shouldShow = !isDM && playerActionBarVisible;
     if (shouldShow) {
         bar.classList.remove('hidden');
-        bar.style.cssText = 'position:fixed!important;bottom:0!important;left:300px!important;right:0!important;width:auto!important;height:140px!important;display:flex!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#1a1510 0%,#0f0c08 50%,#0a0806 100%)!important;border-top:3px solid #c9a227!important;border-left:3px solid #c9a227!important;';
+        applyPlayerActionBarHeight();
+        bar.style.cssText = 'position:fixed!important;bottom:0!important;left:300px!important;right:0!important;width:auto!important;height:' + playerActionBarHeight + 'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#1a1510 0%,#0f0c08 50%,#0a0806 100%)!important;border-top:3px solid #c9a227!important;border-left:3px solid #c9a227!important;';
         document.body.classList.add('player-action-bar-visible');
         populatePlayerActionBar();
     } else {
@@ -4114,10 +4208,9 @@ function populatePlayerActionBar() {
     const nameHpEl = document.getElementById('playerBarNameHp');
     if (nameHpEl) {
         nameHpEl.innerHTML = '<span class="section-label">Character</span>' +
-            '<div style="font-weight:bold;font-size:13px;color:#4a9eff;">' + escapeHtml(charName) + '</div>' +
-            '<div style="font-size:12px;color:#44ff44;">HP ' + currentHP + '/' + maxHP + '</div>' +
-            '<div style="font-size:11px;opacity:0.8;">AC ' + ac + '</div>' +
-            '<button onclick="showMyCharacterSheet()" style="margin-top:4px;padding:2px 8px;font-size:10px;background:rgba(74,158,255,0.3);border:1px solid #4a9eff;border-radius:4px;color:#fff;cursor:pointer;">Sheet</button>';
+            '<div style="font-weight:bold;font-size:10px;color:#4a9eff;line-height:1.2;">' + escapeHtml(charName) + '</div>' +
+            '<div style="font-size:9px;color:#44ff44;">HP ' + currentHP + '/' + maxHP + ' AC ' + ac + '</div>' +
+            '<button type="button" tabindex="-1" onclick="showMyCharacterSheet()" style="margin-top:1px;padding:1px 4px;font-size:8px;background:rgba(74,158,255,0.3);border:1px solid #4a9eff;border-radius:3px;color:#fff;cursor:pointer;">Sheet</button>';
     }
 
     // Abilities (click to roll check)
@@ -4126,7 +4219,7 @@ function populatePlayerActionBar() {
         let html = '<span class="section-label">Abilities</span><div class="bar-abilities-grid">';
         ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
             const mod = abilityMods[ab] != null ? abilityMods[ab] : 0;
-            html += '<button type="button" class="bar-ability-btn" data-ab="' + ab + '" data-mod="' + mod + '" data-name="' + escapeHtml(charName) + '">' + abilityLabels[ab] + ' ' + formatMod(mod) + '</button>';
+            html += '<button type="button" tabindex="-1" class="bar-ability-btn" data-ab="' + ab + '" data-mod="' + mod + '" data-name="' + escapeHtml(charName) + '">' + abilityLabels[ab] + ' ' + formatMod(mod) + '</button>';
         });
         html += '</div>';
         abilitiesEl.innerHTML = html;
@@ -4145,7 +4238,7 @@ function populatePlayerActionBar() {
             const base = abilityMods[ab] != null ? abilityMods[ab] : 0;
             const saveMod = saveProfs[ab] ? base + profBonus : base;
             const label = abilityLabels[ab];
-            html += '<button type="button" class="bar-save-btn" data-ab="' + ab + '" data-mod="' + saveMod + '" data-name="' + escapeHtml(charName) + '">' + label + ' ' + formatMod(saveMod) + '</button>';
+            html += '<button type="button" tabindex="-1" class="bar-save-btn" data-ab="' + ab + '" data-mod="' + saveMod + '" data-name="' + escapeHtml(charName) + '">' + label + ' ' + formatMod(saveMod) + '</button>';
         });
         html += '</div>';
         savesEl.innerHTML = html;
@@ -4165,7 +4258,7 @@ function populatePlayerActionBar() {
             skillList.forEach(s => {
                 const name = (s && (s.name || s)) || '';
                 const bonus = (s && s.bonus != null) ? s.bonus : (abilityMods[(s && s.ability) || 'str'] != null ? abilityMods[s.ability] : 0);
-                if (name) html += '<button type="button" class="bar-skill-btn" data-skill="' + escapeHtml(name) + '" data-mod="' + bonus + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + ' ' + formatMod(bonus) + '</button>';
+                if (name) html += '<button type="button" tabindex="-1" class="bar-skill-btn" data-skill="' + escapeHtml(name) + '" data-mod="' + bonus + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + ' ' + formatMod(bonus) + '</button>';
             });
         } else {
             const shortList = [
@@ -4174,7 +4267,7 @@ function populatePlayerActionBar() {
             ];
             shortList.forEach(s => {
                 const mod = abilityMods[s.ab] != null ? abilityMods[s.ab] : 0;
-                html += '<button type="button" class="bar-skill-btn" data-skill="' + escapeHtml(s.name) + '" data-mod="' + mod + '" data-name="' + escapeHtml(charName) + '">' + s.name + ' ' + formatMod(mod) + '</button>';
+                html += '<button type="button" tabindex="-1" class="bar-skill-btn" data-skill="' + escapeHtml(s.name) + '" data-mod="' + mod + '" data-name="' + escapeHtml(charName) + '">' + s.name + ' ' + formatMod(mod) + '</button>';
             });
         }
         html += '</div>';
@@ -4198,10 +4291,10 @@ function populatePlayerActionBar() {
             : [];
         let html = '<span class="section-label">Actions</span><div class="bar-scroll">';
         standardActions.forEach(a => {
-            html += '<button type="button" class="bar-action-btn" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + a.icon + ' ' + escapeHtml(a.name) + '</button>';
+            html += '<button type="button" tabindex="-1" class="bar-action-btn" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + a.icon + ' ' + escapeHtml(a.name) + '</button>';
         });
         bonusFromSheet.forEach(a => {
-            html += '<button type="button" class="bar-action-btn bar-action-bonus" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + (a.icon || '⭐') + ' ' + escapeHtml(a.name) + '</button>';
+            html += '<button type="button" tabindex="-1" class="bar-action-btn bar-action-bonus" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + (a.icon || '⭐') + ' ' + escapeHtml(a.name) + '</button>';
         });
         html += '</div>';
         actionsEl.innerHTML = html;
@@ -4226,7 +4319,7 @@ function populatePlayerActionBar() {
                 const toHit = atk.to_hit !== undefined ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : 0);
                 const dmg = atk.damage || atk.damage_dice || '1d4';
                 const dmgType = atk.type || atk.damage_type || 'damage';
-                html += '<button type="button" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + '</button>';
+                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + '</button>';
             });
         }
         html += '</div>';
@@ -4244,7 +4337,7 @@ function populatePlayerActionBar() {
         const diceTypes = [4, 6, 8, 10, 12, 20, 100];
         let html = '<span class="section-label">Dice (D4–D100)</span><div style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center;">';
         diceTypes.forEach(sides => {
-            html += '<button type="button" class="bar-dice-btn" data-sides="' + sides + '" data-name="' + escapeHtml(charName) + '">D' + sides + '</button>';
+            html += '<button type="button" tabindex="-1" class="bar-dice-btn" data-sides="' + sides + '" data-name="' + escapeHtml(charName) + '">D' + sides + '</button>';
         });
         html += '</div>';
         diceEl.innerHTML = html;
@@ -9234,12 +9327,44 @@ function formatLogMessage(message) {
     return formatted;
 }
 
+// Restore window, documentElement, and sidebars scroll so log updates don't move the view
+function restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLeftScroll, savedDocScrollTop, savedDocScrollLeft) {
+    function restore() {
+        if (savedX !== undefined && savedY !== undefined) window.scrollTo(savedX, savedY);
+        var doc = document.documentElement;
+        if (doc && savedDocScrollTop !== undefined) doc.scrollTop = savedDocScrollTop;
+        if (doc && savedDocScrollLeft !== undefined) doc.scrollLeft = savedDocScrollLeft;
+        var sbR = document.querySelector('.sidebar.right');
+        if (sbR && savedSidebarScroll !== undefined) sbR.scrollTop = savedSidebarScroll;
+        var sbL = document.querySelector('.sidebar.left');
+        if (sbL && savedSidebarLeftScroll !== undefined) sbL.scrollTop = savedSidebarLeftScroll;
+    }
+    restore();
+    requestAnimationFrame(restore);
+    setTimeout(restore, 0);
+    setTimeout(restore, 50);
+    setTimeout(restore, 150);
+    setTimeout(restore, 300);
+}
+
 function addLogEntry(message, type = 'info') {
     const log = document.getElementById('combatLog');
     if (!log) {
         console.error('❌ Combat log element not found!');
         return;
     }
+    var rightSidebar = document.querySelector('.sidebar.right');
+    var leftSidebar = document.querySelector('.sidebar.left');
+    var doc = document.documentElement;
+    var use = (lastActionBarScrollBeforeClick && (Date.now() - lastActionBarScrollBeforeClick.t) < 500)
+        ? lastActionBarScrollBeforeClick
+        : { x: window.scrollX, y: window.scrollY, docScrollTop: doc ? doc.scrollTop : 0, docScrollLeft: doc ? doc.scrollLeft : 0, sidebar: rightSidebar ? rightSidebar.scrollTop : 0, sidebarLeft: leftSidebar ? leftSidebar.scrollTop : 0 };
+    var savedX = use.x;
+    var savedY = use.y;
+    var savedSidebarScroll = use.sidebar;
+    var savedSidebarLeftScroll = use.sidebarLeft !== undefined ? use.sidebarLeft : (leftSidebar ? leftSidebar.scrollTop : 0);
+    var savedDocTop = use.docScrollTop !== undefined ? use.docScrollTop : (doc ? doc.scrollTop : 0);
+    var savedDocLeft = use.docScrollLeft !== undefined ? use.docScrollLeft : (doc ? doc.scrollLeft : 0);
     
     const entry = document.createElement('div');
     entry.className = `log-entry ${type}`;
@@ -9260,7 +9385,11 @@ function addLogEntry(message, type = 'info') {
     }
     
     log.appendChild(entry);
-    log.scrollTop = log.scrollHeight;
+    restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLeftScroll, savedDocTop, savedDocLeft);
+    requestAnimationFrame(function() {
+        log.scrollTop = log.scrollHeight;
+        restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLeftScroll, savedDocTop, savedDocLeft);
+    });
 }
 
 // Add roll-specific log entry with support for nat 20/1 styling
@@ -9300,12 +9429,23 @@ function addRollEntry(message, isNat20 = false, isNat1 = false) {
     const formattedMessage = formatLogMessage(message);
     entry.innerHTML = `<span style="opacity: 0.7; font-size: 12px; font-weight: normal; margin-right: 8px;">[${timestamp}]</span> ${formattedMessage}`;
     
+    var rightSidebar = document.querySelector('.sidebar.right');
+    var leftSidebar = document.querySelector('.sidebar.left');
+    var doc = document.documentElement;
+    var use = (lastActionBarScrollBeforeClick && (Date.now() - lastActionBarScrollBeforeClick.t) < 500)
+        ? lastActionBarScrollBeforeClick
+        : { x: window.scrollX, y: window.scrollY, docScrollTop: doc ? doc.scrollTop : 0, docScrollLeft: doc ? doc.scrollLeft : 0, sidebar: rightSidebar ? rightSidebar.scrollTop : 0, sidebarLeft: leftSidebar ? leftSidebar.scrollTop : 0 };
+    var savedX = use.x;
+    var savedY = use.y;
+    var savedSidebarScroll = use.sidebar;
+    var savedSidebarLeftScroll = use.sidebarLeft !== undefined ? use.sidebarLeft : (leftSidebar ? leftSidebar.scrollTop : 0);
+    var savedDocTop = use.docScrollTop !== undefined ? use.docScrollTop : (doc ? doc.scrollTop : 0);
+    var savedDocLeft = use.docScrollLeft !== undefined ? use.docScrollLeft : (doc ? doc.scrollLeft : 0);
     log.appendChild(entry);
-    
-    // Smooth scroll to bottom
-    log.scrollTo({
-        top: log.scrollHeight,
-        behavior: 'smooth'
+    restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLeftScroll, savedDocTop, savedDocLeft);
+    requestAnimationFrame(function() {
+        log.scrollTop = log.scrollHeight;
+        restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLeftScroll, savedDocTop, savedDocLeft);
     });
     
     console.log('✅ Added to rolls log, total entries:', log.children.length);
@@ -12447,8 +12587,9 @@ function applyTheme(style) {
         root.style.setProperty('--bg-color', '#0a0a1a');
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #1a1a3a 0%, #0a0a2a 100%)');
         
-        // Update header
-        document.querySelector('h1').innerHTML = '⭐ Gorgox Interactive <span style="background: #4a9eff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">STAR WARS v15</span>';
+        // Update header (use APP_UI_VERSION so version stays current)
+        var v = (typeof APP_UI_VERSION !== 'undefined') ? APP_UI_VERSION : 'v29';
+        document.querySelector('h1').innerHTML = '⭐ Gorgox Interactive <span id="appVersionBadge" style="background: #4a9eff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">STAR WARS ' + v + '</span>';
     } else {
         // D&D theme - traditional fantasy green/gold
         root.style.setProperty('--primary-color', '#4CAF50');
@@ -12457,8 +12598,8 @@ function applyTheme(style) {
         root.style.setProperty('--bg-color', '#1a1a1a');
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%)');
         
-        // Keep D&D header
-        document.querySelector('h1').innerHTML = '🎲 Gorgox Interactive <span style="background: #ffaa00; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">v15 COMPLETE</span>';
+        var v = (typeof APP_UI_VERSION !== 'undefined') ? APP_UI_VERSION : 'v29';
+        document.querySelector('h1').innerHTML = '🎲 Gorgox Interactive <span id="appVersionBadge" style="background: #ffaa00; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">' + v + '</span>';
     }
 }
 

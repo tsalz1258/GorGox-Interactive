@@ -4,10 +4,28 @@
     box-sizing: border-box;
 }
 
+html {
+    height: 100%;
+    overflow: hidden;
+    scroll-behavior: auto;
+}
+
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
     color: #fff;
+    overflow: hidden;
+    height: 100%;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+}
+
+#app {
+    height: 100%;
     overflow: hidden;
 }
 
@@ -55,14 +73,14 @@ body {
     display: none !important;
 }
 
-/* Player Action Bar - fixed to bottom, gold trim on top and left */
+/* Player Action Bar - fixed to bottom, 2-row compact layout */
 .player-action-bar {
     position: fixed;
     bottom: 0;
     left: 0;
     right: 0;
     width: 100%;
-    height: 140px;
+    height: 100px;
     background: linear-gradient(180deg, #1a1510 0%, #0f0c08 50%, #0a0806 100%);
     border-top: 3px solid #c9a227;
     border-left: 3px solid #c9a227;
@@ -73,33 +91,61 @@ body {
     align-items: stretch;
     overflow: hidden;
     border-radius: 16px 16px 0 0;
+    overflow-anchor: none; /* prevent browser from scrolling to keep this in view */
+}
+.player-action-bar button {
+    outline: none; /* no focus ring; buttons use tabindex="-1" so they don't take focus */
 }
 .player-action-bar.hidden {
     display: none !important;
 }
+/* Resize handle at top of action bar */
+.player-action-bar-resize-handle {
+    flex-shrink: 0;
+    height: 10px;
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(180deg, rgba(201, 162, 39, 0.25) 0%, rgba(139, 115, 85, 0.15) 100%);
+    border-bottom: 1px solid rgba(201, 162, 39, 0.4);
+    user-select: none;
+    transition: background 0.15s;
+}
+.player-action-bar-resize-handle:hover {
+    background: linear-gradient(180deg, rgba(201, 162, 39, 0.4) 0%, rgba(139, 115, 85, 0.25) 100%);
+}
+.player-action-bar-resize-grip {
+    font-size: 14px;
+    color: rgba(201, 162, 39, 0.8);
+    letter-spacing: 2px;
+    line-height: 1;
+}
+/* 2-row layout: sections wrap into 2 rows (row 1 then row 2) */
 .player-bar-inner {
     display: flex;
     flex-direction: row;
-    flex-wrap: nowrap;
-    align-items: stretch;
-    gap: 12px;
-    padding: 12px 16px;
-    overflow-x: auto;
-    overflow-y: hidden;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 6px 10px;
+    padding: 6px 10px;
+    overflow: auto;
     flex: 1;
     min-width: 0;
+    min-height: 0;
     width: 100%;
 }
 .player-bar-inner::-webkit-scrollbar {
-    height: 8px;
+    height: 6px;
+    width: 6px;
 }
 .player-bar-inner::-webkit-scrollbar-track {
     background: rgba(0, 0, 0, 0.5);
-    border-radius: 4px;
+    border-radius: 3px;
 }
 .player-bar-inner::-webkit-scrollbar-thumb {
     background: linear-gradient(90deg, #8b7355, #c9a227);
-    border-radius: 4px;
+    border-radius: 3px;
 }
 /* BG3-style empty state when no character selected */
 .player-bar-empty-state {
@@ -141,44 +187,48 @@ body {
     box-shadow: 0 0 16px rgba(201, 162, 39, 0.5);
     transform: scale(1.03);
 }
-/* Section slots - BG3 carved/embossed look */
+/* Section slots - compact for 2-row layout */
 .player-bar-section {
-    flex-shrink: 0;
+    flex: 0 1 auto;
     min-width: 0;
-    padding: 10px 14px;
+    padding: 4px 8px;
+    max-height: 40px;
     background: linear-gradient(180deg, rgba(45, 35, 25, 0.95) 0%, rgba(28, 22, 16, 0.98) 100%);
-    border-radius: 10px;
+    border-radius: 6px;
     border: 1px solid #6b5344;
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4), 0 1px 0 rgba(201, 162, 39, 0.08);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
 }
 .player-bar-section .section-label {
-    font-size: 9px;
+    font-size: 8px;
     font-weight: bold;
     color: #c9a227;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 6px;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
     white-space: nowrap;
-    text-shadow: 0 0 8px rgba(201, 162, 39, 0.3);
+    text-shadow: 0 0 6px rgba(201, 162, 39, 0.3);
+    line-height: 1.1;
 }
-.player-bar-name-hp { min-width: 100px; }
-.player-bar-abilities { min-width: 200px; }
-.player-bar-saves { min-width: 140px; }
-.player-bar-skills { min-width: 160px; }
-.player-bar-actions { min-width: 180px; }
-.player-bar-attacks { min-width: 160px; }
-.player-bar-dice { min-width: 220px; }
+.player-bar-name-hp { min-width: 82px; }
+.player-bar-abilities { min-width: 160px; }
+.player-bar-saves { min-width: 115px; }
+.player-bar-skills { min-width: 130px; }
+.player-bar-actions { min-width: 145px; }
+.player-bar-attacks { min-width: 130px; }
+.player-bar-dice { min-width: 175px; }
 .player-bar-section .bar-abilities-grid {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
-    gap: 6px;
+    gap: 3px;
 }
 .player-bar-section .bar-ability-btn {
-    padding: 5px 8px;
+    padding: 2px 4px;
+    font-size: 9px;
     background: linear-gradient(180deg, rgba(139, 115, 85, 0.4) 0%, rgba(60, 48, 36, 0.8) 100%);
     border: 1px solid #8b7355;
     border-radius: 6px;
@@ -195,8 +245,9 @@ body {
     transform: scale(1.05);
 }
 .player-bar-section .bar-save-btn, .player-bar-section .bar-skill-btn {
-    padding: 5px 10px;
-    margin: 3px 5px 3px 0;
+    padding: 2px 6px;
+    margin: 1px 3px 1px 0;
+    font-size: 9px;
     background: linear-gradient(180deg, rgba(100, 85, 60, 0.45) 0%, rgba(55, 45, 32, 0.75) 100%);
     border: 1px solid #8b7355;
     border-radius: 6px;
@@ -212,8 +263,9 @@ body {
     box-shadow: 0 0 8px rgba(201, 162, 39, 0.25);
 }
 .player-bar-section .bar-action-btn {
-    padding: 6px 12px;
-    margin: 3px 5px 3px 0;
+    padding: 2px 6px;
+    margin: 1px 3px 1px 0;
+    font-size: 9px;
     background: linear-gradient(180deg, rgba(74, 110, 60, 0.6) 0%, rgba(45, 70, 38, 0.85) 100%);
     border: 1px solid #7a9e5c;
     border-radius: 6px;
@@ -238,8 +290,9 @@ body {
     box-shadow: 0 0 8px rgba(255, 170, 68, 0.3);
 }
 .player-bar-section .bar-attack-btn {
-    padding: 5px 10px;
-    margin: 3px 5px 3px 0;
+    padding: 2px 6px;
+    margin: 1px 3px 1px 0;
+    font-size: 9px;
     background: linear-gradient(180deg, rgba(120, 55, 45, 0.55) 0%, rgba(70, 35, 30, 0.85) 100%);
     border: 1px solid #9b6a5a;
     border-radius: 6px;
@@ -255,8 +308,9 @@ body {
     box-shadow: 0 0 10px rgba(201, 122, 90, 0.35);
 }
 .player-bar-section .bar-dice-btn {
-    padding: 6px 12px;
-    margin: 3px 5px 3px 0;
+    padding: 3px 6px;
+    margin: 1px 2px 1px 0;
+    font-size: 9px;
     background: linear-gradient(180deg, rgba(139, 115, 85, 0.5) 0%, rgba(80, 65, 50, 0.8) 100%);
     border: 1px solid #c9a227;
     border-radius: 6px;
@@ -272,12 +326,12 @@ body {
     transform: scale(1.05);
 }
 .player-bar-section .bar-scroll {
-    max-height: 76px;
+    max-height: 26px;
     overflow-y: auto;
     overflow-x: hidden;
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 4px;
     align-content: flex-start;
 }
 
@@ -403,11 +457,14 @@ header h1 {
     color: #000;
 }
 
-/* Main Interface */
+/* Main Interface - fixed height so nothing can scroll the page or shift the grid */
 #mainInterface {
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
+    height: 100vh;
+    max-height: 100vh;
+    min-height: 0;
+    overflow: hidden;
     position: relative;
 }
 
@@ -420,7 +477,7 @@ header h1 {
     overflow: hidden;
 }
 body.player-action-bar-visible .main-container {
-    height: calc(100vh - 70px - 140px);
+    height: calc(100vh - 70px - var(--player-action-bar-height, 100px));
 }
 
 /* Sidebars */
