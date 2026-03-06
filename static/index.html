@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gorgox Interactive (v29)</title>
-    <link rel="stylesheet" href="/static/style.css?v=28">
+    <link rel="stylesheet" href="/static/style.css?v=30">
 </head>
 <body>
     <div id="app">
@@ -909,7 +909,7 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
-    <script src="/static/app.js?v=29"></script>
+    <script src="/static/app.js?v=30"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {
@@ -925,16 +925,35 @@
         });
     </script>
     
-    <!-- Player Action Bar: fixed to bottom of screen, direct child of body so it always shows for players -->
-    <div id="playerActionBar" class="player-action-bar hidden" aria-label="Player action bar">
+    <!-- Player Action Bar: full width, tabbed (Combat | Abilities | Powers | Dice) -->
+    <div id="playerActionBar" class="player-action-bar hidden" aria-label="Player action bar" style="display:flex;flex-direction:column;">
+        <div class="player-action-bar-resize-handle player-action-bar-resize-height" id="playerActionBarResizeHandle" title="Drag to resize height"><span class="player-action-bar-resize-grip" aria-hidden="true">...</span></div>
+        <div class="player-bar-tabs" role="tablist">
+            <button type="button" class="player-bar-tab-btn active" data-tab="combat" role="tab" tabindex="-1">Combat</button>
+            <button type="button" class="player-bar-tab-btn" data-tab="abilities" role="tab" tabindex="-1">Abilities</button>
+            <button type="button" class="player-bar-tab-btn" data-tab="powers" role="tab" tabindex="-1">Powers</button>
+            <button type="button" class="player-bar-tab-btn" data-tab="dice" role="tab" tabindex="-1">Dice</button>
+        </div>
         <div class="player-bar-inner">
-            <div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>
-            <div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>
-            <div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>
-            <div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>
-            <div class="player-bar-section player-bar-actions" id="playerBarActions"></div>
-            <div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>
-            <div class="player-bar-section player-bar-dice" id="playerBarDice"></div>
+            <div class="player-bar-tab-panels">
+                <div class="player-bar-tab-panel active" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">
+                    <div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>
+                    <div class="player-bar-section player-bar-actions" id="playerBarActions"></div>
+                    <div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>
+                </div>
+                <div class="player-bar-tab-panel" id="playerBarPanelAbilities" data-tab="abilities" role="tabpanel">
+                    <div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>
+                    <div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>
+                    <div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>
+                </div>
+                <div class="player-bar-tab-panel" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">
+                    <div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>
+                    <div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>
+                </div>
+                <div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">
+                    <div class="player-bar-section player-bar-dice" id="playerBarDice"></div>
+                </div>
+            </div>
         </div>
     </div>
 

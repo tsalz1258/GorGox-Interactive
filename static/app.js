@@ -3984,27 +3984,56 @@ function populateCombatActionPanel() {
     populatePlayerActionBar();
 }
 
-// Create the player action bar DOM and append to body (so it always exists when we need it)
+// Full HTML for player action bar (resize handle + tabs + panels). Used when creating or when existing bar lacks handles.
+var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player-action-bar-resize-height" id="playerActionBarResizeHandle" title="Drag to resize height">' +
+    '<span class="player-action-bar-resize-grip" aria-hidden="true">...</span></div>' +
+    '<div class="player-bar-tabs" role="tablist">' +
+    '<button type="button" class="player-bar-tab-btn active" data-tab="combat" role="tab" tabindex="-1">Combat</button>' +
+    '<button type="button" class="player-bar-tab-btn" data-tab="abilities" role="tab" tabindex="-1">Abilities</button>' +
+    '<button type="button" class="player-bar-tab-btn" data-tab="powers" role="tab" tabindex="-1">Powers</button>' +
+    '<button type="button" class="player-bar-tab-btn" data-tab="dice" role="tab" tabindex="-1">Dice</button>' +
+    '</div>' +
+    '<div class="player-bar-inner">' +
+    '<div class="player-bar-tab-panels">' +
+    '<div class="player-bar-tab-panel active" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">' +
+    '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
+    '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
+    '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
+    '</div>' +
+    '<div class="player-bar-tab-panel" id="playerBarPanelAbilities" data-tab="abilities" role="tabpanel">' +
+    '<div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>' +
+    '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
+    '<div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>' +
+    '</div>' +
+    '<div class="player-bar-tab-panel" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">' +
+    '<div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>' +
+    '<div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>' +
+    '</div>' +
+    '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
+    '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
+    '</div>' +
+    '</div></div></div>';
+
+// Create the player action bar DOM and append to body (so it always exists when we need it).
+// If bar already exists from HTML but has no resize handles, inject them.
 function ensurePlayerActionBarExists() {
     let bar = document.getElementById('playerActionBar');
-    if (bar) return bar;
+    if (bar) {
+        if (!document.getElementById('playerActionBarResizeHandle') || !bar.querySelector('.player-bar-tabs')) {
+            bar.style.display = 'flex';
+            bar.style.flexDirection = 'column';
+            bar.innerHTML = PLAYER_ACTION_BAR_HTML;
+        }
+        setupPlayerActionBarResize(bar);
+        return bar;
+    }
     bar = document.createElement('div');
     bar.id = 'playerActionBar';
     bar.className = 'player-action-bar hidden';
     bar.setAttribute('aria-label', 'Player action bar');
     bar.style.display = 'flex';
     bar.style.flexDirection = 'column';
-    bar.innerHTML = '<div class="player-action-bar-resize-handle" id="playerActionBarResizeHandle" title="Drag to resize action bar">' +
-        '<span class="player-action-bar-resize-grip">⋯</span></div>' +
-        '<div class="player-bar-inner">' +
-        '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
-        '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
-        '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
-        '<div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>' +
-        '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
-        '<div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>' +
-        '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
-        '</div>';
+    bar.innerHTML = PLAYER_ACTION_BAR_HTML;
     document.body.appendChild(bar);
     setupPlayerActionBarResize(bar);
     bar.addEventListener('mousedown', function(e) {
@@ -4035,12 +4064,12 @@ function ensurePlayerActionBarExists() {
     return bar;
 }
 
-// Load saved action bar height and apply to bar + main content
+// Load saved action bar height and left edge; apply to bar + main content
 function applyPlayerActionBarHeight() {
     try {
-        const saved = localStorage.getItem('playerActionBarHeight');
-        if (saved !== null) {
-            const n = parseInt(saved, 10);
+        const savedH = localStorage.getItem('playerActionBarHeight');
+        if (savedH !== null) {
+            const n = parseInt(savedH, 10);
             if (!isNaN(n) && n >= PLAYER_ACTION_BAR_HEIGHT_MIN && n <= PLAYER_ACTION_BAR_HEIGHT_MAX) {
                 playerActionBarHeight = n;
             }
@@ -4049,34 +4078,56 @@ function applyPlayerActionBarHeight() {
     const bar = document.getElementById('playerActionBar');
     if (bar && !bar.classList.contains('hidden')) {
         bar.style.height = playerActionBarHeight + 'px';
+        bar.style.left = '0';
+        bar.style.width = '100%';
     }
     document.body.style.setProperty('--player-action-bar-height', playerActionBarHeight + 'px');
 }
 
-// Resize handle: drag up = taller bar, drag down = shorter
+// Resize handles: height (top grip) and width (left edge grip)
 function setupPlayerActionBarResize(bar) {
     const handle = document.getElementById('playerActionBarResizeHandle');
-    if (!handle) return;
-    handle.onmousedown = function(e) {
-        e.preventDefault();
-        const startY = e.clientY;
-        const startH = playerActionBarHeight;
-        function onMove(e2) {
-            const dy = startY - e2.clientY; // drag up = positive dy = taller
-            let h = Math.round(startH + dy);
-            h = Math.max(PLAYER_ACTION_BAR_HEIGHT_MIN, Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, h));
-            playerActionBarHeight = h;
-            bar.style.height = h + 'px';
-            document.body.style.setProperty('--player-action-bar-height', h + 'px');
-        }
-        function onUp() {
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            try { localStorage.setItem('playerActionBarHeight', String(playerActionBarHeight)); } catch (e2) {}
-        }
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-    };
+    if (handle) {
+        handle.onmousedown = function(e) {
+            e.preventDefault();
+            const startY = e.clientY;
+            const startH = playerActionBarHeight;
+            function onMove(e2) {
+                const dy = startY - e2.clientY;
+                let h = Math.round(startH + dy);
+                h = Math.max(PLAYER_ACTION_BAR_HEIGHT_MIN, Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, h));
+                playerActionBarHeight = h;
+                bar.style.height = h + 'px';
+                document.body.style.setProperty('--player-action-bar-height', h + 'px');
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                try { localStorage.setItem('playerActionBarHeight', String(playerActionBarHeight)); } catch (e2) {}
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        };
+    }
+}
+
+// Switch action bar tab (Combat, Abilities, Powers, Dice); persists to localStorage
+function switchPlayerActionBarTab(tabId) {
+    const bar = document.getElementById('playerActionBar');
+    if (!bar) return;
+    const tabBar = bar.querySelector('.player-bar-tabs');
+    const panels = bar.querySelectorAll('.player-bar-tab-panel');
+    if (tabBar) {
+        tabBar.querySelectorAll('.player-bar-tab-btn').forEach(btn => {
+            if (btn.dataset.tab === tabId) btn.classList.add('active'); else btn.classList.remove('active');
+        });
+    }
+    if (panels.length) {
+        panels.forEach(panel => {
+            if (panel.dataset.tab === tabId) panel.classList.add('active'); else panel.classList.remove('active');
+        });
+    }
+    try { localStorage.setItem('playerActionBarTab', tabId); } catch (e) {}
 }
 
 // Toggle the action bar on/off (called by the gold Action Bar button)
@@ -4094,14 +4145,14 @@ function updateActionBarButtonLabel() {
     btn.textContent = playerActionBarVisible ? '📊 Action Bar (On)' : '📊 Action Bar (Off)';
 }
 
-// Show/hide the horizontal player action bar (players only). Bar only covers area to the right of left sidebar (red area).
+// Show/hide the horizontal player action bar (players only). Bar spans full width of screen at bottom.
 function updatePlayerActionBarVisibility() {
     const bar = ensurePlayerActionBarExists();
     const shouldShow = !isDM && playerActionBarVisible;
     if (shouldShow) {
         bar.classList.remove('hidden');
         applyPlayerActionBarHeight();
-        bar.style.cssText = 'position:fixed!important;bottom:0!important;left:300px!important;right:0!important;width:auto!important;height:' + playerActionBarHeight + 'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#1a1510 0%,#0f0c08 50%,#0a0806 100%)!important;border-top:3px solid #c9a227!important;border-left:3px solid #c9a227!important;';
+        bar.style.cssText = 'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;height:' + playerActionBarHeight + 'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#1a1510 0%,#0f0c08 50%,#0a0806 100%)!important;border-top:3px solid #c9a227!important;border-left:3px solid #c9a227!important;';
         document.body.classList.add('player-action-bar-visible');
         populatePlayerActionBar();
     } else {
@@ -4117,8 +4168,10 @@ function populatePlayerActionBar() {
     const bar = document.getElementById('playerActionBar');
     if (!bar || bar.classList.contains('hidden') || isDM) return;
 
-    // No character selected: show empty state so the bar is still visible (BG3-style)
+    // No character selected: show empty state and hide tab bar
     if (!myCharacterId) {
+        const tabBar = bar.querySelector('.player-bar-tabs');
+        if (tabBar) tabBar.style.display = 'none';
         const inner = bar.querySelector('.player-bar-inner');
         if (inner) {
             inner.innerHTML = '<div class="player-bar-empty-state">' +
@@ -4132,6 +4185,8 @@ function populatePlayerActionBar() {
 
     const myCharacter = characters.find(c => c.id === myCharacterId);
     if (!myCharacter) {
+        const tabBar = bar.querySelector('.player-bar-tabs');
+        if (tabBar) tabBar.style.display = 'none';
         const inner = bar.querySelector('.player-bar-inner');
         if (inner) {
             inner.innerHTML = '<div class="player-bar-empty-state">' +
@@ -4142,6 +4197,8 @@ function populatePlayerActionBar() {
         }
         return;
     }
+    const tabBar = bar.querySelector('.player-bar-tabs');
+    if (tabBar) tabBar.style.display = '';
 
     let charData = myCharacter;
     if (myCharacter.character_data) {
@@ -4155,16 +4212,37 @@ function populatePlayerActionBar() {
     const formatMod = (mod) => (mod >= 0 ? '+' + mod : '' + mod);
     const calcMod = (score) => Math.floor((score - 10) / 2);
 
-    // Always build the full bar layout (Character, Actions, Attacks, Abilities, Saving Throws, Skill Checks, Dice)
+    // Build tabbed layout: tabs + panels with sections inside each panel
     const inner = bar.querySelector('.player-bar-inner');
     if (inner) {
-        inner.innerHTML = '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
+        inner.innerHTML = '<div class="player-bar-tab-panels">' +
+            '<div class="player-bar-tab-panel active" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">' +
+            '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
             '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
             '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
+            '</div>' +
+            '<div class="player-bar-tab-panel" id="playerBarPanelAbilities" data-tab="abilities" role="tabpanel">' +
             '<div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>' +
             '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
             '<div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>' +
-            '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>';
+            '</div>' +
+            '<div class="player-bar-tab-panel" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">' +
+            '<div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>' +
+            '<div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>' +
+            '</div>' +
+            '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
+            '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
+            '</div></div>';
+    }
+    // Bind tab clicks and restore saved tab (tabBar already in scope)
+    if (tabBar) {
+        tabBar.querySelectorAll('.player-bar-tab-btn').forEach(btn => {
+            btn.onclick = function() { switchPlayerActionBarTab(this.dataset.tab); };
+        });
+        const savedTab = localStorage.getItem('playerActionBarTab');
+        if (savedTab && ['combat', 'abilities', 'powers', 'dice'].indexOf(savedTab) >= 0) {
+            switchPlayerActionBarTab(savedTab);
+        }
     }
 
     // Ability mods (D&D or Star Wars)
@@ -4277,6 +4355,69 @@ function populatePlayerActionBar() {
                 rollSkill(this.dataset.skill, parseInt(this.dataset.mod, 10), this.dataset.name);
             };
         });
+    }
+
+    // Collect tech and force power names from character (classes + charData), same as character sheet
+    const allTechPowers = [];
+    const allForcePowers = [];
+    const ensureUniquePower = (list, name) => { if (name && !list.includes(name)) list.push(name); };
+    (charData.classes || []).forEach(cls => {
+        if (Array.isArray(cls.techPowers)) cls.techPowers.forEach(n => ensureUniquePower(allTechPowers, n));
+        if (Array.isArray(cls.forcePowers)) cls.forcePowers.forEach(n => ensureUniquePower(allForcePowers, n));
+        if (Array.isArray(cls.techPowerDetails)) cls.techPowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allTechPowers, d.name); });
+        if (Array.isArray(cls.forcePowerDetails)) cls.forcePowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allForcePowers, d.name); });
+    });
+    if (Array.isArray(charData.techPowers)) charData.techPowers.forEach(n => ensureUniquePower(allTechPowers, n));
+    if (Array.isArray(charData.forcePowers)) charData.forcePowers.forEach(n => ensureUniquePower(allForcePowers, n));
+    if (Array.isArray(charData.techPowerDetails)) charData.techPowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allTechPowers, d.name); });
+    if (Array.isArray(charData.forcePowerDetails)) charData.forcePowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allForcePowers, d.name); });
+
+    // Tech Powers (only show section if character has any)
+    const techPowersEl = document.getElementById('playerBarTechPowers');
+    if (techPowersEl) {
+        if (allTechPowers.length === 0) {
+            techPowersEl.style.display = 'none';
+        } else {
+            techPowersEl.style.display = '';
+            let html = '<span class="section-label">Tech Powers</span><div class="bar-scroll">';
+            allTechPowers.forEach(powerName => {
+                const safeName = (powerName || '').trim();
+                if (!safeName) return;
+                const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+                html += '<button type="button" tabindex="-1" class="bar-tech-power-btn" data-power="' + escapeHtml(safeName) + '" data-char-name="' + escapeHtml(charName) + '" onmouseover="showSpellTooltip(\'' + attrPower + '\', event)" onmouseout="hideSpellTooltip()">&#9889; ' + escapeHtml(safeName) + '</button>';
+            });
+            html += '</div>';
+            techPowersEl.innerHTML = html;
+            techPowersEl.querySelectorAll('.bar-tech-power-btn').forEach(btn => {
+                btn.onclick = function() {
+                    addLogEntry((this.dataset.charName || charName) + ' uses Tech Power: ' + (this.dataset.power || ''), 'info');
+                };
+            });
+        }
+    }
+
+    // Force Powers (only show section if character has any)
+    const forcePowersEl = document.getElementById('playerBarForcePowers');
+    if (forcePowersEl) {
+        if (allForcePowers.length === 0) {
+            forcePowersEl.style.display = 'none';
+        } else {
+            forcePowersEl.style.display = '';
+            let html = '<span class="section-label">Force Powers</span><div class="bar-scroll">';
+            allForcePowers.forEach(powerName => {
+                const safeName = (powerName || '').trim();
+                if (!safeName) return;
+                const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+                html += '<button type="button" tabindex="-1" class="bar-force-power-btn" data-power="' + escapeHtml(safeName) + '" data-char-name="' + escapeHtml(charName) + '" onmouseover="showSpellTooltip(\'' + attrPower + '\', event)" onmouseout="hideSpellTooltip()">&#9733; ' + escapeHtml(safeName) + '</button>';
+            });
+            html += '</div>';
+            forcePowersEl.innerHTML = html;
+            forcePowersEl.querySelectorAll('.bar-force-power-btn').forEach(btn => {
+                btn.onclick = function() {
+                    addLogEntry((this.dataset.charName || charName) + ' uses Force Power: ' + (this.dataset.power || ''), 'info');
+                };
+            });
+        }
     }
 
     // Actions: standard actions + character's bonus actions from sheet
