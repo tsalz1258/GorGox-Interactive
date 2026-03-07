@@ -324,6 +324,7 @@
                 if (data.html) {
                     document.getElementById('characterSheetContent').innerHTML = data.html;
                     lastTimestamp = data.timestamp || 0;
+                    setupCharacterSheetRollHandlersInStandalone();
                     setupDiceRollButtonsInStandalone();
                 } else {
                     // Fallback: try to render using functions from app.js
@@ -380,6 +381,37 @@
         function refreshCharacterSheet() {
             // Reload from sessionStorage (parent window should update it)
             loadCharacterSheet();
+        }
+
+        // Character sheet roll buttons (ability, skill, save, attack): forward to parent
+        function setupCharacterSheetRollHandlersInStandalone() {
+            const content = document.getElementById('characterSheetContent');
+            if (!content || content._standaloneSheetRollAttached) return;
+            content._standaloneSheetRollAttached = true;
+            content.addEventListener('click', function(e) {
+                const el = e.target.closest('[data-sheet-roll]');
+                if (!el) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const kind = el.getAttribute('data-sheet-roll');
+                const charName = el.getAttribute('data-char-name') || (characterData && characterData.name) || '';
+                if (!charName) return;
+                if (kind === 'ability') {
+                    sendRollToParent('abilityCheck', { ability: el.getAttribute('data-ability'), modifier: parseInt(el.getAttribute('data-mod'), 10) || 0, characterName: charName });
+                } else if (kind === 'skill') {
+                    sendRollToParent('skill', { skillName: el.getAttribute('data-skill-name') || '', modifier: parseInt(el.getAttribute('data-mod'), 10) || 0, characterName: charName });
+                } else if (kind === 'save') {
+                    sendRollToParent('savingThrow', { ability: el.getAttribute('data-ability'), modifier: parseInt(el.getAttribute('data-mod'), 10) || 0, characterName: charName });
+                } else if (kind === 'attack') {
+                    sendRollToParent('attack', {
+                        weaponName: el.getAttribute('data-weapon') || '',
+                        toHitMod: parseInt(el.getAttribute('data-to-hit'), 10) || 0,
+                        damageNotation: el.getAttribute('data-damage') || '',
+                        damageType: el.getAttribute('data-damage-type') || '',
+                        characterName: charName
+                    });
+                }
+            }, true);
         }
 
         // Dice tray (D4, D6, D8, D10, D12, D20, D100): wire clicks so they run in parent

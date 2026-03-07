@@ -741,29 +741,17 @@ function handleServerMessage(message) {
             const isDiceRoll = abilityName.startsWith('D');
             
             if (isDiceRoll) {
-                // This is a flat dice roll
-                // Check if this is our own roll to prevent duplicates
-                const currentChar = currentViewingCharacter || characters.find(c => c.id === myCharacterId);
-                const isMyRoll = currentChar && message.character_name === currentChar.name;
-                if (!isMyRoll) {
-                    // Only add if it's from another player (we already added our own locally)
-                    const diceType = abilityName;
-                    addRollEntry(`🎲 ${message.character_name} rolled ${diceType}: ${message.roll}`, false, false);
-                }
+                // Flat dice roll - add once from server broadcast (we no longer add locally to avoid duplicates)
+                const diceType = abilityName;
+                addRollEntry(`🎲 ${message.character_name} rolled ${diceType}: ${message.roll}`, false, false);
             } else {
-                // This is an ability check
                 const rollDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
                 const isAbilityNat20 = message.roll === 20;
                 const isAbilityNat1 = message.roll === 1;
                 const abilityNatText = isAbilityNat20 ? ' ✨ NATURAL 20!' : (isAbilityNat1 ? ' ❌ NATURAL 1!' : '');
                 addRollEntry(`🎲 ${message.character_name} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
-                
-                // Play sounds for nat 20/1
-                if (isAbilityNat20) {
-                    playNat20Sound();
-                } else if (isAbilityNat1) {
-                    playNat1Sound();
-                }
+                if (isAbilityNat20) playNat20Sound();
+                else if (isAbilityNat1) playNat1Sound();
             }
             break;
             
@@ -775,13 +763,8 @@ function handleServerMessage(message) {
             const isSaveNat1 = message.roll === 1;
             const saveNatText = isSaveNat20 ? ' ✨ NATURAL 20!' : (isSaveNat1 ? ' ❌ NATURAL 1!' : '');
             addRollEntry(`🛡️ ${message.character_name} rolled ${saveName} save: ${saveDisplay} = ${message.total}${saveNatText}`, isSaveNat20, isSaveNat1);
-            
-            // Play sounds for nat 20/1
-            if (isSaveNat20) {
-                playNat20Sound();
-            } else if (isSaveNat1) {
-                playNat1Sound();
-            }
+            if (isSaveNat20) playNat20Sound();
+            else if (isSaveNat1) playNat1Sound();
             break;
             
         case 'SkillRolled':
@@ -791,13 +774,8 @@ function handleServerMessage(message) {
             const isSkillNat1 = message.roll === 1;
             const skillNatText = isSkillNat20 ? ' ✨ NATURAL 20!' : (isSkillNat1 ? ' ❌ NATURAL 1!' : '');
             addRollEntry(`🎯 ${message.character_name} rolled ${message.skill}: ${skillDisplay} = ${message.total}${skillNatText}`, isSkillNat20, isSkillNat1);
-            
-            // Play sounds for nat 20/1
-            if (isSkillNat20) {
-                playNat20Sound();
-            } else if (isSkillNat1) {
-                playNat1Sound();
-            }
+            if (isSkillNat20) playNat20Sound();
+            else if (isSkillNat1) playNat1Sound();
             break;
             
         case 'AttackRolled':
@@ -807,13 +785,8 @@ function handleServerMessage(message) {
             const isFail = message.to_hit_roll === 1;
             const critText = isCrit ? ' 🎉 CRITICAL HIT! ✨ NATURAL 20!' : (isFail ? ' ❌ CRITICAL MISS! NATURAL 1!' : '');
             addRollEntry(`⚔️ ${message.character_name} attacks with ${message.weapon}: To Hit ${hitDisplay} = ${message.to_hit_total} | Damage: ${message.damage} ${message.damage_type}${critText}`, isCrit, isFail);
-            
-            // Play sounds for nat 20/1
-            if (isCrit) {
-                playNat20Sound();
-            } else if (isFail) {
-                playNat1Sound();
-            }
+            if (isCrit) playNat20Sound();
+            else if (isFail) playNat1Sound();
             break;
             
         case 'TokenUpdate':
@@ -1424,9 +1397,11 @@ function handleServerMessage(message) {
                 renderCharacterSheetContent();
             }
             
-            // Get target name for log
-            const targetName = damagedParticipant ? damagedParticipant.name : (damagedToken ? 'Target' : 'Unknown');
-            addLogEntry(`💥 ${targetName} took ${message.damage} damage! New HP: ${message.new_hp}`, 'damage');
+            // Get target name for log — don't show enemy HP changes to players
+            if (damagedToken && damagedToken.entity_type !== 'Enemy') {
+                const targetName = damagedParticipant ? damagedParticipant.name : (damagedToken ? 'Target' : 'Unknown');
+                addLogEntry(`💥 ${targetName} took ${message.damage} damage! New HP: ${message.new_hp}`, 'damage');
+            }
             
             // Play HP damage sound if enabled
             playHpDamageSound();
@@ -1513,9 +1488,11 @@ function handleServerMessage(message) {
                 renderCharacterSheetContent();
             }
             
-            // Get target name for log
-            const targetName = healedParticipant ? healedParticipant.name : (healedToken ? 'Target' : 'Unknown');
-            addLogEntry(`💚 ${targetName} healed for ${message.healing} HP! New HP: ${message.new_hp}`, 'healing');
+            // Get target name for log — don't show enemy HP changes to players
+            if (healedToken && healedToken.entity_type !== 'Enemy') {
+                const targetName = healedParticipant ? healedParticipant.name : (healedToken ? 'Target' : 'Unknown');
+                addLogEntry(`💚 ${targetName} healed for ${message.healing} HP! New HP: ${message.new_hp}`, 'healing');
+            }
             break;
         }
             
@@ -4282,13 +4259,43 @@ function populatePlayerActionBar() {
     const currentHP = myCharacter.current_hp !== undefined && myCharacter.current_hp !== null ? myCharacter.current_hp : maxHP;
     const ac = charData.ac?.base || myCharacter.armor_class || 10;
 
-    // Name & HP
+    // Collect tech/force powers and points early (used in Combat tab and Powers tab)
+    const allTechPowers = [];
+    const allForcePowers = [];
+    const ensureUniquePower = (list, name) => { if (name && !list.includes(name)) list.push(name); };
+    (charData.classes || []).forEach(cls => {
+        if (Array.isArray(cls.techPowers)) cls.techPowers.forEach(n => ensureUniquePower(allTechPowers, n));
+        if (Array.isArray(cls.forcePowers)) cls.forcePowers.forEach(n => ensureUniquePower(allForcePowers, n));
+        if (Array.isArray(cls.techPowerDetails)) cls.techPowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allTechPowers, d.name); });
+        if (Array.isArray(cls.forcePowerDetails)) cls.forcePowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allForcePowers, d.name); });
+    });
+    if (Array.isArray(charData.techPowers)) charData.techPowers.forEach(n => ensureUniquePower(allTechPowers, n));
+    if (Array.isArray(charData.forcePowers)) charData.forcePowers.forEach(n => ensureUniquePower(allForcePowers, n));
+    if (Array.isArray(charData.techPowerDetails)) charData.techPowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allTechPowers, d.name); });
+    if (Array.isArray(charData.forcePowerDetails)) charData.forcePowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allForcePowers, d.name); });
+    const techPtsBar = getTechPointsFromCharData(charData, myCharacter);
+    const forcePtsBar = getForcePointsFromCharData(charData);
+    const showTechForceOnCombat = (techPtsBar.max > 0 || forcePtsBar.max > 0) || allTechPowers.length > 0 || allForcePowers.length > 0;
+
+    // Name & HP (and tech/force point counters when character has them)
     const nameHpEl = document.getElementById('playerBarNameHp');
     if (nameHpEl) {
-        nameHpEl.innerHTML = '<span class="section-label">Character</span>' +
+        let nameHpHtml = '<span class="section-label">Character</span>' +
             '<div style="font-weight:bold;font-size:10px;color:#4a9eff;line-height:1.2;">' + escapeHtml(charName) + '</div>' +
-            '<div style="font-size:9px;color:#44ff44;">HP ' + currentHP + '/' + maxHP + ' AC ' + ac + '</div>' +
-            '<button type="button" tabindex="-1" onclick="showMyCharacterSheet()" style="margin-top:1px;padding:1px 4px;font-size:8px;background:rgba(74,158,255,0.3);border:1px solid #4a9eff;border-radius:3px;color:#fff;cursor:pointer;">Sheet</button>';
+            '<div style="font-size:9px;color:#44ff44;">HP ' + currentHP + '/' + maxHP + ' AC ' + ac + '</div>';
+        if (showTechForceOnCombat) {
+            nameHpHtml += '<div style="font-size:9px;margin-top:3px;">';
+            if (techPtsBar.max > 0 || allTechPowers.length > 0) {
+                nameHpHtml += '<span style="color:#00d4ff;">&#9889; Tech ' + techPtsBar.current + '/' + techPtsBar.max + '</span>';
+                if (forcePtsBar.max > 0 || allForcePowers.length > 0) nameHpHtml += ' ';
+            }
+            if (forcePtsBar.max > 0 || allForcePowers.length > 0) {
+                nameHpHtml += '<span style="color:#ff00ff;">&#9733; Force ' + forcePtsBar.current + '/' + forcePtsBar.max + '</span>';
+            }
+            nameHpHtml += '</div>';
+        }
+        nameHpHtml += '<button type="button" tabindex="-1" onclick="showMyCharacterSheet()" style="margin-top:1px;padding:1px 4px;font-size:8px;background:rgba(74,158,255,0.3);border:1px solid #4a9eff;border-radius:3px;color:#fff;cursor:pointer;">Sheet</button>';
+        nameHpEl.innerHTML = nameHpHtml;
     }
 
     // Abilities (click to roll check)
@@ -4357,36 +4364,36 @@ function populatePlayerActionBar() {
         });
     }
 
-    // Collect tech and force power names from character (classes + charData), same as character sheet
-    const allTechPowers = [];
-    const allForcePowers = [];
-    const ensureUniquePower = (list, name) => { if (name && !list.includes(name)) list.push(name); };
-    (charData.classes || []).forEach(cls => {
-        if (Array.isArray(cls.techPowers)) cls.techPowers.forEach(n => ensureUniquePower(allTechPowers, n));
-        if (Array.isArray(cls.forcePowers)) cls.forcePowers.forEach(n => ensureUniquePower(allForcePowers, n));
-        if (Array.isArray(cls.techPowerDetails)) cls.techPowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allTechPowers, d.name); });
-        if (Array.isArray(cls.forcePowerDetails)) cls.forcePowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allForcePowers, d.name); });
-    });
-    if (Array.isArray(charData.techPowers)) charData.techPowers.forEach(n => ensureUniquePower(allTechPowers, n));
-    if (Array.isArray(charData.forcePowers)) charData.forcePowers.forEach(n => ensureUniquePower(allForcePowers, n));
-    if (Array.isArray(charData.techPowerDetails)) charData.techPowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allTechPowers, d.name); });
-    if (Array.isArray(charData.forcePowerDetails)) charData.forcePowerDetails.forEach(d => { if (d && d.name) ensureUniquePower(allForcePowers, d.name); });
+    const techPts = getTechPointsFromCharData(charData, myCharacter);
+    const forcePts = getForcePointsFromCharData(charData);
+    const hasTechPoints = techPts.max > 0;
+    const hasForcePoints = forcePts.max > 0;
+    const showTechSection = allTechPowers.length > 0 || hasTechPoints;
+    const showForceSection = allForcePowers.length > 0 || hasForcePoints;
 
-    // Tech Powers (only show section if character has any)
+    // Tech Powers (show section if character has any tech powers OR any tech point pool)
     const techPowersEl = document.getElementById('playerBarTechPowers');
     if (techPowersEl) {
-        if (allTechPowers.length === 0) {
+        if (!showTechSection) {
             techPowersEl.style.display = 'none';
         } else {
             techPowersEl.style.display = '';
-            let html = '<span class="section-label">Tech Powers</span><div class="bar-scroll">';
+            let html = '<span class="section-label">Tech Points</span>';
+            html += '<div class="player-bar-points-row">';
+            html += '<span class="points-display" style="color:#00d4ff;">&#9889; ' + techPts.current + '/' + techPts.max + '</span>';
+            html += '<button type="button" class="bar-point-btn" onclick="useTechPoint(); populatePlayerActionBar();" title="Use 1">−</button>';
+            html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreTechPoints();" title="Restore all">↺</button>';
+            html += '</div>';
+            if (allTechPowers.length > 0) {
+                html += '<span class="section-label">Tech Powers</span><div class="bar-scroll">';
+            }
             allTechPowers.forEach(powerName => {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
                 html += '<button type="button" tabindex="-1" class="bar-tech-power-btn" data-power="' + escapeHtml(safeName) + '" data-char-name="' + escapeHtml(charName) + '" onmouseover="showSpellTooltip(\'' + attrPower + '\', event)" onmouseout="hideSpellTooltip()">&#9889; ' + escapeHtml(safeName) + '</button>';
             });
-            html += '</div>';
+            if (allTechPowers.length > 0) html += '</div>';
             techPowersEl.innerHTML = html;
             techPowersEl.querySelectorAll('.bar-tech-power-btn').forEach(btn => {
                 btn.onclick = function() {
@@ -4396,21 +4403,29 @@ function populatePlayerActionBar() {
         }
     }
 
-    // Force Powers (only show section if character has any)
+    // Force Powers (show section if character has any force powers OR any force point pool)
     const forcePowersEl = document.getElementById('playerBarForcePowers');
     if (forcePowersEl) {
-        if (allForcePowers.length === 0) {
+        if (!showForceSection) {
             forcePowersEl.style.display = 'none';
         } else {
             forcePowersEl.style.display = '';
-            let html = '<span class="section-label">Force Powers</span><div class="bar-scroll">';
+            let html = '<span class="section-label">Force Points</span>';
+            html += '<div class="player-bar-points-row">';
+            html += '<span class="points-display" style="color:#ff00ff;">&#9733; ' + forcePts.current + '/' + forcePts.max + '</span>';
+            html += '<button type="button" class="bar-point-btn" onclick="useForcePoint(); populatePlayerActionBar();" title="Use 1">−</button>';
+            html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreForcePoints();" title="Restore all">↺</button>';
+            html += '</div>';
+            if (allForcePowers.length > 0) {
+                html += '<span class="section-label">Force Powers</span><div class="bar-scroll">';
+            }
             allForcePowers.forEach(powerName => {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
                 html += '<button type="button" tabindex="-1" class="bar-force-power-btn" data-power="' + escapeHtml(safeName) + '" data-char-name="' + escapeHtml(charName) + '" onmouseover="showSpellTooltip(\'' + attrPower + '\', event)" onmouseout="hideSpellTooltip()">&#9733; ' + escapeHtml(safeName) + '</button>';
             });
-            html += '</div>';
+            if (allForcePowers.length > 0) html += '</div>';
             forcePowersEl.innerHTML = html;
             forcePowersEl.querySelectorAll('.bar-force-power-btn').forEach(btn => {
                 btn.onclick = function() {
@@ -4796,6 +4811,7 @@ function populateQuickActions() {
 
 // Populate attacks from character sheet
 function populateAttacks(charData) {
+    const formatMod = (mod) => (mod >= 0 ? '+' + mod : '' + mod);
     console.log('⚔️ POPULATING ATTACKS for:', charData.name);
     const attacksSection = document.getElementById('attacksSection');
     const attacksList = document.getElementById('attacksList');
@@ -4940,7 +4956,10 @@ function dealDamage() {
     if (participant) {
         const oldHp = participant.current_hp;
         participant.current_hp = Math.max(0, participant.current_hp - damage);
-        addLogEntry(`${targetName} takes ${damage} damage! (${oldHp} → ${participant.current_hp} HP)`, 'damage');
+        // Don't log enemy HP changes to players
+        if (selectedToken.entity_type !== 'Enemy') {
+            addLogEntry(`${targetName} takes ${damage} damage! (${oldHp} → ${participant.current_hp} HP)`, 'damage');
+        }
     }
     
     // Update character if it's a player
@@ -5052,7 +5071,10 @@ function healTarget() {
     if (participant) {
         const oldHp = participant.current_hp;
         participant.current_hp = Math.min(participant.max_hp, participant.current_hp + healing);
-        addLogEntry(`${targetName} healed for ${healing}! (${oldHp} → ${participant.current_hp} HP)`, 'healing');
+        // Don't log enemy HP changes to players
+        if (selectedToken.entity_type !== 'Enemy') {
+            addLogEntry(`${targetName} healed for ${healing}! (${oldHp} → ${participant.current_hp} HP)`, 'healing');
+        }
     }
     
     // Update character if it's a player
@@ -8751,8 +8773,13 @@ function convertRoll20StarWarsCharacter(rawData) {
     
     var charName = rawData.name || getAttrValue('character_name', 'Unknown');
     var classDisplay = getAttrValue('class_display', '').trim();
-    var className = classDisplay || getAttrValue('class', 'Unknown');
+    var className = (classDisplay || getAttrValue('class', 'Unknown')).trim();
     var level = Math.max(1, parseIntSafe(getAttrValue('level', getAttrValue('base_level', '1')), 1));
+    var classBaseName = (String(className).trim().toLowerCase().split(/\s+/)[0] || '').trim();
+    if (classBaseName === 'engineer') {
+        var classLevel = parseIntSafe(getAttrValue('engineer_level', getAttrValue('class_level', String(level))), level);
+        if (classLevel >= 1) level = Math.max(level, classLevel);
+    }
     var pb = Math.max(1, getNumeric('pb', 2));
     
     var hpAttr = getAttrEntry('hp') || {};
@@ -9145,6 +9172,26 @@ function convertRoll20StarWarsCharacter(rawData) {
         equipment: equipment
     };
     
+    var techTotal = Math.max(0, parseIntSafe(getAttrValue('tech_power_points_total', '0'), 0));
+    var engClassBase = (String(className || '').trim().toLowerCase().split(/\s+/)[0] || '').trim();
+    var engineerLevel = (engClassBase === 'engineer') ? level : 0;
+    if (techTotal === 0 && engineerLevel >= 1) {
+        var intScore = baseAbilityScores.Intelligence || 10;
+        var intMod = Math.floor((intScore - 10) / 2);
+        techTotal = Math.max(1, engineerLevel * 2 + intMod);
+    }
+    var techExpended = Math.max(0, parseIntSafe(getAttrValue('tech_power_points_expended', '0'), 0));
+    var forceTotal = Math.max(0, parseIntSafe(getAttrValue('force_power_points_total', '0'), 0));
+    if (forceTotal === 0 && level >= 1 && forcePowerNames.length > 0) {
+        var chaScore = baseAbilityScores.Charisma || 10;
+        var wisScore = baseAbilityScores.Wisdom || 10;
+        var forceMod = Math.max(Math.floor((chaScore - 10) / 2), Math.floor((wisScore - 10) / 2));
+        forceTotal = Math.max(1, level * 2 + forceMod);
+    }
+    var forceExpended = Math.max(0, parseIntSafe(getAttrValue('force_power_points_expended', '0'), 0));
+    convertedData.techPoints = { max: techTotal, current: Math.max(0, techTotal - techExpended), _expended: techExpended };
+    convertedData.forcePoints = { max: forceTotal, current: Math.max(0, forceTotal - forceExpended), _expended: forceExpended };
+    
     if (techPowerDetails.length > 0) {
         convertedData.techPowerDetails = techPowerDetails;
         if (convertedData.classes && convertedData.classes.length > 0) {
@@ -9413,6 +9460,155 @@ async function importCharacter() {
     }
 }
 
+// Level Up / Update from JSON: read file, parse, convert (same as import), then update existing character in place
+function handleUpdateCharacterJsonFile(inputEl) {
+    const file = inputEl && inputEl.files && inputEl.files[0];
+    if (!file) {
+        if (inputEl) inputEl.value = '';
+        return;
+    }
+    if (!myCharacterId) {
+        alert('Please select a character first.');
+        inputEl.value = '';
+        return;
+    }
+    const existing = characters.find(c => c.id === myCharacterId);
+    if (!existing) {
+        alert('Character not found.');
+        inputEl.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function() {
+        try {
+            const imported = JSON.parse(reader.result);
+            const rawCharData = imported.character || imported;
+            const isRoll20SW5E = typeof rawCharData.exportedBy === 'string' &&
+                rawCharData.exportedBy.toLowerCase().includes('sw5e') &&
+                Array.isArray(rawCharData.attribs);
+            const isStarWarsFoundry = !isRoll20SW5E &&
+                (rawCharData.species || (Array.isArray(rawCharData.classes) && rawCharData.baseAbilityScores));
+            let newChar = null;
+            let storedCharData = null;
+            if (isRoll20SW5E) {
+                const conversion = convertRoll20StarWarsCharacter(rawCharData);
+                if (!conversion || !conversion.character) {
+                    throw new Error('Unable to convert SW5E character data');
+                }
+                newChar = conversion.character;
+                storedCharData = conversion.characterData;
+            } else if (isStarWarsFoundry) {
+                const charData = rawCharData;
+                const maxHP = charData.tweaks?.hitPoints?.maximum?.override ||
+                    (charData.classes && charData.classes[0]?.hitPoints?.length > 0 ?
+                        charData.classes[0].hitPoints.reduce((sum, hp) => sum + hp, 0) : 7) || 7;
+                const hitPointsLost = charData.currentStats?.hitPointsLost || 0;
+                const currentHP = Math.max(1, maxHP - hitPointsLost);
+                const level = charData.classes && charData.classes.length > 0 ?
+                    charData.classes.reduce((sum, cls) => sum + (cls.levels || 1), 0) : 1;
+                const className = charData.classes && charData.classes.length > 0 ?
+                    charData.classes.map(c => `${c.name} ${c.levels || 1}`).join(' / ') : 'Unknown';
+                const baseScores = charData.baseAbilityScores || {};
+                let ac = 10;
+                if (charData.equipment) {
+                    const armor = charData.equipment.find(eq => eq.equipped && eq.category === 'Equipment');
+                    if (armor) {
+                        if (armor.name.includes('Fiber')) ac = 11;
+                        else if (armor.name.includes('Lightweight')) ac = 12;
+                        else if (armor.name.includes('Medium')) ac = 13;
+                        else if (armor.name.includes('Heavy')) ac = 15;
+                    }
+                }
+                const dexMod = Math.floor(((baseScores.Dexterity || 10) - 10) / 2);
+                const speed = charData.speed?.walk ? parseInt(String(charData.speed.walk).replace(/\D+/g, '') || '30', 10) : 30;
+                const profBonus = level <= 4 ? 2 : level <= 8 ? 3 : level <= 12 ? 4 : level <= 16 ? 5 : 6;
+                newChar = {
+                    id: existing.id,
+                    name: charData.name || existing.name,
+                    player_name: existing.player_name,
+                    class: className,
+                    level: level,
+                    max_hp: maxHP,
+                    current_hp: currentHP,
+                    armor_class: ac,
+                    initiative_bonus: dexMod,
+                    strength: baseScores.Strength || 10,
+                    dexterity: baseScores.Dexterity || 10,
+                    constitution: baseScores.Constitution || 10,
+                    intelligence: baseScores.Intelligence || 10,
+                    wisdom: baseScores.Wisdom || 10,
+                    charisma: baseScores.Charisma || 10,
+                    speed: speed,
+                    proficiency_bonus: profBonus,
+                    character_data: JSON.stringify(charData)
+                };
+                storedCharData = charData;
+            } else {
+                const charData = rawCharData;
+                const rawSpeed = charData.speed?.walk || charData.speed || 30;
+                const parsedSpeed = typeof rawSpeed === 'string' ? parseInt(rawSpeed, 10) || 30 : rawSpeed || 30;
+                newChar = {
+                    id: existing.id,
+                    name: charData.name || existing.name,
+                    player_name: existing.player_name,
+                    class: charData.class || existing.class,
+                    level: charData.level || 1,
+                    max_hp: charData.hp?.max || charData.max_hp || 10,
+                    current_hp: charData.hp?.current != null ? charData.hp.current : (charData.current_hp != null ? charData.current_hp : (charData.hp?.max || charData.max_hp || 10)),
+                    armor_class: charData.ac?.base || charData.armor_class || 10,
+                    initiative_bonus: charData.initiative?.mod || charData.initiative_bonus || 0,
+                    strength: charData.abilities?.str?.score || charData.strength || 10,
+                    dexterity: charData.abilities?.dex?.score || charData.dexterity || 10,
+                    constitution: charData.abilities?.con?.score || charData.constitution || 10,
+                    intelligence: charData.abilities?.int?.score || charData.intelligence || 10,
+                    wisdom: charData.abilities?.wis?.score || charData.wisdom || 10,
+                    charisma: charData.abilities?.cha?.score || charData.charisma || 10,
+                    speed: parsedSpeed,
+                    proficiency_bonus: charData.proficiency_bonus || 2,
+                    character_data: JSON.stringify(charData)
+                };
+                storedCharData = charData;
+            }
+            if (!newChar.character_data && storedCharData) {
+                newChar.character_data = JSON.stringify(storedCharData);
+            }
+            if (rawCharData.avatar && String(rawCharData.avatar).trim() !== '') {
+                newChar.portrait_url = rawCharData.avatar;
+            } else if (rawCharData.image && String(rawCharData.image).trim() !== '') {
+                newChar.portrait_url = rawCharData.image;
+            } else {
+                newChar.portrait_url = existing.portrait_url || null;
+            }
+            const keptId = existing.id;
+            const keptPlayerName = existing.player_name;
+            Object.assign(existing, newChar);
+            existing.id = keptId;
+            existing.player_name = keptPlayerName;
+            const payload = buildCharacterUpdatePayload(existing);
+            if (payload) {
+                sendMessage({ type: 'UpdateCharacter', character: payload });
+            }
+            renderCharacterList();
+            renderPlayerList();
+            populateCombatActionPanel();
+            populatePlayerActionBar();
+            const playerInfoEl = document.getElementById('playerInfo');
+            if (playerInfoEl) playerInfoEl.textContent = 'Playing as: ' + existing.name;
+            if (currentViewingCharacter && currentViewingCharacter.id === existing.id) {
+                currentViewingCharacterFullData = storedCharData ? (storedCharData.character ? storedCharData : { character: storedCharData }) : null;
+                currentViewingCharacterData = storedCharData && storedCharData.character ? storedCharData.character : storedCharData;
+                renderCharacterSheetContent();
+            }
+            addLogEntry('Character updated from JSON (level up): ' + existing.name, 'info');
+        } catch (e) {
+            console.error('Update from JSON error:', e);
+            alert('Invalid or unsupported JSON: ' + (e.message || e));
+        }
+        inputEl.value = '';
+    };
+    reader.readAsText(file, 'UTF-8');
+}
+
 // Convert file to base64
 function fileToBase64(file) {
     return new Promise((resolve, reject) => {
@@ -9489,11 +9685,8 @@ function restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLef
 }
 
 function addLogEntry(message, type = 'info') {
-    const log = document.getElementById('combatLog');
-    if (!log) {
-        console.error('❌ Combat log element not found!');
-        return;
-    }
+    const log = document.getElementById('rollsLog');
+    if (!log) return;
     var rightSidebar = document.querySelector('.sidebar.right');
     var leftSidebar = document.querySelector('.sidebar.left');
     var doc = document.documentElement;
@@ -9510,21 +9703,23 @@ function addLogEntry(message, type = 'info') {
     const entry = document.createElement('div');
     entry.className = `log-entry ${type}`;
     const timestamp = new Date().toLocaleTimeString();
-    
-    // Special styling for success type (nat 20) - green
-    let extraStyle = '';
+    const baseStyle = 'padding: 10px 14px; margin: 5px 0; border-radius: 6px; font-size: 14px; line-height: 1.5;';
+    let entryStyle = baseStyle + ' border-left: 4px solid #666; background: rgba(255,255,255,0.06); color: #ddd;';
     if (type === 'success') {
-        extraStyle = 'background: linear-gradient(135deg, rgba(68, 255, 68, 0.25) 0%, rgba(34, 200, 34, 0.15) 100%); border-left: 4px solid #44ff44; color: #88ff88; font-weight: bold; box-shadow: 0 0 10px rgba(68, 255, 68, 0.3);';
+        entryStyle = baseStyle + ' border-left: 5px solid #44ff44; background: linear-gradient(135deg, rgba(68, 255, 68, 0.2) 0%, rgba(34, 200, 34, 0.12) 100%); color: #88ff88;';
+    } else if (type === 'damage') {
+        entryStyle = baseStyle + ' border-left: 5px solid #ff4444; background: linear-gradient(135deg, rgba(255, 68, 68, 0.2) 0%, rgba(200, 34, 34, 0.12) 100%); color: #ff8888;';
+    } else if (type === 'healing' || type === 'heal') {
+        entryStyle = baseStyle + ' border-left: 5px solid #44ff44; background: rgba(68, 255, 68, 0.15); color: #88ff88;';
+    } else if (type === 'warning') {
+        entryStyle = baseStyle + ' border-left: 5px solid #ffaa44; background: rgba(255, 170, 68, 0.15); color: #ffd4a0;';
     }
-    
-    // Format the message to bold player names
+    entry.style.cssText = entryStyle;
     const formattedMessage = formatLogMessage(message);
-    entry.innerHTML = `<span style="opacity: 0.6; font-size: 10px;">[${timestamp}]</span> ${formattedMessage}`;
+    entry.innerHTML = `<span style="opacity: 0.7; font-size: 11px; margin-right: 8px;">[${timestamp}]</span> ${formattedMessage}`;
     
-    if (extraStyle) {
-        entry.style.cssText = (entry.style.cssText || '') + extraStyle;
-    }
-    
+    const placeholder = log.querySelector('div[style*="opacity: 0.5"]');
+    if (placeholder) placeholder.remove();
     log.appendChild(entry);
     restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLeftScroll, savedDocTop, savedDocLeft);
     requestAnimationFrame(function() {
@@ -9605,8 +9800,6 @@ function addRollEntry(message, isNat20 = false, isNat1 = false) {
         }
     }
     
-    // Also add to main combat log (will be formatted there too)
-    addLogEntry(message, isNat20 ? 'success' : (isNat1 ? 'damage' : 'info'));
 }
 
 function generateUUID() {
@@ -10475,52 +10668,91 @@ function formatManeuverTooltip(maneuver) {
 
 // Ability Check Rolling
 function rollAbilityCheck(ability, modifier, characterName) {
+    const mod = (typeof modifier === 'number' && !isNaN(modifier)) ? modifier : 0;
     console.log(`🎲 Rolling ${ability.toUpperCase()} check for ${characterName}`);
-    console.log(`   Modifier: ${modifier}`);
+    console.log(`   Modifier: ${mod}`);
     
     // Roll 1d20
     const roll = Math.floor(Math.random() * 20) + 1;
-    const total = roll + modifier;
+    const total = roll + mod;
     
-    console.log(`   Roll: ${roll} + ${modifier} = ${total}`);
+    console.log(`   Roll: ${roll} + ${mod} = ${total}`);
     
-    // Send to server to broadcast to all players
-    sendMessage({
-        type: 'RollAbilityCheck',
-        character_name: characterName,
-        ability: ability,
-        roll: roll,
-        modifier: modifier,
-        total: total
-    });
-    
-    // Visual feedback
-    addLogEntry(`Rolling ${ability.toUpperCase()} check...`, 'info');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        sendMessage({
+            type: 'RollAbilityCheck',
+            character_name: characterName,
+            ability: ability,
+            roll: roll,
+            modifier: mod,
+            total: total
+        });
+    } else {
+        const abilityNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
+        addRollEntry(`🎲 ${characterName} rolled ${ability.toUpperCase()} check: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${abilityNatText}`, roll === 20, roll === 1);
+    }
 }
 
 // Saving Throw Rolling
 function rollSavingThrow(ability, modifier, characterName) {
+    const mod = (typeof modifier === 'number' && !isNaN(modifier)) ? modifier : 0;
     console.log(`🛡️ Rolling ${ability.toUpperCase()} save for ${characterName}`);
-    console.log(`   Save Modifier: ${modifier}`);
+    console.log(`   Save Modifier: ${mod}`);
     
     // Roll 1d20
     const roll = Math.floor(Math.random() * 20) + 1;
-    const total = roll + modifier;
+    const total = roll + mod;
     
-    console.log(`   Roll: ${roll} + ${modifier} = ${total}`);
+    console.log(`   Roll: ${roll} + ${mod} = ${total}`);
     
-    // Send to server to broadcast to all players
-    sendMessage({
-        type: 'RollSavingThrow',
-        character_name: characterName,
-        ability: ability,
-        roll: roll,
-        modifier: modifier,
-        total: total
-    });
-    
-    // Visual feedback
-    addLogEntry(`Rolling ${ability.toUpperCase()} save...`, 'info');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        sendMessage({
+            type: 'RollSavingThrow',
+            character_name: characterName,
+            ability: ability,
+            roll: roll,
+            modifier: mod,
+            total: total
+        });
+    } else {
+        const saveNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
+        addRollEntry(`🛡️ ${characterName} rolled ${ability.toUpperCase()} save: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${saveNatText}`, roll === 20, roll === 1);
+    }
+}
+
+// Setup event delegation for character sheet roll buttons (ability, skill, save, attack) so they work and show in rolls log
+function setupCharacterSheetRollHandlers(container) {
+    if (!container) return;
+    if (container._sheetRollHandlerAttached) return;
+    container._sheetRollHandlerAttached = true;
+    container.addEventListener('click', function(e) {
+        const el = e.target.closest('[data-sheet-roll]');
+        if (!el) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const kind = el.getAttribute('data-sheet-roll');
+        const charName = el.getAttribute('data-char-name') || '';
+        if (!charName) return;
+        if (kind === 'ability') {
+            const ab = el.getAttribute('data-ability');
+            const mod = parseInt(el.getAttribute('data-mod'), 10);
+            if (ab != null) rollAbilityCheck(ab, isNaN(mod) ? 0 : mod, charName);
+        } else if (kind === 'skill') {
+            const skillName = el.getAttribute('data-skill-name') || '';
+            const mod = parseInt(el.getAttribute('data-mod'), 10);
+            rollSkill(skillName, isNaN(mod) ? 0 : mod, charName);
+        } else if (kind === 'save') {
+            const ab = el.getAttribute('data-ability');
+            const mod = parseInt(el.getAttribute('data-mod'), 10);
+            if (ab != null) rollSavingThrow(ab, isNaN(mod) ? 0 : mod, charName);
+        } else if (kind === 'attack') {
+            const weapon = el.getAttribute('data-weapon') || '';
+            const toHit = parseInt(el.getAttribute('data-to-hit'), 10);
+            const damage = el.getAttribute('data-damage') || '';
+            const dmgType = el.getAttribute('data-damage-type') || '';
+            rollAttack(weapon, isNaN(toHit) ? 0 : toHit, damage, dmgType, charName);
+        }
+    }, true);
 }
 
 // Setup event delegation for dice roll buttons
@@ -10580,14 +10812,10 @@ function rollFlatDice(sides, characterName) {
     
     console.log(`   Roll: ${roll} (D${sides})`);
     
-    // Always add to local log immediately for instant feedback
-    addRollEntry(`🎲 ${characterName} rolled D${sides}: ${roll}`, false, false);
-    
+    // Do NOT add to log here - we add once when we receive AbilityCheckRolled from server (avoids duplicate entries)
     // Broadcast to all players via WebSocket
     if (ws && ws.readyState === WebSocket.OPEN) {
         try {
-            // Use RollAbilityCheck format to broadcast (it will show in rolls log)
-            // The server will broadcast it back as AbilityCheckRolled, which we handle specially for dice
             sendMessage({
                 type: 'RollAbilityCheck',
                 character_name: characterName,
@@ -10601,33 +10829,36 @@ function rollFlatDice(sides, characterName) {
             console.error('❌ Error sending dice roll to server:', e);
         }
     } else {
-        console.warn('⚠️ WebSocket not available, roll only shown locally');
+        // Offline: add to log only when we can't rely on server echo
+        addRollEntry(`🎲 ${characterName} rolled D${sides}: ${roll}`, false, false);
     }
 }
 
 // Skill Check Rolling
 function rollSkill(skillName, modifier, characterName) {
+    const mod = (typeof modifier === 'number' && !isNaN(modifier)) ? modifier : 0;
     console.log(`🎯 Rolling ${skillName} for ${characterName}`);
-    console.log(`   Modifier: ${modifier}`);
+    console.log(`   Modifier: ${mod}`);
     
     // Roll 1d20
     const roll = Math.floor(Math.random() * 20) + 1;
-    const total = roll + modifier;
+    const total = roll + mod;
     
-    console.log(`   Roll: ${roll} + ${modifier} = ${total}`);
+    console.log(`   Roll: ${roll} + ${mod} = ${total}`);
     
-    // Send to server to broadcast to all players
-    sendMessage({
-        type: 'RollSkill',
-        character_name: characterName,
-        skill: skillName,
-        roll: roll,
-        modifier: modifier,
-        total: total
-    });
-    
-    // Visual feedback
-    addLogEntry(`Rolling ${skillName}...`, 'info');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        sendMessage({
+            type: 'RollSkill',
+            character_name: characterName,
+            skill: skillName,
+            roll: roll,
+            modifier: mod,
+            total: total
+        });
+    } else {
+        const skillNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
+        addRollEntry(`🎯 ${characterName} rolled ${skillName}: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${skillNatText}`, roll === 20, roll === 1);
+    }
 }
 
 // Calculate skill modifier
@@ -10763,20 +10994,23 @@ function rollAttack(weaponName, toHitMod, damageNotation, damageType, characterN
     console.log(`   To Hit Roll: ${toHitRoll} + ${toHitMod} = ${toHitTotal}`);
     console.log(`   Damage: ${damageDisplay}`);
     
-    // Send to server to broadcast to all players
-    sendMessage({
-        type: 'RollAttack',
-        character_name: characterName,
-        weapon: weaponName,
-        to_hit_roll: toHitRoll,
-        to_hit_mod: toHitMod,
-        to_hit_total: toHitTotal,
-        damage: damageDisplay,
-        damage_type: damageType
-    });
-    
-    // Visual feedback
-    addLogEntry(`Attacking with ${weaponName}...`, 'info');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        sendMessage({
+            type: 'RollAttack',
+            character_name: characterName,
+            weapon: weaponName,
+            to_hit_roll: toHitRoll,
+            to_hit_mod: toHitMod,
+            to_hit_total: toHitTotal,
+            damage: damageDisplay,
+            damage_type: damageType
+        });
+    } else {
+        const hitDisplay = `${toHitRoll} ${toHitMod >= 0 ? '+' : ''}${toHitMod}`;
+        const isFail = toHitRoll === 1;
+        const critText = isCrit ? ' 🎉 CRITICAL HIT! ✨ NATURAL 20!' : (isFail ? ' ❌ CRITICAL MISS! NATURAL 1!' : '');
+        addRollEntry(`⚔️ ${characterName} attacks with ${weaponName}: To Hit ${hitDisplay} = ${toHitTotal} | Damage: ${damageDisplay} ${damageType}${critText}`, isCrit, isFail);
+    }
 }
 
 // Build dice roll section for character sheet
@@ -10910,7 +11144,7 @@ function buildSavingThrowsSection(char, charData) {
         const escapedName = escapeJs(charName);
         const abilityName = abilityLabels[ab];
         
-        html += `<div onclick="rollSavingThrow('${ab}', ${saveMod}, '${escapedName}')" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(255,170,68,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
+        html += `<div data-sheet-roll="save" data-ability="${ab}" data-mod="${saveMod}" data-char-name="${escapedName}" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(255,170,68,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
             <span style="font-size: 13px;">
                 <span style="color: ${profColor}; margin-right: 5px;">${profSymbol}</span>
                 ${abilityName}
@@ -11010,13 +11244,22 @@ function buildSkillsSection(char, charData) {
         <h4 style="color: #ffaa44;">🎯 Skills <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
         <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">`;
     
-    // Get ability modifiers
-    const strMod = charData?.abilities?.str?.mod || calcMod(char.strength);
-    const dexMod = charData?.abilities?.dex?.mod || calcMod(char.dexterity);
-    const intMod = charData?.abilities?.int?.mod || calcMod(char.intelligence);
-    const wisMod = charData?.abilities?.wis?.mod || calcMod(char.wisdom);
-    const chaMod = charData?.abilities?.cha?.mod || calcMod(char.charisma);
-    
+    const safeMod = (m) => (typeof m === 'number' && !isNaN(m)) ? m : 0;
+    let strMod, dexMod, intMod, wisMod, chaMod;
+    if (isStarWars && charData?.baseAbilityScores) {
+        const ab = charData.baseAbilityScores;
+        strMod = safeMod(calcMod(ab.Strength));
+        dexMod = safeMod(calcMod(ab.Dexterity));
+        intMod = safeMod(calcMod(ab.Intelligence));
+        wisMod = safeMod(calcMod(ab.Wisdom));
+        chaMod = safeMod(calcMod(ab.Charisma));
+    } else {
+        strMod = safeMod(charData?.abilities?.str?.mod ?? calcMod(char.strength));
+        dexMod = safeMod(charData?.abilities?.dex?.mod ?? calcMod(char.dexterity));
+        intMod = safeMod(charData?.abilities?.int?.mod ?? calcMod(char.intelligence));
+        wisMod = safeMod(charData?.abilities?.wis?.mod ?? calcMod(char.wisdom));
+        chaMod = safeMod(charData?.abilities?.cha?.mod ?? calcMod(char.charisma));
+    }
     const abilityMods = { str: strMod, dex: dexMod, int: intMod, wis: wisMod, cha: chaMod };
     const profBonus = charData?.proficiency_bonus || char.proficiency_bonus;
     
@@ -11032,12 +11275,11 @@ function buildSkillsSection(char, charData) {
             let skillMod = baseMod;
             
             if (charData?.skills && charData.skills[skill.key]) {
-                skillMod = charData.skills[skill.key].mod;
+                skillMod = safeMod(charData.skills[skill.key].mod);
                 isProficient = charData.skills[skill.key].proficient || false;
                 hasExpertise = charData.skills[skill.key].expertise || false;
             } else {
-                // Default: just use ability modifier (not proficient)
-                skillMod = baseMod;
+                skillMod = safeMod(baseMod);
             }
             
             const profSymbol = hasExpertise ? '◆' : (isProficient ? '●' : '○');
@@ -11045,7 +11287,8 @@ function buildSkillsSection(char, charData) {
             
             const charName = charData?.name || char.name;
             const escapedCharName = escapeJs(charName);
-            html += `<div onclick="rollSkill('${skill.name}', ${skillMod}, '${escapedCharName}')" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(74,158,255,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
+            const escapedSkillName = escapeJs(skill.name);
+            html += `<div data-sheet-roll="skill" data-skill-name="${escapedSkillName}" data-mod="${skillMod}" data-char-name="${escapedCharName}" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(74,158,255,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
                 <span style="font-size: 13px;">
                     <span style="color: ${profColor}; margin-right: 5px;">${profSymbol}</span>
                     ${skill.name}
@@ -11180,7 +11423,7 @@ function showPlaceCharacter() {
             item.addEventListener('click', () => placeCharacterToken(char.id, char.name));
             item.innerHTML = `
                 <h4>${escapeHtml(char.name)}</h4>
-                <p style="font-size: 11px; opacity: 0.8;">${escapeHtml(char.class || '')} Level ${char.level || 0}</p>
+                <p style="font-size: 11px; opacity: 0.8;">${escapeHtml(char.class || '')} Level ${Math.max(1, Number(char.level) || 1)}</p>
                     <div class="entity-stats">
                     <div class="entity-stat">HP ${char.max_hp || 0}</div>
                     <div class="entity-stat">AC ${char.armor_class || 0}</div>
@@ -11309,6 +11552,11 @@ function showCharacterSheet(char, isSelectionMode = false) {
             const parsed = JSON.parse(char.character_data);
             currentViewingCharacterFullData = parsed;
             currentViewingCharacterData = parsed && parsed.character ? parsed.character : parsed;
+            // Ensure resolved level is on the data object (from Roll20 attribs, top-level, or classes) so sheet always shows correct level
+            if (currentViewingCharacterData && typeof currentViewingCharacterData === 'object') {
+                const resolvedLevel = getLevelFromCharacterData(currentViewingCharacterData, char);
+                currentViewingCharacterData.level = Math.max(1, resolvedLevel);
+            }
         } catch (e) {
             console.error('Error parsing character data:', e);
         }
@@ -11316,13 +11564,15 @@ function showCharacterSheet(char, isSelectionMode = false) {
     
     renderCharacterSheetContent();
     
-    // Show/hide the "Open in New Window" button (only for players viewing their own sheet)
+    // Show/hide the "Open in New Window" and "Level Up (Update from JSON)" buttons (only for players viewing their own sheet)
+    const shouldShowOwnSheetButtons = !isSelectionMode && char && char.id === myCharacterId;
     const openBtn = document.getElementById('openSheetInNewWindowBtn');
     if (openBtn) {
-        // Show button if this is the player's own character sheet (not selection mode)
-        const shouldShow = !isSelectionMode && char && char.id === myCharacterId;
-        openBtn.style.display = shouldShow ? 'block' : 'none';
-        console.log('🖥️ Open in New Window button visibility:', shouldShow, 'for character:', char?.id, 'myCharacterId:', myCharacterId);
+        openBtn.style.display = shouldShowOwnSheetButtons ? 'block' : 'none';
+    }
+    const updateJsonBtn = document.getElementById('updateCharacterFromJsonBtn');
+    if (updateJsonBtn) {
+        updateJsonBtn.style.display = shouldShowOwnSheetButtons ? 'block' : 'none';
     }
     
     // Show/hide the "Link Discord" button (only for players viewing their own sheet)
@@ -11489,8 +11739,7 @@ function renderCharacterSheetContent() {
             const html = buildDetailedCharacterSheet(char, charData);
             contentEl.innerHTML = html;
             
-            // Add event delegation for dice roll buttons
-            // Use setTimeout to ensure DOM is fully updated
+            setupCharacterSheetRollHandlers(contentEl);
             setTimeout(() => {
                 setupDiceRollButtons(contentEl);
             }, 100);
@@ -11535,26 +11784,392 @@ function updateStandaloneCharacterSheet(char, charData, html) {
     }
 }
 
+// Resolve level from any character data shape. Prefer char.level when provided (user-editable source of truth).
+function getLevelFromCharacterData(data, charFallback) {
+    const charLv = charFallback && (typeof charFallback.level === 'number' ? charFallback.level : parseInt(charFallback.level, 10));
+    if (!isNaN(charLv) && charLv >= 1) return Math.max(1, charLv);
+    if (data && Array.isArray(data.attribs)) {
+        for (let i = 0; i < data.attribs.length; i++) {
+            const a = data.attribs[i];
+            if (!a) continue;
+            const name = String(a.name || '').trim();
+            if (name === 'level') {
+                const v = a.current != null && a.current !== '' ? a.current : a.max;
+                const n = typeof v === 'number' ? (isNaN(v) ? 0 : v) : parseInt(String(v), 10);
+                if (!isNaN(n) && n >= 0) return Math.max(1, n);
+                break;
+            }
+        }
+        for (let i = 0; i < data.attribs.length; i++) {
+            const a = data.attribs[i];
+            if (!a) continue;
+            const name = String(a.name || '').trim();
+            if (name === 'base_level') {
+                const v = a.current != null && a.current !== '' ? a.current : a.max;
+                const n = typeof v === 'number' ? (isNaN(v) ? 0 : v) : parseInt(String(v), 10);
+                if (!isNaN(n) && n >= 0) return Math.max(1, n);
+                break;
+            }
+        }
+    }
+    if (data) {
+        const top = typeof data.level === 'number' ? data.level : parseInt(data.level, 10);
+        if (!isNaN(top) && top > 0) return top;
+        if (Array.isArray(data.classes) && data.classes.length > 0) {
+            const sum = data.classes.reduce((s, cls) => s + (Number(cls.levels) || 1), 0);
+            if (sum > 0) return sum;
+        }
+    }
+    return (charLv > 0 ? charLv : null) ?? 1;
+}
+
+// SW5e: count tech powers (from classes and top-level)
+function countTechPowers(charData) {
+    if (!charData) return 0;
+    var n = 0;
+    if (Array.isArray(charData.classes)) {
+        charData.classes.forEach(function(cls) {
+            if (Array.isArray(cls.techPowers)) n += cls.techPowers.length;
+            if (Array.isArray(cls.techPowerDetails)) n += cls.techPowerDetails.length;
+        });
+    }
+    if (Array.isArray(charData.techPowers)) n += charData.techPowers.length;
+    if (Array.isArray(charData.techPowerDetails)) n += charData.techPowerDetails.length;
+    return n;
+}
+
+// SW5e: get Engineer class level. Check attribs, char.level, charData.level, classes. Infer level 2 if stored 1 but has 5+ tech powers.
+function getEngineerLevelFromCharData(charData, charFallback) {
+    if (!charData || !Array.isArray(charData.classes)) return 0;
+    var sum = 0;
+    for (let i = 0; i < charData.classes.length; i++) {
+        var c = charData.classes[i];
+        if (!c) continue;
+        var name = String(c.name || '').trim().toLowerCase();
+        var baseName = (name.split(/\s+/)[0] || name).trim();
+        if (baseName !== 'engineer') continue;
+        var lv = c.levels != null ? (typeof c.levels === 'number' ? c.levels : parseInt(c.levels, 10)) : (c.level != null ? (typeof c.level === 'number' ? c.level : parseInt(c.level, 10)) : 0);
+        if (!isNaN(lv) && lv > 0) sum += lv;
+    }
+    var firstClassBase = (String(charData.classes[0].name || '').trim().toLowerCase().split(/\s+/)[0] || '').trim();
+    if (charData.classes.length === 1 && firstClassBase === 'engineer') {
+        var candidate = sum;
+        if (Array.isArray(charData.attribs)) {
+            for (let i = 0; i < charData.attribs.length; i++) {
+                var a = charData.attribs[i];
+                if (!a) continue;
+                var n = String(a.name || '').trim().toLowerCase();
+                if (n === 'engineer_level' || n === 'class_level') {
+                    var v = a.current != null && a.current !== '' ? a.current : a.max;
+                    var num = parseInt(v, 10);
+                    if (!isNaN(num) && num >= 1 && num > candidate) candidate = num;
+                }
+            }
+        }
+        var charLv = charFallback && (typeof charFallback.level === 'number' ? charFallback.level : parseInt(charFallback.level, 10));
+        if (!isNaN(charLv) && charLv >= 1 && charLv > candidate) candidate = charLv;
+        var dataLv = typeof charData.level === 'number' ? charData.level : parseInt(charData.level, 10);
+        if (!isNaN(dataLv) && dataLv >= 1 && dataLv > candidate) candidate = dataLv;
+        if (candidate > sum) sum = candidate;
+        if (sum === 1 && countTechPowers(charData) >= 5) sum = 2;
+    }
+    return sum;
+}
+
+// SW5e: tech points = engineer level * 2 + Intelligence modifier (Engineer lv2 INT 17 = 7). charFallback optional for correct level.
+function getCalculatedTechPointsMax(charData, charFallback) {
+    if (!charData) return 0;
+    var engineerLevel = getEngineerLevelFromCharData(charData, charFallback);
+    if (engineerLevel < 1) return 0;
+    if (engineerLevel === 1 && Array.isArray(charData.classes) && charData.classes.length === 1) {
+        var single = charData.classes[0];
+        var singleBase = (String(single.name || '').trim().toLowerCase().split(/\s+/)[0] || '').trim();
+        if (single && singleBase === 'engineer') {
+            var topLevel = typeof charData.level === 'number' ? charData.level : parseInt(charData.level, 10);
+            if (!isNaN(topLevel) && topLevel > 1) engineerLevel = topLevel;
+            if (charFallback) {
+                var cl = typeof charFallback.level === 'number' ? charFallback.level : parseInt(charFallback.level, 10);
+                if (!isNaN(cl) && cl > engineerLevel) engineerLevel = cl;
+            }
+        }
+    }
+    var intScore = 10;
+    if (charData.baseAbilityScores && typeof charData.baseAbilityScores.Intelligence === 'number') intScore = charData.baseAbilityScores.Intelligence;
+    else if (charData.abilities && charData.abilities.int && typeof charData.abilities.int.score === 'number') intScore = charData.abilities.int.score;
+    else if (Array.isArray(charData.attribs)) {
+        for (let i = 0; i < charData.attribs.length; i++) {
+            const a = charData.attribs[i];
+            if (a && String(a.name || '').trim().toLowerCase() === 'intelligence') {
+                const v = a.current != null && a.current !== '' ? a.current : a.max;
+                const n = parseInt(v, 10);
+                if (!isNaN(n)) intScore = n;
+                break;
+            }
+        }
+    }
+    var intMod = Math.floor((intScore - 10) / 2);
+    return Math.max(1, engineerLevel * 2 + intMod);
+}
+
+// Get tech points { max, current } from character data. For SW5e Engineers we use formula: engineer level*2 + Int mod. Pass char when available so char.level can fix wrong stored level.
+function getTechPointsFromCharData(charData, charFallback) {
+    if (!charData) return { max: 0, current: 0 };
+    var engineerLevel = getEngineerLevelFromCharData(charData, charFallback);
+    var calculatedMax = (engineerLevel >= 1) ? getCalculatedTechPointsMax(charData, charFallback) : 0;
+    var max = 0, current = 0, expended = 0;
+    if (charData.techPoints && typeof charData.techPoints.max === 'number') {
+        max = Math.max(0, charData.techPoints.max);
+        expended = charData.techPoints._expended || 0;
+        current = charData.techPoints.current != null ? charData.techPoints.current : Math.max(0, max - expended);
+    } else if (Array.isArray(charData.attribs)) {
+        for (let i = 0; i < charData.attribs.length; i++) {
+            const a = charData.attribs[i];
+            if (!a) continue;
+            const n = String(a.name || '').trim();
+            if (n === 'tech_power_points_total') {
+                const v = a.current != null && a.current !== '' ? a.current : a.max;
+                max = Math.max(0, parseInt(v, 10) || 0);
+            } else if (n === 'tech_power_points_expended') {
+                const v = a.current != null && a.current !== '' ? a.current : a.max;
+                expended = Math.max(0, parseInt(v, 10) || 0);
+            }
+        }
+        current = Math.max(0, max - expended);
+    }
+    if (calculatedMax > 0) {
+        max = calculatedMax;
+        current = Math.min(current, max);
+    } else if (max === 0) {
+        max = 0;
+        current = 0;
+    }
+    return { max: max, current: Math.max(0, Math.min(current, max)) };
+}
+
+// Test tech points calculation (run in console: testTechPointsCalc())
+window.testTechPointsCalc = function testTechPointsCalc() {
+    var charData = {
+        classes: [{ name: 'Engineer 2', levels: 2, techPowers: ['a'], techPowerDetails: [{ name: 'Detonator' }, { name: 'Echo Blast' }, { name: 'Electroshock' }] }],
+        baseAbilityScores: { Intelligence: 17 },
+        level: 2
+    };
+    var char = { level: 2 };
+    var pts = getTechPointsFromCharData(charData, char);
+    var ok = pts.max === 7 && pts.current === 7;
+    console.log('Tech points test (Engineer lv2, INT 17): expected 7/7, got', pts.current + '/' + pts.max, ok ? 'PASS' : 'FAIL');
+    return ok;
+};
+
+// SW5e: true if character has any force powers (so we only show/calculate force points when they do)
+function hasForcePowers(charData) {
+    if (!charData) return false;
+    if (Array.isArray(charData.forcePowers) && charData.forcePowers.length > 0) return true;
+    if (Array.isArray(charData.forcePowerDetails) && charData.forcePowerDetails.length > 0) return true;
+    if (Array.isArray(charData.classes)) {
+        for (let i = 0; i < charData.classes.length; i++) {
+            var c = charData.classes[i];
+            if (c && Array.isArray(c.forcePowers) && c.forcePowers.length > 0) return true;
+        }
+    }
+    return false;
+}
+
+// SW5e: force points = level * 2 + (higher of Cha/Wis modifier) when not in JSON; returns 0 if no force powers
+function getCalculatedForcePointsMax(charData) {
+    if (!charData || !hasForcePowers(charData)) return 0;
+    var level = getLevelFromCharacterData(charData, null);
+    if (!level || level < 1) return 0;
+    var cha = 10, wis = 10;
+    if (charData.baseAbilityScores) {
+        if (typeof charData.baseAbilityScores.Charisma === 'number') cha = charData.baseAbilityScores.Charisma;
+        if (typeof charData.baseAbilityScores.Wisdom === 'number') wis = charData.baseAbilityScores.Wisdom;
+    } else if (charData.abilities) {
+        if (charData.abilities.cha && typeof charData.abilities.cha.score === 'number') cha = charData.abilities.cha.score;
+        if (charData.abilities.wis && typeof charData.abilities.wis.score === 'number') wis = charData.abilities.wis.score;
+    }
+    var mod = Math.max(Math.floor((cha - 10) / 2), Math.floor((wis - 10) / 2));
+    return Math.max(1, level * 2 + mod);
+}
+
+// Get force points { max, current } from character data. If character has no force powers, always return 0.
+function getForcePointsFromCharData(charData) {
+    if (!charData) return { max: 0, current: 0 };
+    if (!hasForcePowers(charData)) return { max: 0, current: 0 };
+    var max = 0, current = 0, expended = 0;
+    if (charData.forcePoints && typeof charData.forcePoints.max === 'number') {
+        max = Math.max(0, charData.forcePoints.max);
+        expended = charData.forcePoints._expended || 0;
+        current = charData.forcePoints.current != null ? charData.forcePoints.current : Math.max(0, max - expended);
+    } else if (Array.isArray(charData.attribs)) {
+        for (let i = 0; i < charData.attribs.length; i++) {
+            const a = charData.attribs[i];
+            if (!a) continue;
+            const n = String(a.name || '').trim();
+            if (n === 'force_power_points_total') {
+                const v = a.current != null && a.current !== '' ? a.current : a.max;
+                max = Math.max(0, parseInt(v, 10) || 0);
+            } else if (n === 'force_power_points_expended') {
+                const v = a.current != null && a.current !== '' ? a.current : a.max;
+                expended = Math.max(0, parseInt(v, 10) || 0);
+            }
+        }
+        current = Math.max(0, max - expended);
+    }
+    if (max === 0) {
+        max = getCalculatedForcePointsMax(charData);
+        current = max;
+    }
+    return { max: max, current: Math.max(0, Math.min(current, max)) };
+}
+
+// Use one tech point (decrement current, persist, refresh UI)
+function useTechPoint() {
+    const myCharacter = characters.find(c => c.id === myCharacterId);
+    if (!myCharacter || !myCharacter.character_data) return;
+    try {
+        const fullData = JSON.parse(myCharacter.character_data);
+        const data = fullData.character || fullData;
+        const pts = getTechPointsFromCharData(data, myCharacter);
+        if (pts.max === 0 || pts.current <= 0) {
+            addLogEntry('No tech points remaining.', 'info');
+            return;
+        }
+        if (!data.techPoints) data.techPoints = { max: pts.max, current: pts.current, _expended: pts.max - pts.current };
+        data.techPoints.current = Math.max(0, data.techPoints.current - 1);
+        data.techPoints._expended = data.techPoints.max - data.techPoints.current;
+        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
+        syncCharacterToServer(myCharacter);
+        populatePlayerActionBar();
+        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
+    } catch (e) { console.error('useTechPoint:', e); }
+}
+
+// Use one force point
+function useForcePoint() {
+    const myCharacter = characters.find(c => c.id === myCharacterId);
+    if (!myCharacter || !myCharacter.character_data) return;
+    try {
+        const fullData = JSON.parse(myCharacter.character_data);
+        const data = fullData.character || fullData;
+        const pts = getForcePointsFromCharData(data);
+        if (pts.max === 0 || pts.current <= 0) {
+            addLogEntry('No force points remaining.', 'info');
+            return;
+        }
+        if (!data.forcePoints) data.forcePoints = { max: pts.max, current: pts.current, _expended: pts.max - pts.current };
+        data.forcePoints.current = Math.max(0, data.forcePoints.current - 1);
+        data.forcePoints._expended = data.forcePoints.max - data.forcePoints.current;
+        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
+        syncCharacterToServer(myCharacter);
+        populatePlayerActionBar();
+        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
+        addLogEntry((data.name || myCharacter.name) + ' used 1 force point (' + data.forcePoints.current + '/' + data.forcePoints.max + ' remaining)', 'info');
+    } catch (e) { console.error('useForcePoint:', e); }
+}
+
+// Restore all tech points (short/long rest)
+function restoreTechPoints() {
+    const myCharacter = characters.find(c => c.id === myCharacterId);
+    if (!myCharacter || !myCharacter.character_data) return;
+    try {
+        const fullData = JSON.parse(myCharacter.character_data);
+        const data = fullData.character || fullData;
+        const pts = getTechPointsFromCharData(data, myCharacter);
+        if (pts.max === 0) return;
+        if (!data.techPoints) data.techPoints = { max: pts.max, current: pts.max, _expended: 0 };
+        data.techPoints.max = pts.max;
+        data.techPoints.current = pts.max;
+        data.techPoints._expended = 0;
+        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
+        syncCharacterToServer(myCharacter);
+        populatePlayerActionBar();
+        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
+    } catch (e) { console.error('restoreTechPoints:', e); }
+}
+
+// Restore all force points
+function restoreForcePoints() {
+    const myCharacter = characters.find(c => c.id === myCharacterId);
+    if (!myCharacter || !myCharacter.character_data) return;
+    try {
+        const fullData = JSON.parse(myCharacter.character_data);
+        const data = fullData.character || fullData;
+        const pts = getForcePointsFromCharData(data);
+        if (pts.max === 0) return;
+        if (!data.forcePoints) data.forcePoints = { max: pts.max, current: pts.max, _expended: 0 };
+        data.forcePoints.current = data.forcePoints.max;
+        data.forcePoints._expended = 0;
+        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
+        syncCharacterToServer(myCharacter);
+        populatePlayerActionBar();
+        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
+        addLogEntry((data.name || myCharacter.name) + ' restored all force points (' + data.forcePoints.max + ')', 'info');
+    } catch (e) { console.error('restoreForcePoints:', e); }
+}
+
+function syncCharacterToServer(char) {
+    if (!char) return;
+    const payload = buildCharacterUpdatePayload(char);
+    if (payload && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'UpdateCharacter', character: payload }));
+    }
+}
+
+// Always resolve level from the character's stored character_data when showing the sheet (source of truth)
+function getResolvedLevelForSheet(char, charData) {
+    if (!char) return 1;
+    if (char.character_data && typeof char.character_data === 'string') {
+        try {
+            const parsed = JSON.parse(char.character_data);
+            const data = parsed && parsed.character ? parsed.character : parsed;
+            const level = getLevelFromCharacterData(data, char);
+            if (level > 0) return Math.max(1, level);
+        } catch (e) {
+            // fall through to charData/char fallback
+        }
+    }
+    return Math.max(1, getLevelFromCharacterData(charData, char));
+}
+
+// Clean character display name: strip surrounding quotes, prefer "Name / Alias" → show alias
+function getCharacterDisplayName(rawName, fallback) {
+    if (rawName == null || rawName === '') return (fallback != null && fallback !== '') ? String(fallback) : 'Character';
+    let s = String(rawName).trim();
+    if (s.startsWith('"')) s = s.slice(1);
+    if (s.endsWith('"')) s = s.slice(0, -1);
+    s = s.trim();
+    if (s.includes(' / ')) {
+        const parts = s.split(/\s*\/\s*/);
+        const after = parts[parts.length - 1].trim();
+        if (after) return after;
+    }
+    return s || (fallback != null && fallback !== '') ? String(fallback) : 'Character';
+}
+
 function getCharacterSheetTitle(char, charData) {
     if (!char) return 'Character Sheet';
-    
+
     const data = charData || null;
     const isStarWars = data && (data.species || (Array.isArray(data.classes) && data.baseAbilityScores));
-    
+    const level = getResolvedLevelForSheet(char, data);
+
     if (isStarWars && data) {
-        const className = data.classes && data.classes.length > 0 ?
-                          data.classes.map(c => `${c.name} ${c.levels || 1}`).join(' / ') : (char.class || 'Unknown');
-        const level = data.classes && data.classes.length > 0 ?
-                      data.classes.reduce((sum, cls) => sum + (cls.levels || 1), 0) : (char.level || 1);
-        return `${data.name || char.name} - ${className} Level ${level}`;
+        const displayName = getCharacterDisplayName(data.name || char.name, char.name);
+        const classDisplay = (data.class || char.class || '').trim();
+        if (classDisplay) {
+            return `${displayName} — ${classDisplay} • Level ${level}`;
+        }
+        return `${displayName} — Level ${level}`;
     }
-    
-    if (data && (data.class || data.level)) {
+
+    if (data && (data.class || data.level != null || (data.attribs && data.attribs.length > 0))) {
         const subclassText = data.subclass ? ` (${data.subclass})` : '';
-        return `${data.name || char.name} - ${data.class || char.class} ${data.level || char.level}${subclassText}`;
+        const name = getCharacterDisplayName(data.name || char.name, char.name);
+        return `${name} — ${data.class || char.class} Level ${level}${subclassText}`;
     }
-    
-    return `${char.name} - ${char.class} Level ${char.level}`;
+
+    const name = getCharacterDisplayName(char.name, 'Character');
+    return `${name} — ${char.class || ''} Level ${level}`;
 }
 
 function handleEditCharacterBtnClick() {
@@ -11942,7 +12557,7 @@ function buildSimpleCharacterSheet(char) {
                 <h4 style="color: #4a9eff; margin-bottom: 10px;">Basic Info</h4>
                 <div class="token-stat"><span>Player:</span><span>${char.player_name}</span></div>
                 <div class="token-stat"><span>Class:</span><span>${char.class}</span></div>
-                <div class="token-stat"><span>Level:</span><span>${char.level}</span></div>
+                <div class="token-stat"><span>Level:</span><span>${getResolvedLevelForSheet(char, null)}</span></div>
                 <div class="token-stat"><span>Proficiency:</span><span>+${char.proficiency_bonus}</span></div>
                 <div class="token-stat" style="margin-top: 10px;">
                     <span>Inspiration:</span>
@@ -12038,19 +12653,20 @@ function buildDetailedCharacterSheet(char, charData) {
     
     let html = '<div style="max-height: 70vh; overflow-y: auto; padding-right: 10px;">';
     
-    // Basic Info & HP
+    // Basic Info & HP — level always from char.character_data (source of truth) then charData/char
     let className, level, maxHP;
+    level = getResolvedLevelForSheet(char, charData);
     if (isStarWars) {
-        className = charData.classes && charData.classes.length > 0 ?
-                   charData.classes.map(c => `${c.name} ${c.levels || 1}`).join(' / ') : char.class;
-        level = charData.classes && charData.classes.length > 0 ? 
-               charData.classes.reduce((sum, cls) => sum + (cls.levels || 1), 0) : char.level;
-        maxHP = charData.tweaks?.hitPoints?.maximum?.override || 
-               (charData.classes && charData.classes[0]?.hitPoints?.length > 0 ? 
-                charData.classes[0].hitPoints.reduce((sum, hp) => sum + hp, 0) : 7) || char.max_hp;
+        const classDisplay = (charData.class || char.class || '').trim();
+        const multiClass = charData.classes && charData.classes.length > 1;
+        className = multiClass && charData.classes
+            ? charData.classes.map(c => `${(c.name || '').trim()} ${c.levels || 1}`).join(' / ')
+            : (classDisplay || (charData.classes && charData.classes[0] ? (charData.classes[0].name || '').trim() : ''));
+        maxHP = charData.tweaks?.hitPoints?.maximum?.override ||
+               (charData.classes && charData.classes[0]?.hitPoints?.length > 0 ?
+                charData.classes[0].hitPoints.reduce((sum, hp) => sum + hp, 0) : null) || char.max_hp;
     } else {
         className = charData.class + (charData.subclass ? ` (${charData.subclass})` : '');
-        level = charData.level;
         maxHP = charData.hp?.max || char.max_hp;
     }
     
@@ -12061,7 +12677,7 @@ function buildDetailedCharacterSheet(char, charData) {
     html += `<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 15px; margin-bottom: 15px;">
         <div class="panel" style="padding: 15px;">
             <h4 style="color: #4a9eff;">🎭 Character Info</h4>
-            <div class="token-stat"><span>Name:</span><span>${charData.name}</span></div>
+            <div class="token-stat"><span>Name:</span><span>${escapeHtml(getCharacterDisplayName(charData.name, char.name))}</span></div>
             <div class="token-stat"><span>Player:</span><span>${charData.player_name || char.player_name}</span></div>
             <div class="token-stat"><span>Class:</span><span>${className}</span></div>
             <div class="token-stat"><span>Level:</span><span>${level}</span></div>
@@ -12100,7 +12716,7 @@ function buildDetailedCharacterSheet(char, charData) {
             if (ab) {
                 const escapedName = escapeJs(charData.name);
                 html += `<div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">
-                    <div onclick="rollAbilityCheck('${ab}', ${mod}, '${escapedName}')" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
+                    <div data-sheet-roll="ability" data-ability="${ab}" data-mod="${mod}" data-char-name="${escapedName}" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
                         <div style="font-size: 24px; font-weight: bold;">${score}</div>
                         <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase;">${ab}</div>
                         <div style="font-size: 12px; margin-top: 5px;">${formatMod(mod)}</div>
@@ -12119,12 +12735,12 @@ function buildDetailedCharacterSheet(char, charData) {
             if (ability) {
                 const escapedName = escapeJs(charData.name);
                 html += `<div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">
-                    <div onclick="rollAbilityCheck('${ab}', ${ability.mod}, '${escapedName}')" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
+                    <div data-sheet-roll="ability" data-ability="${ab}" data-mod="${ability.mod}" data-char-name="${escapedName}" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
                         <div style="font-size: 24px; font-weight: bold;">${ability.score}</div>
                         <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase;">${ab}</div>
                         <div style="font-size: 12px; margin-top: 5px;">${formatMod(ability.mod)}</div>
                     </div>
-                    <div onclick="rollSavingThrow('${ab}', ${ability.save}, '${escapedName}')" style="font-size: 11px; color: ${ability.save_proficient ? '#44ff44' : '#888'}; margin-top: 5px; cursor: pointer; padding: 3px; border-radius: 3px; transition: all 0.2s;" onmouseover="this.style.background='rgba(74,158,255,0.2)'; this.style.transform='scale(1.05)'" onmouseout="this.style.background=''; this.style.transform='scale(1)'">
+                    <div data-sheet-roll="save" data-ability="${ab}" data-mod="${ability.save}" data-char-name="${escapedName}" style="font-size: 11px; color: ${ability.save_proficient ? '#44ff44' : '#888'}; margin-top: 5px; cursor: pointer; padding: 3px; border-radius: 3px; transition: all 0.2s;" onmouseover="this.style.background='rgba(74,158,255,0.2)'; this.style.transform='scale(1.05)'" onmouseout="this.style.background=''; this.style.transform='scale(1)'">
                         ${ability.save_proficient ? '●' : '○'} Save: ${formatMod(ability.save)}
                     </div>
                 </div>`;
@@ -12175,7 +12791,7 @@ function buildDetailedCharacterSheet(char, charData) {
                 const escapedDamage = escapeJs(atk.damage);
                 const escapedType = escapeJs(atk.type || 'damage');
                 
-                html += `<div onclick='rollAttack("${escapedWeapon}", ${atk.to_hit}, "${escapedDamage}", "${escapedType}", "${escapedName}")' style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'">
+                html += `<div data-sheet-roll="attack" data-weapon="${escapedWeapon}" data-to-hit="${atk.to_hit}" data-damage="${escapedDamage}" data-damage-type="${escapedType}" data-char-name="${escapedName}" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'">
                     <div style="font-weight: bold; font-size: 15px;">${weaponName}</div>
                     <div style="font-size: 13px; margin-top: 5px;">
                         <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(atk.to_hit)}</span> | 
@@ -12190,7 +12806,28 @@ function buildDetailedCharacterSheet(char, charData) {
         html += `</div>`;
     }
     
-    // Star Wars Tech Powers (make them hoverable like spells)
+    // Star Wars: Power Points tracker (tech / force) — always show so counters are visible
+    if (isStarWars) {
+        const techPts = getTechPointsFromCharData(charData, char);
+        const forcePts = getForcePointsFromCharData(charData);
+        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+            <h4 style="color: #aa88ff;">📊 Power Points</h4>
+            <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center;">`;
+        html += `<div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: #00d4ff; font-weight: bold;">⚡ Tech:</span>
+            <span style="font-size: 16px;">${techPts.current} / ${techPts.max}</span>
+            ${char.id === myCharacterId ? `<button type="button" onclick="useTechPoint(); renderCharacterSheetContent();" style="padding: 4px 10px; font-size: 11px; background: rgba(0,212,255,0.3); border: 1px solid #00d4ff; border-radius: 4px; color: #fff; cursor: pointer;">Use 1</button>
+            <button type="button" onclick="restoreTechPoints();" style="padding: 4px 10px; font-size: 11px; background: rgba(68,255,68,0.2); border: 1px solid #44ff44; border-radius: 4px; color: #fff; cursor: pointer;">Restore All</button>` : ''}
+        </div>`;
+        html += `<div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: #ff00ff; font-weight: bold;">✨ Force:</span>
+            <span style="font-size: 16px;">${forcePts.current} / ${forcePts.max}</span>
+            ${char.id === myCharacterId ? `<button type="button" onclick="useForcePoint(); renderCharacterSheetContent();" style="padding: 4px 10px; font-size: 11px; background: rgba(255,0,255,0.3); border: 1px solid #ff00ff; border-radius: 4px; color: #fff; cursor: pointer;">Use 1</button>
+            <button type="button" onclick="restoreForcePoints();" style="padding: 4px 10px; font-size: 11px; background: rgba(68,255,68,0.2); border: 1px solid #44ff44; border-radius: 4px; color: #fff; cursor: pointer;">Restore All</button>` : ''}
+        </div>`;
+        html += `</div></div>`;
+    }
+    
     if (isStarWars && charData.classes && charData.classes.length > 0) {
         const allTechPowers = [];
         const allForcePowers = [];

@@ -174,12 +174,6 @@
                         </div>
                     </div>
 
-                    <!-- Combat Log -->
-                    <div class="panel">
-                        <h3>📜 Combat Log</h3>
-                        <div id="combatLog"></div>
-                    </div>
-
                     <!-- Players -->
                     <div class="panel">
                         <h3>👥 Connected Players</h3>
@@ -529,7 +523,9 @@
             <div class="modal-content large">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #444;">
                     <h2 id="sheetCharacterName" style="margin: 0;">Character Sheet</h2>
-                    <div style="display: flex; gap: 10px;">
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <button id="updateCharacterFromJsonBtn" onclick="document.getElementById('updateCharacterJsonFile').click()" style="display: none; background: #c9a227; color: #1a1510; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;" title="Upload a new character sheet JSON (e.g. from SW5e export) to update this character (level up).">⬆️ Level Up (Update from JSON)</button>
+                        <input type="file" id="updateCharacterJsonFile" accept=".json,application/json" style="display: none;" onchange="handleUpdateCharacterJsonFile(this)">
                         <button id="linkDiscordBtn" onclick="openDiscordLinkModal()" style="background: #5865f2; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;">🔗 Link Discord</button>
                         <button id="openSheetInNewWindowBtn" onclick="openCharacterSheetInNewWindow()" style="background: #4a9eff; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;">🖥️ Open in New Window</button>
                     </div>

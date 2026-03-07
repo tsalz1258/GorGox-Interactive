@@ -398,6 +398,40 @@ body {
     box-shadow: 0 0 12px rgba(201, 162, 39, 0.4);
     transform: scale(1.05);
 }
+.player-bar-section .player-bar-points-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+}
+.player-bar-section .points-display {
+    font-size: clamp(9px, calc(var(--player-action-bar-height, 100px) * 0.1), 13px);
+    font-weight: bold;
+    min-width: 2.5em;
+}
+.player-bar-section .bar-point-btn {
+    padding: 2px 6px;
+    font-size: clamp(9px, calc(var(--player-action-bar-height, 100px) * 0.1), 12px);
+    background: rgba(120, 100, 80, 0.5);
+    border: 1px solid #c9a227;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.player-bar-section .bar-point-btn:hover {
+    background: rgba(201, 162, 39, 0.4);
+    border-color: #e0b840;
+}
+.player-bar-section .bar-point-restore {
+    border-color: #44ff44;
+    background: rgba(68, 255, 68, 0.2);
+}
+.player-bar-section .bar-point-restore:hover {
+    background: rgba(68, 255, 68, 0.4);
+    border-color: #66ff66;
+}
 .player-bar-section .bar-tech-power-btn {
     padding: clamp(2px, calc(var(--player-action-bar-height, 100px) * 0.02), 5px) clamp(4px, calc(var(--player-action-bar-height, 100px) * 0.05), 8px);
     margin: 1px 3px 1px 0;
@@ -757,16 +791,6 @@ body.player-action-bar-visible .main-container {
     font-size: 12px;
     font-weight: bold;
     text-shadow: 1px 1px 2px #000;
-}
-
-/* Combat Log */
-#combatLog {
-    background: rgba(0, 0, 0, 0.3);
-    padding: 10px;
-    border-radius: 5px;
-    max-height: 300px;
-    overflow-y: auto;
-    font-size: 13px;
 }
 
 .log-entry {
