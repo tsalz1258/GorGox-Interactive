@@ -476,6 +476,191 @@ body {
     align-content: flex-start;
 }
 
+/* Notes tab: sections (Session Notes, NPCs, Planets, Locations, Quests) */
+.player-bar-section.player-bar-notes {
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.player-bar-notes-wrap {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    flex: 1;
+}
+.player-bar-notes-subtabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 4px 0 6px 0;
+    border-bottom: 1px solid rgba(201, 162, 39, 0.35);
+    flex-shrink: 0;
+}
+.player-bar-notes-subtab {
+    padding: 3px 8px;
+    font-size: 10px;
+    background: rgba(201, 162, 39, 0.12);
+    border: 1px solid rgba(201, 162, 39, 0.4);
+    border-radius: 4px;
+    color: #c9a227;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.player-bar-notes-subtab:hover {
+    background: rgba(201, 162, 39, 0.22);
+}
+.player-bar-notes-subtab.active {
+    background: rgba(201, 162, 39, 0.35);
+    color: #1a1510;
+    font-weight: bold;
+}
+.player-bar-notes-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    gap: 8px;
+    padding: 6px 0 0 0;
+}
+.player-bar-notes-list {
+    flex: 0 0 120px;
+    min-width: 90px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 100%;
+}
+.player-bar-notes-add {
+    padding: 4px 8px;
+    font-size: 10px;
+    background: rgba(74, 158, 255, 0.25);
+    border: 1px solid rgba(74, 158, 255, 0.5);
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    margin-bottom: 4px;
+}
+.player-bar-notes-item {
+    padding: 4px 6px;
+    font-size: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(201, 162, 39, 0.25);
+    border-radius: 3px;
+    color: #e0e0e0;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.player-bar-notes-item:hover {
+    background: rgba(201, 162, 39, 0.15);
+}
+.player-bar-notes-item.active {
+    background: rgba(201, 162, 39, 0.3);
+    border-color: #c9a227;
+    color: #fff;
+}
+.player-bar-notes-item .notes-date {
+    display: block;
+    font-size: 9px;
+    opacity: 0.8;
+}
+.player-bar-notes-detail {
+    flex: 1;
+    min-width: 0;
+    min-height: 120px;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    padding: 4px 8px 4px 0;
+    -webkit-overflow-scrolling: touch;
+}
+.player-bar-notes-detail::-webkit-scrollbar {
+    width: 8px;
+}
+.player-bar-notes-detail::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+}
+.player-bar-notes-detail::-webkit-scrollbar-thumb {
+    background: rgba(201, 162, 39, 0.5);
+    border-radius: 4px;
+}
+.player-bar-notes-detail::-webkit-scrollbar-thumb:hover {
+    background: rgba(201, 162, 39, 0.7);
+}
+.notes-detail-empty {
+    font-size: 11px;
+    color: rgba(201, 162, 39, 0.7);
+    margin: 0;
+    padding: 8px 0;
+}
+.notes-detail-fields input[type="text"],
+.notes-detail-fields select,
+.notes-detail-fields textarea {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    margin-bottom: 4px;
+    font-size: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(201, 162, 39, 0.3);
+    border-radius: 3px;
+    color: #fff;
+}
+.notes-detail-fields textarea {
+    min-height: 44px;
+    resize: vertical;
+}
+.notes-detail-fields textarea.notes-detail-textarea-big,
+.notes-detail-fields .notes-detail-text.notes-detail-textarea-big {
+    min-height: 100px;
+    height: 100px;
+    resize: vertical;
+    font-size: 11px;
+    line-height: 1.4;
+}
+.notes-detail-fields label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: #c9a227;
+    margin-bottom: 4px;
+}
+.notes-detail-fields .notes-field-label {
+    display: block;
+    font-size: 10px;
+    font-weight: bold;
+    color: #c9a227;
+    margin: 8px 0 2px 0;
+}
+.notes-detail-fields .notes-field-label:first-of-type {
+    margin-top: 0;
+}
+.notes-detail-fields .player-bar-notes-save,
+.notes-detail-fields .player-bar-notes-del {
+    padding: 4px 10px;
+    font-size: 10px;
+    margin-right: 6px;
+    margin-top: 4px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.notes-detail-fields .player-bar-notes-save {
+    background: rgba(74, 158, 255, 0.4);
+    border: 1px solid #4a9eff;
+    color: #fff;
+}
+.notes-detail-fields .player-bar-notes-del {
+    background: rgba(180, 60, 60, 0.3);
+    border: 1px solid rgba(220, 80, 80, 0.6);
+    color: #ffaaaa;
+}
 
 /* Modal Styles */
 .modal {

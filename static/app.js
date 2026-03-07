@@ -3969,6 +3969,7 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '<button type="button" class="player-bar-tab-btn" data-tab="abilities" role="tab" tabindex="-1">Abilities</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="powers" role="tab" tabindex="-1">Powers</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="dice" role="tab" tabindex="-1">Dice</button>' +
+    '<button type="button" class="player-bar-tab-btn" data-tab="notes" role="tab" tabindex="-1">Notes</button>' +
     '</div>' +
     '<div class="player-bar-inner">' +
     '<div class="player-bar-tab-panels">' +
@@ -3988,6 +3989,9 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '</div>' +
     '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
     '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
+    '</div>' +
+    '<div class="player-bar-tab-panel" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">' +
+    '<div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>' +
     '</div>' +
     '</div></div></div>';
 
@@ -4088,7 +4092,7 @@ function setupPlayerActionBarResize(bar) {
     }
 }
 
-// Switch action bar tab (Combat, Abilities, Powers, Dice); persists to localStorage
+// Switch action bar tab (Combat, Abilities, Powers, Dice, Notes); persists to localStorage
 function switchPlayerActionBarTab(tabId) {
     const bar = document.getElementById('playerActionBar');
     if (!bar) return;
@@ -4104,7 +4108,328 @@ function switchPlayerActionBarTab(tabId) {
             if (panel.dataset.tab === tabId) panel.classList.add('active'); else panel.classList.remove('active');
         });
     }
+    if (tabId === 'notes') renderNotesTabContent();
     try { localStorage.setItem('playerActionBarTab', tabId); } catch (e) {}
+}
+
+const CAMPAIGN_NOTES_KEY_PREFIX = 'campaignNotesData_';
+function notesUid() { return Math.random().toString(36).slice(2, 10); }
+function getCampaignNotesStorageKey(characterId) {
+    return characterId ? CAMPAIGN_NOTES_KEY_PREFIX + String(characterId) : null;
+}
+function getCampaignNotes(characterId) {
+    var key = getCampaignNotesStorageKey(characterId);
+    if (!key) return { sessions: [], npcs: [], planets: [], locations: [], quests: [] };
+    try {
+        var raw = localStorage.getItem(key);
+        if (raw) {
+            var d = JSON.parse(raw);
+            return {
+                sessions: Array.isArray(d.sessions) ? d.sessions.slice() : [],
+                npcs: Array.isArray(d.npcs) ? d.npcs.slice() : [],
+                planets: Array.isArray(d.planets) ? d.planets.slice() : [],
+                locations: Array.isArray(d.locations) ? d.locations.slice() : [],
+                quests: Array.isArray(d.quests) ? d.quests.slice() : []
+            };
+        }
+    } catch (e) {}
+    return { sessions: [], npcs: [], planets: [], locations: [], quests: [] };
+}
+function saveCampaignNotes(characterId, data) {
+    var key = getCampaignNotesStorageKey(characterId);
+    if (!key) return;
+    try {
+        localStorage.setItem(key, JSON.stringify(data));
+    } catch (e) {}
+}
+
+function renderNotesTabContent() {
+    var container = document.getElementById('playerBarNotesContent');
+    if (!container) return;
+    var characterId = myCharacterId || null;
+    if (!characterId) {
+        container.innerHTML = '<div class="player-bar-notes-wrap"><p class="notes-detail-empty" style="padding:12px;">Select a character to view and edit your notes. Your notes are private to that character.</p></div>';
+        return;
+    }
+    var data = getCampaignNotes(characterId);
+    var subTab = localStorage.getItem('campaignNotesSubTab') || 'sessions';
+    var sections = [
+        { id: 'sessions', label: 'Session Notes', icon: '📜' },
+        { id: 'npcs', label: 'NPCs', icon: '👤' },
+        { id: 'planets', label: 'Planets', icon: '🪐' },
+        { id: 'locations', label: 'Locations', icon: '🏰' },
+        { id: 'quests', label: 'Quests', icon: '📋' }
+    ];
+    var html = '<div class="player-bar-notes-wrap">';
+    html += '<div class="player-bar-notes-subtabs" role="tablist">';
+    sections.forEach(function(s) {
+        html += '<button type="button" class="player-bar-notes-subtab' + (subTab === s.id ? ' active' : '') + '" data-notes-section="' + s.id + '">' + s.icon + ' ' + s.label + '</button>';
+    });
+    html += '</div>';
+    html += '<div class="player-bar-notes-body" id="playerBarNotesBody"></div></div>';
+    container.innerHTML = html;
+    container.querySelectorAll('.player-bar-notes-subtab').forEach(function(btn) {
+        btn.onclick = function() {
+            try { localStorage.setItem('campaignNotesSubTab', this.dataset.notesSection); } catch (e) {}
+            renderNotesTabContent();
+        };
+    });
+    renderNotesSection(characterId, subTab, data, document.getElementById('playerBarNotesBody'));
+}
+
+function renderNotesSection(characterId, sectionId, data, container) {
+    if (!container) return;
+    var list = data[sectionId];
+    if (!Array.isArray(list)) list = [];
+    var activeKey = 'campaignNotesActive_' + (characterId || '') + '_' + sectionId;
+    var activeId = localStorage.getItem(activeKey) || null;
+    var cur = activeId ? list.find(function(x) { return x.id === activeId; }) : null;
+
+    if (sectionId === 'sessions') {
+        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
+        var listEl = document.getElementById('notesList');
+        var detailEl = document.getElementById('notesDetail');
+        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'sessions\')">+ New Session</button>';
+        list.forEach(function(s) {
+            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === s.id ? ' active' : '') + '" data-id="' + escapeHtml(s.id) + '"><span>' + escapeHtml(s.title || 'Untitled') + '</span><span class="notes-date">' + escapeHtml(s.date || '') + '</span></div>';
+        });
+        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
+            el.onclick = function() {
+                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
+                renderNotesTabContent();
+            };
+        });
+        if (cur) {
+            detailEl.innerHTML = '<div class="notes-detail-fields">' +
+                '<span class="notes-field-label">Title</span><input type="text" class="notes-detail-title" id="notesSessionTitle" value="' + escapeHtml(cur.title || '') + '" placeholder="Session title">' +
+                '<span class="notes-field-label">Date</span><input type="text" class="notes-detail-meta" id="notesSessionDate" value="' + escapeHtml(cur.date || '') + '" placeholder="Date">' +
+                '<span class="notes-field-label">Session notes</span><textarea class="notes-detail-text notes-detail-textarea-big" id="notesSessionContent" placeholder="Session notes...">' + escapeHtml(cur.content || '') + '</textarea>' +
+                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveSession()">Save</button>' +
+                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'sessions\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
+                '</div>';
+            detailEl.scrollTop = 0;
+        } else {
+            detailEl.innerHTML = '<p class="notes-detail-empty">Select or create a session</p>';
+        }
+        return;
+    }
+
+    if (sectionId === 'npcs') {
+        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
+        var listEl = document.getElementById('notesList');
+        var detailEl = document.getElementById('notesDetail');
+        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'npcs\')">+ Add NPC</button>';
+        list.forEach(function(n) {
+            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === n.id ? ' active' : '') + '" data-id="' + escapeHtml(n.id) + '">' + (n.alive !== false ? '👤' : '💀') + ' ' + escapeHtml(n.name || 'Unnamed') + '</div>';
+        });
+        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
+            el.onclick = function() {
+                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
+                renderNotesTabContent();
+            };
+        });
+        if (cur) {
+            detailEl.innerHTML = '<div class="notes-detail-fields">' +
+                '<span class="notes-field-label">Name</span><input type="text" id="notesNpcName" value="' + escapeHtml(cur.name || '') + '" placeholder="Name">' +
+                '<span class="notes-field-label">Race</span><input type="text" id="notesNpcRace" value="' + escapeHtml(cur.race || '') + '" placeholder="Race">' +
+                '<span class="notes-field-label">Role</span><input type="text" id="notesNpcRole" value="' + escapeHtml(cur.role || '') + '" placeholder="Role">' +
+                '<span class="notes-field-label">Location</span><input type="text" id="notesNpcLocation" value="' + escapeHtml(cur.location || '') + '" placeholder="Location">' +
+                '<span class="notes-field-label">Disposition</span><select id="notesNpcDisposition"><option value="Friendly"' + (cur.disposition === 'Friendly' ? ' selected' : '') + '>Friendly</option><option value="Neutral"' + (cur.disposition === 'Neutral' ? ' selected' : '') + '>Neutral</option><option value="Hostile"' + (cur.disposition === 'Hostile' ? ' selected' : '') + '>Hostile</option></select>' +
+                '<label><input type="checkbox" id="notesNpcAlive" ' + (cur.alive !== false ? 'checked' : '') + '> Alive</label>' +
+                '<span class="notes-field-label">Personality</span><textarea class="notes-detail-textarea-big" id="notesNpcPersonality" placeholder="Personality / mannerisms">' + escapeHtml(cur.personality || '') + '</textarea>' +
+                '<span class="notes-field-label">Notes</span><textarea class="notes-detail-textarea-big" id="notesNpcNotes" placeholder="Your notes about this NPC">' + escapeHtml(cur.notes || '') + '</textarea>' +
+                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveNpc()">Save</button>' +
+                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'npcs\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
+                '</div>';
+            detailEl.scrollTop = 0;
+        } else {
+            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add an NPC</p>';
+        }
+        return;
+    }
+
+    if (sectionId === 'planets') {
+        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
+        var listEl = document.getElementById('notesList');
+        var detailEl = document.getElementById('notesDetail');
+        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'planets\')">+ Add Planet</button>';
+        list.forEach(function(p) {
+            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === p.id ? ' active' : '') + '" data-id="' + escapeHtml(p.id) + '">🪐 ' + escapeHtml(p.name || 'Unnamed') + '</div>';
+        });
+        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
+            el.onclick = function() {
+                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
+                renderNotesTabContent();
+            };
+        });
+        if (cur) {
+            detailEl.innerHTML = '<div class="notes-detail-fields">' +
+                '<span class="notes-field-label">Name</span><input type="text" id="notesPlanetName" value="' + escapeHtml(cur.name || '') + '" placeholder="Name">' +
+                '<span class="notes-field-label">Type</span><select id="notesPlanetType"><option value="Planet"' + (cur.type === 'Planet' ? ' selected' : '') + '>Planet</option><option value="Moon"' + (cur.type === 'Moon' ? ' selected' : '') + '>Moon</option><option value="Station"' + (cur.type === 'Station' ? ' selected' : '') + '>Station</option><option value="Other"' + (cur.type === 'Other' ? ' selected' : '') + '>Other</option></select>' +
+                '<span class="notes-field-label">Description</span><textarea class="notes-detail-textarea-big" id="notesPlanetDescription" placeholder="Description">' + escapeHtml(cur.description || '') + '</textarea>' +
+                '<span class="notes-field-label">Notes</span><textarea class="notes-detail-textarea-big" id="notesPlanetNotes" placeholder="Your notes">' + escapeHtml(cur.notes || '') + '</textarea>' +
+                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSavePlanet()">Save</button>' +
+                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'planets\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
+                '</div>';
+            detailEl.scrollTop = 0;
+        } else {
+            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add a planet</p>';
+        }
+        return;
+    }
+
+    if (sectionId === 'locations') {
+        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
+        var listEl = document.getElementById('notesList');
+        var detailEl = document.getElementById('notesDetail');
+        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'locations\')">+ Add Location</button>';
+        list.forEach(function(l) {
+            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === l.id ? ' active' : '') + '" data-id="' + escapeHtml(l.id) + '">🏰 ' + escapeHtml(l.name || 'Unnamed') + '</div>';
+        });
+        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
+            el.onclick = function() {
+                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
+                renderNotesTabContent();
+            };
+        });
+        if (cur) {
+            detailEl.innerHTML = '<div class="notes-detail-fields">' +
+                '<span class="notes-field-label">Name</span><input type="text" id="notesLocName" value="' + escapeHtml(cur.name || '') + '" placeholder="Name">' +
+                '<span class="notes-field-label">Type</span><select id="notesLocType"><option value="Town"' + (cur.type === 'Town' ? ' selected' : '') + '>Town</option><option value="City"' + (cur.type === 'City' ? ' selected' : '') + '>City</option><option value="Dungeon"' + (cur.type === 'Dungeon' ? ' selected' : '') + '>Dungeon</option><option value="Forest"' + (cur.type === 'Forest' ? ' selected' : '') + '>Forest</option><option value="Other"' + (cur.type === 'Other' ? ' selected' : '') + '>Other</option></select>' +
+                '<span class="notes-field-label">Description</span><textarea class="notes-detail-textarea-big" id="notesLocDescription" placeholder="Description">' + escapeHtml(cur.description || '') + '</textarea>' +
+                '<span class="notes-field-label">Notes</span><textarea class="notes-detail-textarea-big" id="notesLocNotes" placeholder="Your notes">' + escapeHtml(cur.notes || '') + '</textarea>' +
+                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveLocation()">Save</button>' +
+                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'locations\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
+                '</div>';
+            detailEl.scrollTop = 0;
+        } else {
+            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add a location</p>';
+        }
+        return;
+    }
+
+    if (sectionId === 'quests') {
+        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
+        var listEl = document.getElementById('notesList');
+        var detailEl = document.getElementById('notesDetail');
+        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'quests\')">+ New Quest</button>';
+        list.forEach(function(q) {
+            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === q.id ? ' active' : '') + '" data-id="' + escapeHtml(q.id) + '">📋 ' + escapeHtml(q.title || 'Untitled') + '</div>';
+        });
+        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
+            el.onclick = function() {
+                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
+                renderNotesTabContent();
+            };
+        });
+        if (cur) {
+            detailEl.innerHTML = '<div class="notes-detail-fields">' +
+                '<span class="notes-field-label">Quest title</span><input type="text" id="notesQuestTitle" value="' + escapeHtml(cur.title || '') + '" placeholder="Quest title">' +
+                '<span class="notes-field-label">Status</span><select id="notesQuestStatus"><option value="Active"' + (cur.status === 'Active' ? ' selected' : '') + '>Active</option><option value="Completed"' + (cur.status === 'Completed' ? ' selected' : '') + '>Completed</option><option value="Failed"' + (cur.status === 'Failed' ? ' selected' : '') + '>Failed</option><option value="Paused"' + (cur.status === 'Paused' ? ' selected' : '') + '>Paused</option></select>' +
+                '<span class="notes-field-label">Quest giver</span><input type="text" id="notesQuestGiver" value="' + escapeHtml(cur.giver || '') + '" placeholder="Quest giver">' +
+                '<span class="notes-field-label">Description</span><textarea class="notes-detail-textarea-big" id="notesQuestDescription" placeholder="Description">' + escapeHtml(cur.description || '') + '</textarea>' +
+                '<span class="notes-field-label">Unresolved threads</span><textarea class="notes-detail-textarea-big" id="notesQuestThreads" placeholder="Unresolved threads">' + escapeHtml(cur.threads || '') + '</textarea>' +
+                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveQuest()">Save</button>' +
+                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'quests\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
+                '</div>';
+            detailEl.scrollTop = 0;
+        } else {
+            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add a quest</p>';
+        }
+    }
+}
+
+function campaignNotesAdd(sectionId) {
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    var data = getCampaignNotes(characterId);
+    var list = (data[sectionId] || []).slice();
+    var id = notesUid();
+    if (sectionId === 'sessions') {
+        list.push({ id: id, title: 'Session ' + (list.length + 1), date: new Date().toLocaleDateString(), content: '', summary: '' });
+    } else if (sectionId === 'npcs') {
+        list.push({ id: id, name: 'New NPC', race: '', role: '', location: '', disposition: 'Neutral', personality: '', notes: '', relationships: '', alive: true });
+    } else if (sectionId === 'planets') {
+        list.push({ id: id, name: 'New Planet', type: 'Planet', description: '', notes: '' });
+    } else if (sectionId === 'locations') {
+        list.push({ id: id, name: 'New Location', type: 'Town', description: '', notes: '', npcsHere: '', danger: 'Low' });
+    } else if (sectionId === 'quests') {
+        list.push({ id: id, title: 'New Quest', status: 'Active', giver: '', description: '', rewards: '', threads: '' });
+    }
+    data[sectionId] = list;
+    saveCampaignNotes(characterId, data);
+    try { localStorage.setItem('campaignNotesActive_' + characterId + '_' + sectionId, id); } catch (e) {}
+    renderNotesTabContent();
+}
+function campaignNotesDelete(sectionId, id) {
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    var data = getCampaignNotes(characterId);
+    var list = (data[sectionId] || []).filter(function(x) { return x.id !== id; });
+    data[sectionId] = list;
+    saveCampaignNotes(characterId, data);
+    try { localStorage.removeItem('campaignNotesActive_' + characterId + '_' + sectionId); } catch (e) {}
+    renderNotesTabContent();
+}
+function campaignNotesSaveSession() {
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    var data = getCampaignNotes(characterId);
+    var cur = (data.sessions || []).find(function(s) { return s.id === localStorage.getItem('campaignNotesActive_' + characterId + '_sessions'); });
+    if (!cur) return;
+    cur.title = (document.getElementById('notesSessionTitle') && document.getElementById('notesSessionTitle').value) || cur.title;
+    cur.date = (document.getElementById('notesSessionDate') && document.getElementById('notesSessionDate').value) || cur.date;
+    cur.content = (document.getElementById('notesSessionContent') && document.getElementById('notesSessionContent').value) || cur.content;
+    saveCampaignNotes(characterId, data);
+    renderNotesTabContent();
+}
+function campaignNotesSaveNpc() {
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    var data = getCampaignNotes(characterId);
+    var cur = (data.npcs || []).find(function(n) { return n.id === localStorage.getItem('campaignNotesActive_' + characterId + '_npcs'); });
+    if (!cur) return;
+    var nameEl = document.getElementById('notesNpcName'); var raceEl = document.getElementById('notesNpcRace'); var roleEl = document.getElementById('notesNpcRole'); var locEl = document.getElementById('notesNpcLocation');
+    var dispEl = document.getElementById('notesNpcDisposition'); var aliveEl = document.getElementById('notesNpcAlive'); var persEl = document.getElementById('notesNpcPersonality'); var notesEl = document.getElementById('notesNpcNotes');
+    if (nameEl) cur.name = nameEl.value; if (raceEl) cur.race = raceEl.value; if (roleEl) cur.role = roleEl.value; if (locEl) cur.location = locEl.value;
+    if (dispEl) cur.disposition = dispEl.value; if (aliveEl) cur.alive = aliveEl.checked; if (persEl) cur.personality = persEl.value; if (notesEl) cur.notes = notesEl.value;
+    saveCampaignNotes(characterId, data);
+    renderNotesTabContent();
+}
+function campaignNotesSavePlanet() {
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    var data = getCampaignNotes(characterId);
+    var cur = (data.planets || []).find(function(p) { return p.id === localStorage.getItem('campaignNotesActive_' + characterId + '_planets'); });
+    if (!cur) return;
+    var nameEl = document.getElementById('notesPlanetName'); var typeEl = document.getElementById('notesPlanetType'); var descEl = document.getElementById('notesPlanetDescription'); var notesEl = document.getElementById('notesPlanetNotes');
+    if (nameEl) cur.name = nameEl.value; if (typeEl) cur.type = typeEl.value; if (descEl) cur.description = descEl.value; if (notesEl) cur.notes = notesEl.value;
+    saveCampaignNotes(characterId, data);
+    renderNotesTabContent();
+}
+function campaignNotesSaveLocation() {
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    var data = getCampaignNotes(characterId);
+    var cur = (data.locations || []).find(function(l) { return l.id === localStorage.getItem('campaignNotesActive_' + characterId + '_locations'); });
+    if (!cur) return;
+    var nameEl = document.getElementById('notesLocName'); var typeEl = document.getElementById('notesLocType'); var descEl = document.getElementById('notesLocDescription'); var notesEl = document.getElementById('notesLocNotes');
+    if (nameEl) cur.name = nameEl.value; if (typeEl) cur.type = typeEl.value; if (descEl) cur.description = descEl.value; if (notesEl) cur.notes = notesEl.value;
+    saveCampaignNotes(characterId, data);
+    renderNotesTabContent();
+}
+function campaignNotesSaveQuest() {
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    var data = getCampaignNotes(characterId);
+    var cur = (data.quests || []).find(function(q) { return q.id === localStorage.getItem('campaignNotesActive_' + characterId + '_quests'); });
+    if (!cur) return;
+    var titleEl = document.getElementById('notesQuestTitle'); var statusEl = document.getElementById('notesQuestStatus'); var giverEl = document.getElementById('notesQuestGiver');
+    var descEl = document.getElementById('notesQuestDescription'); var threadsEl = document.getElementById('notesQuestThreads');
+    if (titleEl) cur.title = titleEl.value; if (statusEl) cur.status = statusEl.value; if (giverEl) cur.giver = giverEl.value;
+    if (descEl) cur.description = descEl.value; if (threadsEl) cur.threads = threadsEl.value;
+    saveCampaignNotes(characterId, data);
+    renderNotesTabContent();
 }
 
 // Toggle the action bar on/off (called by the gold Action Bar button)
@@ -4209,6 +4534,9 @@ function populatePlayerActionBar() {
             '</div>' +
             '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
             '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
+            '</div>' +
+            '<div class="player-bar-tab-panel" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">' +
+            '<div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>' +
             '</div></div>';
     }
     // Bind tab clicks and restore saved tab (tabBar already in scope)
@@ -4217,7 +4545,7 @@ function populatePlayerActionBar() {
             btn.onclick = function() { switchPlayerActionBarTab(this.dataset.tab); };
         });
         const savedTab = localStorage.getItem('playerActionBarTab');
-        if (savedTab && ['combat', 'abilities', 'powers', 'dice'].indexOf(savedTab) >= 0) {
+        if (savedTab && ['combat', 'abilities', 'powers', 'dice', 'notes'].indexOf(savedTab) >= 0) {
             switchPlayerActionBarTab(savedTab);
         }
     }
