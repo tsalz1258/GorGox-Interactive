@@ -857,6 +857,84 @@ body.player-action-bar-visible .main-container {
     transform: translateY(0);
 }
 
+/* Character sheet attack list: .panel button { width:100% } must not apply to inline row actions */
+.panel button.sheet-remove-attack-btn,
+.panel button.sheet-add-attack-btn {
+    width: auto;
+    max-width: 100%;
+    margin: 0;
+    flex-shrink: 0;
+    align-self: flex-start;
+}
+
+.panel button.sheet-remove-attack-btn {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 140, 140, 0.45);
+    background: rgba(160, 42, 42, 0.5);
+    color: #f8f0f0;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.panel button.sheet-remove-attack-btn:hover {
+    background: rgba(200, 58, 58, 0.72);
+    border-color: rgba(255, 180, 180, 0.65);
+    transform: none;
+}
+
+.panel button.sheet-add-attack-btn:hover {
+    background: #ffa64d;
+    color: #000;
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+}
+
+.sheet-attack-row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 10px;
+    flex-wrap: nowrap;
+}
+
+.sheet-attack-row .sheet-attack-roll {
+    flex: 1 1 0;
+    min-width: 0;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease;
+    border-radius: 4px;
+    padding: 2px 4px 2px 0;
+    margin: -2px 0;
+}
+
+.sheet-attack-row .sheet-attack-name {
+    font-weight: 700;
+    font-size: 15px;
+    line-height: 1.3;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.sheet-attack-row .sheet-attack-stats {
+    font-size: 13px;
+    margin-top: 6px;
+    line-height: 1.45;
+    flex-wrap: wrap;
+    gap: 4px 0;
+}
+
+.sheet-attack-row .sheet-attack-meta {
+    font-size: 11px;
+    line-height: 1.45;
+    margin-top: 4px;
+    opacity: 0.72;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
 /* Map Container */
 .map-container {
     flex: 1;

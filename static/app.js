@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v29'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v35'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 var lastActionBarScrollBeforeClick = null; // Capture scroll on mousedown so we restore to pre-click position (avoid grid dragging down)
 var actionBarScrollLockUntil = 0; // Until this timestamp, we force-restore scroll on any scroll event (stops grid drag)
 (function () { try { console.log('%c[GorGox] app.js ' + APP_UI_VERSION + ' loaded', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
@@ -743,13 +743,13 @@ function handleServerMessage(message) {
             if (isDiceRoll) {
                 // Flat dice roll - add once from server broadcast (we no longer add locally to avoid duplicates)
                 const diceType = abilityName;
-                addRollEntry(`🎲 ${message.character_name} rolled ${diceType}: ${message.roll}`, false, false);
+                addRollEntry(`🎲 ${formatRollCharacterName(message.character_name)} rolled ${diceType}: ${message.roll}`, false, false);
             } else {
                 const rollDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
                 const isAbilityNat20 = message.roll === 20;
                 const isAbilityNat1 = message.roll === 1;
                 const abilityNatText = isAbilityNat20 ? ' ✨ NATURAL 20!' : (isAbilityNat1 ? ' ❌ NATURAL 1!' : '');
-                addRollEntry(`🎲 ${message.character_name} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
+                addRollEntry(`🎲 ${formatRollCharacterName(message.character_name)} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
                 if (isAbilityNat20) playNat20Sound();
                 else if (isAbilityNat1) playNat1Sound();
             }
@@ -762,7 +762,7 @@ function handleServerMessage(message) {
             const isSaveNat20 = message.roll === 20;
             const isSaveNat1 = message.roll === 1;
             const saveNatText = isSaveNat20 ? ' ✨ NATURAL 20!' : (isSaveNat1 ? ' ❌ NATURAL 1!' : '');
-            addRollEntry(`🛡️ ${message.character_name} rolled ${saveName} save: ${saveDisplay} = ${message.total}${saveNatText}`, isSaveNat20, isSaveNat1);
+            addRollEntry(`🛡️ ${formatRollCharacterName(message.character_name)} rolled ${saveName} save: ${saveDisplay} = ${message.total}${saveNatText}`, isSaveNat20, isSaveNat1);
             if (isSaveNat20) playNat20Sound();
             else if (isSaveNat1) playNat1Sound();
             break;
@@ -773,7 +773,7 @@ function handleServerMessage(message) {
             const isSkillNat20 = message.roll === 20;
             const isSkillNat1 = message.roll === 1;
             const skillNatText = isSkillNat20 ? ' ✨ NATURAL 20!' : (isSkillNat1 ? ' ❌ NATURAL 1!' : '');
-            addRollEntry(`🎯 ${message.character_name} rolled ${message.skill}: ${skillDisplay} = ${message.total}${skillNatText}`, isSkillNat20, isSkillNat1);
+            addRollEntry(`🎯 ${formatRollCharacterName(message.character_name)} rolled ${message.skill}: ${skillDisplay} = ${message.total}${skillNatText}`, isSkillNat20, isSkillNat1);
             if (isSkillNat20) playNat20Sound();
             else if (isSkillNat1) playNat1Sound();
             break;
@@ -784,7 +784,7 @@ function handleServerMessage(message) {
             const isCrit = message.to_hit_roll === 20;
             const isFail = message.to_hit_roll === 1;
             const critText = isCrit ? ' 🎉 CRITICAL HIT! ✨ NATURAL 20!' : (isFail ? ' ❌ CRITICAL MISS! NATURAL 1!' : '');
-            addRollEntry(`⚔️ ${message.character_name} attacks with ${message.weapon}: To Hit ${hitDisplay} = ${message.to_hit_total} | Damage: ${message.damage} ${message.damage_type}${critText}`, isCrit, isFail);
+            addRollEntry(`⚔️ ${formatRollCharacterName(message.character_name)} attacks with ${message.weapon}: To Hit ${hitDisplay} = ${message.to_hit_total} | Damage: ${message.damage} ${message.damage_type}${critText}`, isCrit, isFail);
             if (isCrit) playNat20Sound();
             else if (isFail) playNat1Sound();
             break;
@@ -3946,8 +3946,8 @@ function populateCombatActionPanel() {
     // Populate quick actions
     populateQuickActions();
     
-    // Populate attacks
-    populateAttacks(charData);
+    // Populate attacks (merge equipped weapons from item DB)
+    populateAttacks(charData, myCharacter);
     
     // Populate bonus actions
     populateBonusActions(charData);
@@ -4585,7 +4585,8 @@ function populatePlayerActionBar() {
 
     const maxHP = charData.hp?.max || myCharacter.max_hp || 100;
     const currentHP = myCharacter.current_hp !== undefined && myCharacter.current_hp !== null ? myCharacter.current_hp : maxHP;
-    const ac = charData.ac?.base || myCharacter.armor_class || 10;
+    const equipEff = recomputeEquipmentBonuses(charData, myCharacter);
+    const ac = equipEff.ac;
 
     // Collect tech/force powers and points early (used in Combat tab and Powers tab)
     const allTechPowers = [];
@@ -4790,10 +4791,10 @@ function populatePlayerActionBar() {
         });
     }
 
-    // Attacks: from character sheet (charData.attacks), support to_hit or toHit
+    // Attacks: character sheet + equipped weapons (SW5e item DB)
     const attacksEl = document.getElementById('playerBarAttacks');
     if (attacksEl) {
-        const attacks = charData.attacks || [];
+        const attacks = equipEff.attacks;
         let html = '<span class="section-label">Attacks</span><div class="bar-scroll">';
         if (attacks.length === 0) {
             html += '<span style="font-size:10px;opacity:0.6;">None</span>';
@@ -4803,7 +4804,8 @@ function populatePlayerActionBar() {
                 const toHit = atk.to_hit !== undefined ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : 0);
                 const dmg = atk.damage || atk.damage_dice || '1d4';
                 const dmgType = atk.type || atk.damage_type || 'damage';
-                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + '</button>';
+                const rangeStr = (atk.range && String(atk.range).trim()) ? String(atk.range).trim() : '';
+                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '" data-range="' + escapeHtml(rangeStr) + '">' + escapeHtml(name) + '</button>';
             });
         }
         html += '</div>';
@@ -5138,13 +5140,14 @@ function populateQuickActions() {
 }
 
 // Populate attacks from character sheet
-function populateAttacks(charData) {
+function populateAttacks(charData, charForEquip) {
     const formatMod = (mod) => (mod >= 0 ? '+' + mod : '' + mod);
     console.log('⚔️ POPULATING ATTACKS for:', charData.name);
     const attacksSection = document.getElementById('attacksSection');
     const attacksList = document.getElementById('attacksList');
-    
-    const attacks = charData.attacks || [];
+    const char = charForEquip || characters.find(c => c.id === myCharacterId);
+    const eff = char ? recomputeEquipmentBonuses(charData, char) : { attacks: charData.attacks || [], ac: charData.ac?.base || 10 };
+    const attacks = eff.attacks;
     console.log('🗡️ Found attacks:', attacks.length, attacks);
     if (attacks.length === 0) {
         console.log('❌ No attacks found for:', charData.name);
@@ -5159,8 +5162,9 @@ function populateAttacks(charData) {
         const btn = document.createElement('button');
         btn.style.cssText = 'padding: 10px; background: linear-gradient(135deg, rgba(255,68,68,0.2) 0%, rgba(200,50,50,0.2) 100%); border: 1px solid #ff4444; border-radius: 5px; color: #fff; cursor: pointer; font-size: 12px; text-align: left; transition: all 0.2s;';
         
-        const toHit = attack.to_hit !== undefined ? formatMod(attack.to_hit) : '+0';
-        const damage = attack.damage || '1d4';
+        const thVal = attack.to_hit !== undefined && attack.to_hit !== null ? attack.to_hit : (attack.toHit !== undefined ? attack.toHit : 0);
+        const toHit = formatMod(thVal);
+        const damage = (attack.damage && String(attack.damage).trim() !== '—') ? attack.damage : (attack.damage_dice || '1d4');
         const damageType = attack.type || 'bludgeoning';
         
         btn.innerHTML = `
@@ -5181,7 +5185,7 @@ function populateAttacks(charData) {
         };
         
         btn.onclick = function() {
-            const toHitMod = attack.to_hit || 0;
+            const toHitMod = attack.to_hit !== undefined && attack.to_hit !== null ? attack.to_hit : (attack.toHit || 0);
             rollAttack(attack.name, toHitMod, damage, damageType, myPlayerName);
         };
         
@@ -9960,19 +9964,27 @@ function isPlayerCharacter(name) {
 }
 
 // Helper function to format message text - bold player names
+function formatRollCharacterName(raw) {
+    if (raw == null) return 'Unknown character';
+    const s = String(raw).trim();
+    return s || 'Unknown character';
+}
+
 function formatLogMessage(message) {
     if (!message || !characters || characters.length === 0) return message;
-    
+
     let formatted = message;
-    
+
     // Sort characters by name length (longest first) to avoid partial matches
     const sortedChars = [...characters].sort((a, b) => b.name.length - a.name.length);
-    
+
     // Find all potential player names in the message and bold them
     sortedChars.forEach(char => {
         const name = char.name;
         if (!name || name.trim() === '') return;
-        
+        // Avoid matching 1–2 character names inside words like "rolled", "attacks", etc.
+        if (name.trim().length < 3) return;
+
         // Escape special regex characters in the name
         const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         
@@ -11054,12 +11066,25 @@ function setupCharacterSheetRollHandlers(container) {
     if (container._sheetRollHandlerAttached) return;
     container._sheetRollHandlerAttached = true;
     container.addEventListener('click', function(e) {
+        const rem = e.target.closest('.sheet-remove-attack-btn');
+        if (rem) {
+            e.preventDefault();
+            e.stopPropagation();
+            const cid = rem.getAttribute('data-char-id') || '';
+            const aid = (rem.getAttribute('data-attack-id') || '').trim();
+            const sig = (rem.getAttribute('data-attack-sig') || '').trim();
+            removeUserAttackFromSheet(cid, aid || null, sig || null);
+            return;
+        }
         const el = e.target.closest('[data-sheet-roll]');
         if (!el) return;
         e.preventDefault();
         e.stopPropagation();
         const kind = el.getAttribute('data-sheet-roll');
-        const charName = el.getAttribute('data-char-name') || '';
+        let charName = (el.getAttribute('data-char-name') || '').trim();
+        if (!charName && currentViewingCharacter) {
+            charName = getCharacterDisplayName(currentViewingCharacterData?.name, currentViewingCharacter.name);
+        }
         if (!charName) return;
         if (kind === 'ability') {
             const ab = el.getAttribute('data-ability');
@@ -11093,7 +11118,10 @@ function setupDiceRollButtons(container) {
     }
     
     console.log('✅ Found dice roll container:', diceContainer);
-    const characterName = diceContainer.getAttribute('data-character-name');
+    let characterName = (diceContainer.getAttribute('data-character-name') || '').trim();
+    if (!characterName && currentViewingCharacter) {
+        characterName = getCharacterDisplayName(currentViewingCharacterData?.name, currentViewingCharacter.name);
+    }
     console.log('📝 Character name:', characterName);
     
     // Remove any existing listeners to prevent duplicates
@@ -11112,7 +11140,10 @@ function setupDiceRollButtons(container) {
         }
         
         const sides = parseInt(button.getAttribute('data-sides'));
-        const charName = newContainer.getAttribute('data-character-name');
+        let charName = (newContainer.getAttribute('data-character-name') || '').trim();
+        if (!charName && currentViewingCharacter) {
+            charName = getCharacterDisplayName(currentViewingCharacterData?.name, currentViewingCharacter.name);
+        }
         
         console.log(`🎲 Dice button clicked: D${sides} for ${charName}`);
         
@@ -11343,12 +11374,12 @@ function rollAttack(weaponName, toHitMod, damageNotation, damageType, characterN
 
 // Build dice roll section for character sheet
 function buildDiceRollSection(char, charData) {
-    const charName = charData?.name || char.name;
-    const escapedName = escapeJs(charName);
+    const charName = getCharacterDisplayName(charData?.name, char.name);
+    const charNameAttr = escapeHtml(charName);
     
     let html = `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
         <h4 style="color: #aa88ff;">🎲 Dice Rolls <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
-        <div class="dice-roll-container" data-character-name="${escapedName}" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">`;
+        <div class="dice-roll-container" data-character-name="${charNameAttr}" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">`;
     
     const diceTypes = [
         { sides: 4, label: 'D4', color: '#4a9eff' },
@@ -11468,11 +11499,11 @@ function buildSavingThrowsSection(char, charData) {
         const profSymbol = isProficient ? '●' : '○';
         const profColor = isProficient ? '#44ff44' : '#888';
         
-        const charName = charData?.name || char.name;
-        const escapedName = escapeJs(charName);
+        const charName = getCharacterDisplayName(charData?.name, char.name);
+        const charNameAttr = escapeHtml(charName);
         const abilityName = abilityLabels[ab];
         
-        html += `<div data-sheet-roll="save" data-ability="${ab}" data-mod="${saveMod}" data-char-name="${escapedName}" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(255,170,68,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
+        html += `<div data-sheet-roll="save" data-ability="${ab}" data-mod="${saveMod}" data-char-name="${charNameAttr}" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(255,170,68,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
             <span style="font-size: 13px;">
                 <span style="color: ${profColor}; margin-right: 5px;">${profSymbol}</span>
                 ${abilityName}
@@ -11613,10 +11644,10 @@ function buildSkillsSection(char, charData) {
             const profSymbol = hasExpertise ? '◆' : (isProficient ? '●' : '○');
             const profColor = hasExpertise ? '#ffaa44' : (isProficient ? '#44ff44' : '#888');
             
-            const charName = charData?.name || char.name;
-            const escapedCharName = escapeJs(charName);
-            const escapedSkillName = escapeJs(skill.name);
-            html += `<div data-sheet-roll="skill" data-skill-name="${escapedSkillName}" data-mod="${skillMod}" data-char-name="${escapedCharName}" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(74,158,255,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
+            const charName = getCharacterDisplayName(charData?.name, char.name);
+            const charNameAttr = escapeHtml(charName);
+            const skillNameAttr = escapeHtml(skill.name);
+            html += `<div data-sheet-roll="skill" data-skill-name="${skillNameAttr}" data-mod="${skillMod}" data-char-name="${charNameAttr}" style="padding: 8px; background: rgba(255,255,255,0.03); border-radius: 3px; cursor: pointer; transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;" onmouseover="this.style.background='rgba(74,158,255,0.15)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'; this.style.transform='translateX(0)'">
                 <span style="font-size: 13px;">
                     <span style="color: ${profColor}; margin-right: 5px;">${profSymbol}</span>
                     ${skill.name}
@@ -12054,8 +12085,12 @@ function renderCharacterSheetContent() {
         if (looksStarWars && (!forcePowersLoaded || !forcePowersCache || Object.keys(forcePowersCache).length === 0)) {
             loadForcePowers();
         }
-        // Load equipment data
-        loadAllEquipment();
+        // Load weapon/armor caches for tooltips + equip (any sheet with inventory)
+        if (Array.isArray(data.equipment) && data.equipment.length > 0) {
+            loadAllEquipment();
+        } else if (looksStarWars) {
+            loadAllEquipment();
+        }
     }
     
     if (characterEditMode) {
@@ -12471,7 +12506,8 @@ function getCharacterDisplayName(rawName, fallback) {
         const after = parts[parts.length - 1].trim();
         if (after) return after;
     }
-    return s || (fallback != null && fallback !== '') ? String(fallback) : 'Character';
+    if (s) return s;
+    return (fallback != null && fallback !== '') ? String(fallback) : 'Character';
 }
 
 function getCharacterSheetTitle(char, charData) {
@@ -13001,6 +13037,9 @@ function buildDetailedCharacterSheet(char, charData) {
     // Get inspiration value (default to false if not set)
     const hasInspiration = charData.inspiration === true;
     const escapedCharId = escapeJs(char.id);
+    const sheetCombat = recomputeEquipmentBonuses(charData, char);
+    const showEquipControls = canEditCharacterEquipment(char);
+    const sheetRollCharNameAttr = escapeHtml(getCharacterDisplayName(charData?.name, char.name));
     
     html += `<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 15px; margin-bottom: 15px;">
         <div class="panel" style="padding: 15px;">
@@ -13042,9 +13081,8 @@ function buildDetailedCharacterSheet(char, charData) {
             const ab = abilityNames[name];
             const mod = Math.floor((score - 10) / 2);
             if (ab) {
-                const escapedName = escapeJs(charData.name);
                 html += `<div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">
-                    <div data-sheet-roll="ability" data-ability="${ab}" data-mod="${mod}" data-char-name="${escapedName}" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
+                    <div data-sheet-roll="ability" data-ability="${ab}" data-mod="${mod}" data-char-name="${sheetRollCharNameAttr}" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
                         <div style="font-size: 24px; font-weight: bold;">${score}</div>
                         <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase;">${ab}</div>
                         <div style="font-size: 12px; margin-top: 5px;">${formatMod(mod)}</div>
@@ -13061,14 +13099,13 @@ function buildDetailedCharacterSheet(char, charData) {
         ['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ab => {
             const ability = charData.abilities[ab];
             if (ability) {
-                const escapedName = escapeJs(charData.name);
                 html += `<div style="text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">
-                    <div data-sheet-roll="ability" data-ability="${ab}" data-mod="${ability.mod}" data-char-name="${escapedName}" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
+                    <div data-sheet-roll="ability" data-ability="${ab}" data-mod="${ability.mod}" data-char-name="${sheetRollCharNameAttr}" style="cursor: pointer; transition: all 0.2s;" onmouseover="this.style.color='#4a9eff'; this.style.transform='scale(1.1)'" onmouseout="this.style.color=''; this.style.transform='scale(1)'">
                         <div style="font-size: 24px; font-weight: bold;">${ability.score}</div>
                         <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase;">${ab}</div>
                         <div style="font-size: 12px; margin-top: 5px;">${formatMod(ability.mod)}</div>
                     </div>
-                    <div data-sheet-roll="save" data-ability="${ab}" data-mod="${ability.save}" data-char-name="${escapedName}" style="font-size: 11px; color: ${ability.save_proficient ? '#44ff44' : '#888'}; margin-top: 5px; cursor: pointer; padding: 3px; border-radius: 3px; transition: all 0.2s;" onmouseover="this.style.background='rgba(74,158,255,0.2)'; this.style.transform='scale(1.05)'" onmouseout="this.style.background=''; this.style.transform='scale(1)'">
+                    <div data-sheet-roll="save" data-ability="${ab}" data-mod="${ability.save}" data-char-name="${sheetRollCharNameAttr}" style="font-size: 11px; color: ${ability.save_proficient ? '#44ff44' : '#888'}; margin-top: 5px; cursor: pointer; padding: 3px; border-radius: 3px; transition: all 0.2s;" onmouseover="this.style.background='rgba(74,158,255,0.2)'; this.style.transform='scale(1.05)'" onmouseout="this.style.background=''; this.style.transform='scale(1)'">
                         ${ability.save_proficient ? '●' : '○'} Save: ${formatMod(ability.save)}
                     </div>
                 </div>`;
@@ -13084,7 +13121,7 @@ function buildDetailedCharacterSheet(char, charData) {
     html += `<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
         <div class="panel" style="padding: 15px; text-align: center;">
             <div style="font-size: 11px; opacity: 0.7;">AC</div>
-            <div style="font-size: 28px; font-weight: bold; color: #4a9eff;">${charData.ac?.base || char.armor_class}</div>
+            <div style="font-size: 28px; font-weight: bold; color: #4a9eff;">${sheetCombat.ac}</div>
         </div>
         <div class="panel" style="padding: 15px; text-align: center;">
             <div style="font-size: 11px; opacity: 0.7;">INIT</div>
@@ -13107,31 +13144,90 @@ function buildDetailedCharacterSheet(char, charData) {
     // Skills Section
     html += buildSkillsSection(char, charData);
     
-    // Attacks
-    if (charData.attacks && charData.attacks.length > 0) {
+    // Add custom attack (player / DM for this character)
+    if (showEquipControls) {
+        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+            <h4 style="color: #ff8844;">➕ Add attack (action bar)</h4>
+            <p style="font-size: 11px; opacity: 0.75; margin: 0 0 8px 0;">Adds a roll button on your action bar and here. <strong>Remove</strong> appears on attacks that are <em>not</em> from equipped gear (including ones you add here). Equipped-weapon rows cannot be removed here.</p>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
+                <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Name</span>
+                    <input id="sheetAddAttackName" type="text" placeholder="e.g. Vibroknife" style="padding:6px;min-width:140px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">To hit</span>
+                    <input id="sheetAddAttackHit" type="text" placeholder="+5" style="padding:6px;width:56px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Damage</span>
+                    <input id="sheetAddAttackDmg" type="text" placeholder="1d6" style="padding:6px;width:72px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Type</span>
+                    <input id="sheetAddAttackType" type="text" placeholder="Energy" style="padding:6px;width:88px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                <button type="button" class="sheet-add-attack-btn" onclick="addCustomAttackFromSheet('${escapedCharId}')" style="padding: 8px 14px; background: #ff8844; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">Add</button>
+            </div>
+        </div>`;
+    }
+    
+    // Attacks (imported + equipped weapons from item DB)
+    if (sheetCombat.attacks && sheetCombat.attacks.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ff4444;">⚔️ Attacks <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>`;
-        charData.attacks.forEach((atk, atkIndex) => {
-            if (atk.name && atk.to_hit !== null && atk.damage) {
-                const weaponName = `${atk.name}${atk.magic_bonus ? ' +' + atk.magic_bonus : ''}`;
-                const escapedWeapon = escapeJs(weaponName);
-                const escapedName = escapeJs(charData.name);
-                const escapedDamage = escapeJs(atk.damage);
-                const escapedType = escapeJs(atk.type || 'damage');
-                
-                html += `<div data-sheet-roll="attack" data-weapon="${escapedWeapon}" data-to-hit="${atk.to_hit}" data-damage="${escapedDamage}" data-damage-type="${escapedType}" data-char-name="${escapedName}" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'">
-                    <div style="font-weight: bold; font-size: 15px;">${weaponName}</div>
-                    <div style="font-size: 13px; margin-top: 5px;">
-                        <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(atk.to_hit)}</span> | 
-                        <span style="color: #ffaa44;">💥 Damage: ${atk.damage}</span> 
-                        <span style="opacity: 0.7;">${atk.type || ''}</span>
-                    </div>
-                    ${atk.mastery ? `<div style="font-size: 11px; color: #4a9eff; margin-top: 3px;">Mastery: ${atk.mastery}</div>` : ''}
-                    ${atk.properties ? `<div style="font-size: 11px; opacity: 0.6; margin-top: 3px;">${atk.properties.join(', ')}</div>` : ''}
-                </div>`;
-            }
+        sheetCombat.attacks.forEach((atk, atkIndex) => {
+            if (!atk.name) return;
+            let dmgStr = String(atk.damage || atk.damage_dice || '').trim();
+            if (!dmgStr || dmgStr === '—') dmgStr = '1d4';
+            const th = atk.to_hit !== undefined && atk.to_hit !== null ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : null);
+            if (th === null || th === undefined) return;
+            const rollName = `${atk.name}${atk.magic_bonus ? ' +' + atk.magic_bonus : ''}`;
+            const escapedWeapon = escapeHtml(rollName);
+            const escapedDamage = escapeHtml(dmgStr);
+            const escapedType = escapeHtml(atk.type || atk.damage_type || 'damage');
+            const equippedLabel = atk.from_equipment ? '<span style="font-size:10px;opacity:0.6;margin-left:6px">(equipped)</span>' : '';
+            const canRemoveAttack = showEquipControls && !atk.from_equipment;
+            const customLabel = (atk.userAttackId || atk.userAdded) ? '<span style="font-size:10px;opacity:0.6;margin-left:6px">(custom)</span>' : '';
+            const attackSigJson = !atk.userAttackId ? JSON.stringify({ n: atk.name, h: th, d: dmgStr }) : '';
+            const removeBtn = canRemoveAttack
+                ? `<button type="button" class="sheet-remove-attack-btn" data-char-id="${escapeHtml(String(char.id))}" data-attack-id="${atk.userAttackId ? escapeHtml(String(atk.userAttackId)) : ''}" data-attack-sig="${atk.userAttackId ? '' : escapeHtml(attackSigJson)}">Remove</button>`
+                : '';
+            
+            html += `<div class="sheet-attack-row" style="margin:6px 0;padding:10px 12px;background:rgba(255,68,68,0.08);border-left:3px solid #ff4444;border-radius:6px;">
+                <div class="sheet-attack-roll" data-sheet-roll="attack" data-weapon="${escapedWeapon}" data-to-hit="${th}" data-damage="${escapedDamage}" data-damage-type="${escapedType}" data-char-name="${sheetRollCharNameAttr}" onmouseover="this.style.background='rgba(255,68,68,0.14)';this.style.transform='translateX(3px)'" onmouseout="this.style.background='';this.style.transform='translateX(0)'">
+                <div class="sheet-attack-name">${escapeHtml(atk.name)}${atk.magic_bonus ? ' +' + atk.magic_bonus : ''}${equippedLabel}${customLabel}</div>
+                <div class="sheet-attack-stats" style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:10px;row-gap:2px;">
+                    <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(th)}</span>
+                    <span style="opacity:0.45;">·</span>
+                    <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(dmgStr)}</span>
+                    <span style="opacity: 0.75;">${escapeHtml(atk.type || '')}</span>
+                </div>
+                ${atk.mastery ? `<div class="sheet-attack-meta" style="color: #4a9eff; opacity: 0.95;">Mastery: ${escapeHtml(String(atk.mastery))}</div>` : ''}
+                ${atk.properties ? `<div class="sheet-attack-meta">${escapeHtml(atk.properties.join(', '))}</div>` : ''}
+                </div>${removeBtn}
+            </div>`;
         });
         html += `</div>`;
+    }
+    
+    // Equipment (any character with inventory) — NOT inside isStarWars/classes guard so it always shows
+    if (Array.isArray(charData.equipment) && charData.equipment.length > 0) {
+        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+            <h4 style="color: #ffaa44;">🎒 Equipment <span style="font-size: 10px; opacity: 0.6;">(Hover for details${showEquipControls ? '; Equip updates AC & attacks' : ''})</span></h4>
+            ${!showEquipControls && charData.equipment.length ? '<p style="font-size:11px;opacity:0.75;margin:0 0 8px 0;">Equip / Unequip: open this sheet as the <strong>DM</strong>, or select this character as <strong>your</strong> character first, then open the sheet again.</p>' : ''}
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;">`;
+        charData.equipment.forEach((item, eqIdx) => {
+            const itemName = item.name || item;
+            const escapedName = escapeJs(itemName);
+            const equipped = item.equipped ? ' ⭐' : '';
+            const quantity = item.quantity > 1 ? ` x${item.quantity}` : '';
+            let itemType = 'gear';
+            const nameLower = itemName.toLowerCase();
+            if (weaponsCache[nameLower]) itemType = 'weapon';
+            else if (armorCache[nameLower]) itemType = 'armor';
+            else if (gearCache[nameLower]) itemType = 'gear';
+            else if (itemsCache[nameLower]) itemType = 'item';
+            const equipBtn = showEquipControls
+                ? `<button type="button" onclick="event.stopPropagation();toggleEquipmentEquipped('${escapedCharId}',${eqIdx})" style="margin-left:8px;padding:2px 8px;font-size:10px;border-radius:4px;border:1px solid ${item.equipped ? '#888' : '#ffaa44'};background:${item.equipped ? 'rgba(120,120,120,0.3)' : 'rgba(255,170,68,0.25)'};color:#fff;cursor:pointer;flex-shrink:0;">${item.equipped ? 'Unequip' : 'Equip'}</button>`
+                : '';
+            html += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;padding: 6px 10px; background: rgba(255,170,68,0.1); border-radius: 3px; font-size: 12px; border-left: 3px solid ${item.equipped ? '#ffaa44' : 'transparent'};">
+                <span onmouseover="showItemTooltip('${escapedName}', '${itemType}', event)" onmouseout="hideSpellTooltip()" style="cursor: help;">${escapeHtml(itemName)}${quantity}${equipped}</span>
+                ${equipBtn}
+            </div>`;
+        });
+        html += `</div></div>`;
     }
     
     // Star Wars: Power Points tracker (tech / force) — always show so counters are visible
@@ -13238,32 +13334,6 @@ function buildDetailedCharacterSheet(char, charData) {
                 const escapedPower = baseLabel.replace(/'/g, "&apos;").replace(/"/g, "&quot;");
                 const attrPower = powerName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
                 html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,0,255,0.2); border-radius: 3px; font-size: 12px; border: 1px solid rgba(255,0,255,0.4); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,0,255,0.4)'; this.style.borderColor='#ff00ff'" onmouseleave="this.style.background='rgba(255,0,255,0.2)'; this.style.borderColor='rgba(255,0,255,0.4)'">${escapedPower}</div>`;
-            });
-            html += `</div></div>`;
-        }
-        
-        // Equipment with tooltips
-        if (charData.equipment && charData.equipment.length > 0) {
-            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
-                <h4 style="color: #ffaa44;">🎒 Equipment <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
-                <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
-            charData.equipment.forEach(item => {
-                const itemName = item.name || item;
-                const escapedName = escapeJs(itemName);
-                const equipped = item.equipped ? ' ⭐' : '';
-                const quantity = item.quantity > 1 ? ` x${item.quantity}` : '';
-                
-                // Try to determine item type for tooltip
-                let itemType = 'gear'; // default
-                const nameLower = itemName.toLowerCase();
-                if (weaponsCache[nameLower]) itemType = 'weapon';
-                else if (armorCache[nameLower]) itemType = 'armor';
-                else if (gearCache[nameLower]) itemType = 'gear';
-                else if (itemsCache[nameLower]) itemType = 'item';
-                
-                html += `<div onmouseover="showItemTooltip('${escapedName}', '${itemType}', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,170,68,0.1); border-radius: 3px; font-size: 12px; border-left: 3px solid ${item.equipped ? '#ffaa44' : 'transparent'}; cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,170,68,0.25)'; this.style.borderColor='#ffaa44'" onmouseleave="this.style.background='rgba(255,170,68,0.1)'; this.style.borderColor='${item.equipped ? '#ffaa44' : 'transparent'}'">
-                    ${escapeHtml(itemName)}${quantity}${equipped}
-                </div>`;
             });
             html += `</div></div>`;
         }
@@ -14382,6 +14452,273 @@ async function loadAllEquipment() {
         loadManeuvers()
     ]);
 }
+
+/** Parse character_data into { full, data } (handles { character: {...} } wrapper). */
+function parseCharacterDataWrapper(char) {
+    if (!char || !char.character_data) return { full: null, data: null };
+    try {
+        const full = JSON.parse(char.character_data);
+        const data = full && typeof full === 'object' ? (full.character || full) : null;
+        return { full, data };
+    } catch (e) {
+        return { full: null, data: null };
+    }
+}
+
+function serializeCharacterDataWrapper(char, full, data) {
+    if (full && typeof full === 'object' && Object.prototype.hasOwnProperty.call(full, 'character')) {
+        full.character = data;
+        return JSON.stringify(full);
+    }
+    return JSON.stringify(data);
+}
+
+function getDexStrModsFromCharData(charData, char) {
+    const calc = (score) => Math.floor(((Number(score) || 10) - 10) / 2);
+    let dex = 0;
+    let str = 0;
+    if (charData && charData.baseAbilityScores) {
+        const bs = charData.baseAbilityScores;
+        dex = calc(bs.Dexterity || 10);
+        str = calc(bs.Strength || 10);
+    } else if (charData && charData.abilities) {
+        dex = charData.abilities.dex != null ? (charData.abilities.dex.mod != null ? charData.abilities.dex.mod : calc(charData.abilities.dex.score)) : calc(char?.dexterity || 10);
+        str = charData.abilities.str != null ? (charData.abilities.str.mod != null ? charData.abilities.str.mod : calc(charData.abilities.str.score)) : calc(char?.strength || 10);
+    } else {
+        dex = calc(char?.dexterity || 10);
+        str = calc(char?.strength || 10);
+    }
+    return { dex, str };
+}
+
+function splitWeaponDamageString(damageStr) {
+    if (!damageStr || String(damageStr).trim() === '' || String(damageStr).trim() === '—') return { dice: '1d4', type: 'kinetic' };
+    const s = String(damageStr).trim();
+    const m = s.match(/^(.+?)\s+([A-Za-z][A-Za-z\s\-]*)$/);
+    if (m) return { dice: m[1].trim(), type: m[2].trim() };
+    return { dice: s, type: 'kinetic' };
+}
+
+function weaponUsesDexterity(weaponDef) {
+    if (!weaponDef) return true;
+    const type = String(weaponDef.type || '').toLowerCase();
+    const props = String(weaponDef.properties || '').toLowerCase();
+    if (props.includes('finesse')) return true;
+    if (type.includes('blaster') || type.includes('disruptor')) return true;
+    if (type.includes('lightweapon')) return true;
+    if (type.includes('vibro')) return false;
+    return true;
+}
+
+function extractWeaponRangeFeet(properties) {
+    if (!properties) return '';
+    const m = String(properties).match(/range\s+(\d+\/\d+)/i);
+    return m ? m[1] : '';
+}
+
+function parseArmorAcToNumber(acStr, dexMod) {
+    if (acStr == null || acStr === '') return null;
+    const s = String(acStr).trim();
+    if (/^\+\d+$/.test(s)) return null;
+    const pure = s.match(/^(\d+)$/);
+    if (pure) return parseInt(pure[1], 10);
+    const cap = s.match(/^(\d+)\s*\+\s*dex\s*modifier\s*\(max\s*(\d+)\)/i);
+    if (cap) return parseInt(cap[1], 10) + Math.min(dexMod, parseInt(cap[2], 10));
+    const nod = s.match(/^(\d+)\s*\+\s*dex/i);
+    if (nod) return parseInt(nod[1], 10) + dexMod;
+    const any = s.match(/(\d+)/);
+    if (any) return parseInt(any[1], 10);
+    return null;
+}
+
+/** Effective attacks (manual + generated from equipped weapons in DB cache) and AC from equipped armor/shields. */
+function recomputeEquipmentBonuses(charData, char) {
+    const equipment = Array.isArray(charData.equipment) ? charData.equipment : [];
+    const dexStr = getDexStrModsFromCharData(charData, char);
+    const dexMod = dexStr.dex;
+    const pb = charData.proficiency_bonus || char.proficiency_bonus || 2;
+    const baseAttacks = (charData.attacks || []).filter(a => a && !a.from_equipment);
+    const usedNames = new Set(baseAttacks.map(a => String(a.name || '').toLowerCase()).filter(Boolean));
+    const gen = [];
+    for (let i = 0; i < equipment.length; i++) {
+        const item = equipment[i];
+        if (!item || !item.equipped) continue;
+        const n = String(item.name || '').trim();
+        if (!n) continue;
+        const w = weaponsCache[n.toLowerCase()];
+        if (!w) continue;
+        const key = n.toLowerCase();
+        if (usedNames.has(key)) continue;
+        usedNames.add(key);
+        const ab = weaponUsesDexterity(w) ? dexStr.dex : dexStr.str;
+        const spl = splitWeaponDamageString(w.damage);
+        gen.push({
+            name: n,
+            to_hit: pb + ab,
+            damage: spl.dice,
+            type: spl.type,
+            from_equipment: true,
+            range: extractWeaponRangeFeet(w.properties)
+        });
+    }
+    let shieldBonus = 0;
+    let bodyAc = null;
+    for (let i = 0; i < equipment.length; i++) {
+        const item = equipment[i];
+        if (!item || !item.equipped) continue;
+        const a = armorCache[String(item.name || '').trim().toLowerCase()];
+        if (!a) continue;
+        const t = String(a.type || '').toLowerCase();
+        if (t === 'shield') {
+            const m = String(a.ac || '').match(/\+(\d+)/);
+            if (m) shieldBonus += parseInt(m[1], 10);
+            continue;
+        }
+        const n = parseArmorAcToNumber(a.ac, dexMod);
+        if (n != null) bodyAc = bodyAc == null ? n : Math.max(bodyAc, n);
+    }
+    const unarmored = 10 + dexMod;
+    const baseAc = bodyAc != null ? bodyAc : unarmored;
+    const ac = baseAc + shieldBonus;
+    return { attacks: baseAttacks.concat(gen), ac };
+}
+
+function applyEquipmentDerivedStats(char, charData) {
+    const r = recomputeEquipmentBonuses(charData, char);
+    charData.attacks = r.attacks;
+    if (!charData.ac) charData.ac = {};
+    charData.ac.base = r.ac;
+    char.armor_class = r.ac;
+}
+
+function canEditCharacterEquipment(char) {
+    if (!char) return false;
+    if (isDM) return true;
+    if (!myCharacterId) return false;
+    return String(char.id) === String(myCharacterId);
+}
+
+function toggleEquipmentEquipped(characterId, equipmentIndex) {
+    const char = characters.find(c => String(c.id) === String(characterId));
+    if (!char || !canEditCharacterEquipment(char)) return;
+    const { full, data } = parseCharacterDataWrapper(char);
+    if (!data || !Array.isArray(data.equipment)) return;
+    if (equipmentIndex < 0 || equipmentIndex >= data.equipment.length) return;
+    if (!weaponsLoaded || !armorLoaded) loadAllEquipment();
+    data.equipment[equipmentIndex].equipped = !data.equipment[equipmentIndex].equipped;
+    applyEquipmentDerivedStats(char, data);
+    char.character_data = serializeCharacterDataWrapper(char, full, data);
+    sendMessage({ type: 'UpdateCharacter', character: buildCharacterUpdatePayload(char) });
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(char.id)) {
+        currentViewingCharacterData = data;
+        currentViewingCharacterFullData = full;
+        renderCharacterSheetContent();
+    }
+    if (String(myCharacterId) === String(char.id)) {
+        populateCombatActionPanel();
+        populatePlayerActionBar();
+    }
+    addLogEntry(`${char.name}: ${data.equipment[equipmentIndex].equipped ? 'Equipped' : 'Unequipped'} ${data.equipment[equipmentIndex].name || 'item'}`, 'info');
+}
+
+function addCustomAttackFromSheet(characterId) {
+    const char = characters.find(c => String(c.id) === String(characterId));
+    if (!char || !canEditCharacterEquipment(char)) return;
+    const nameEl = document.getElementById('sheetAddAttackName');
+    const hitEl = document.getElementById('sheetAddAttackHit');
+    const dmgEl = document.getElementById('sheetAddAttackDmg');
+    const typeEl = document.getElementById('sheetAddAttackType');
+    const name = (nameEl && nameEl.value || '').trim();
+    const toHit = hitEl ? parseInt(String(hitEl.value).replace(/[^0-9\-+]/g, '') || '0', 10) : 0;
+    const damage = (dmgEl && dmgEl.value || '').trim() || '1d4';
+    const dmgType = (typeEl && typeEl.value || '').trim() || 'kinetic';
+    if (!name) {
+        alert('Enter a weapon or attack name.');
+        return;
+    }
+    const { full, data } = parseCharacterDataWrapper(char);
+    if (!data) return;
+    if (!Array.isArray(data.attacks)) data.attacks = [];
+    data.attacks.push({
+        name,
+        to_hit: toHit,
+        damage,
+        type: dmgType,
+        userAdded: true,
+        userAttackId: generateUUID()
+    });
+    applyEquipmentDerivedStats(char, data);
+    char.character_data = serializeCharacterDataWrapper(char, full, data);
+    sendMessage({ type: 'UpdateCharacter', character: buildCharacterUpdatePayload(char) });
+    if (nameEl) nameEl.value = '';
+    if (hitEl) hitEl.value = '';
+    if (dmgEl) dmgEl.value = '';
+    if (typeEl) typeEl.value = '';
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(char.id)) {
+        currentViewingCharacterData = data;
+        currentViewingCharacterFullData = full;
+        renderCharacterSheetContent();
+    }
+    if (String(myCharacterId) === String(char.id)) {
+        populateCombatActionPanel();
+        populatePlayerActionBar();
+    }
+    addLogEntry(`${char.name} added attack: ${name}`, 'info');
+}
+
+function removeUserAttackFromSheet(characterId, userAttackId, attackSigJson) {
+    if (!characterId) return;
+    const char = characters.find(c => String(c.id) === String(characterId));
+    if (!char || !canEditCharacterEquipment(char)) return;
+    const { full, data } = parseCharacterDataWrapper(char);
+    if (!data || !Array.isArray(data.attacks)) return;
+
+    if (userAttackId) {
+        const before = data.attacks.length;
+        data.attacks = data.attacks.filter(a => a && String(a.userAttackId || '') !== String(userAttackId));
+        if (data.attacks.length === before) {
+            alert('Could not find that attack.');
+            return;
+        }
+    } else if (attackSigJson) {
+        let spec;
+        try {
+            spec = JSON.parse(attackSigJson);
+        } catch (err) {
+            alert('Could not read attack data to remove.');
+            return;
+        }
+        const idx = data.attacks.findIndex(a => {
+            if (!a || a.from_equipment) return false;
+            const ah = a.to_hit !== undefined && a.to_hit !== null ? a.to_hit : a.toHit;
+            const dmgA = String(a.damage || a.damage_dice || '').trim();
+            return a.name === spec.n && Number(ah) === Number(spec.h) && dmgA === spec.d;
+        });
+        if (idx === -1) {
+            alert('Could not find that attack (only non-equipped attacks can be removed here).');
+            return;
+        }
+        if (!confirm('Remove this attack from the character sheet and action bar?')) return;
+        data.attacks.splice(idx, 1);
+    } else {
+        return;
+    }
+
+    applyEquipmentDerivedStats(char, data);
+    char.character_data = serializeCharacterDataWrapper(char, full, data);
+    sendMessage({ type: 'UpdateCharacter', character: buildCharacterUpdatePayload(char) });
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(char.id)) {
+        currentViewingCharacterData = data;
+        currentViewingCharacterFullData = full;
+        renderCharacterSheetContent();
+    }
+    if (String(myCharacterId) === String(char.id)) {
+        populateCombatActionPanel();
+        populatePlayerActionBar();
+    }
+    addLogEntry(`${char.name} removed an attack from the sheet`, 'info');
+}
+
 function adjustTooltipPosition(tooltip, event) {
     const rect = tooltip.getBoundingClientRect();
     if (rect.right > window.innerWidth) {
