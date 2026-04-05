@@ -114,6 +114,28 @@ pub struct PlayerConnection {
     pub is_dm: bool,
 }
 
+/// Region of the map (pixel coords) visible to non-DM clients when enabled
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayerMapViewport {
+    pub enabled: bool,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Default for PlayerMapViewport {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            x: 0.0,
+            y: 0.0,
+            width: 640.0,
+            height: 480.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
@@ -158,6 +180,15 @@ pub enum ClientMessage {
     ListEnemies,
     DeleteEnemy { enemy_id: String },
     
+    // Player map viewport (DM): fog-of-war style window for non-DM clients
+    SetPlayerMapViewport {
+        enabled: bool,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+
     // Map settings
     MapSettingsChanged { grid_size: i32, width: i32, height: i32 },
     
@@ -220,12 +251,23 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     // Connection responses
     Connected { session_id: String, is_dm: bool },
+    PlayerRole { is_dm: bool },
     PlayerJoined { player_name: String, is_dm: bool },
     PlayerLeft { player_name: String },
     
     // State updates
     GameStateUpdate { state: String },
-    MapLoaded { map: Map },
+    MapLoaded {
+        map: Map,
+        player_map_viewport: PlayerMapViewport,
+    },
+    PlayerMapViewportUpdated {
+        enabled: bool,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
     MapCleared, // Map and tokens cleared
     TokenUpdate { tokens: Vec<Token> },
     

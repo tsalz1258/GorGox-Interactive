@@ -888,51 +888,6 @@ function handleServerMessage(message) {
                 console.warn('⚠️ NPC instance count changed! Before:', npcInstancesBefore.length, 'After:', npcInstancesAfter.length);
             }
             
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-            // Update selectedToken if it still exists in the new tokens array
-            // CRITICAL: Preserve the size from selectedToken if it was manually set
-            if (selectedToken) {
-                const updatedToken = tokens.find(t => t.id === selectedToken.id);
-                if (updatedToken) {
-                    // Preserve size from selectedToken if it was manually set (non-default)
-                    const oldSize = selectedToken.size;
-                    if (oldSize && oldSize !== 1.0 && updatedToken.size === 1.0) {
-                        console.log(`🔧 Preserving manually set size ${oldSize} for token ${selectedToken.id} (server had: ${updatedToken.size})`);
-                        updatedToken.size = oldSize;
-                    }
-                    // Update selectedToken to point to the updated token in the array
-                    selectedToken = updatedToken;
-                    updateTokenInfo();
-                } else {
-                    // Token was removed, clear selection
-                    selectedToken = null;
-                }
-            }
-            
-            // Always render canvas when tokens update - this ensures all clients see the tokens
-=======
-=======
->>>>>>> Stashed changes
-            // Update selected token if it still exists
-            if (selectedToken) {
-                const updatedToken = tokens.find(t => t.id === selectedToken.id);
-                if (updatedToken) {
-                    selectedToken = updatedToken;
-                    updateTokenInfo();
-                } else {
-                    selectedToken = null;
-                    updateTokenInfo();
-                }
-            }
-            
-            // CRITICAL: Re-render canvas to show updated token positions
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
-            renderCanvas();
-            
             if (combatState.active) {
                 syncParticipantsWithTokens();
                 updateInitiativeList();
@@ -14041,37 +13996,25 @@ function buildDetailedCharacterSheet(char, charData) {
     if (sheetCombat.attacks && sheetCombat.attacks.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ff4444;">⚔️ Attacks <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>`;
-        sheetCombat.attacks.forEach((atk, atkIndex) => {
-            if (!atk.name) return;
-            let dmgStr = String(atk.damage || atk.damage_dice || '').trim();
-            if (!dmgStr || dmgStr === '—') dmgStr = '1d4';
-            const th = atk.to_hit !== undefined && atk.to_hit !== null ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : null);
-            if (th === null || th === undefined) return;
-            const rollName = `${atk.name}${atk.magic_bonus ? ' +' + atk.magic_bonus : ''}`;
-            const escapedWeapon = escapeHtml(rollName);
-            const escapedDamage = escapeHtml(dmgStr);
-            const escapedType = escapeHtml(atk.type || atk.damage_type || 'damage');
-            const equippedLabel = atk.from_equipment ? '<span style="font-size:10px;opacity:0.6;margin-left:6px">(equipped)</span>' : '';
-            const canRemoveAttack = showEquipControls && !atk.from_equipment;
-            const customLabel = (atk.userAttackId || atk.userAdded) ? '<span style="font-size:10px;opacity:0.6;margin-left:6px">(custom)</span>' : '';
-            const attackSigJson = !atk.userAttackId ? JSON.stringify({ n: atk.name, h: th, d: dmgStr }) : '';
-            const removeBtn = canRemoveAttack
-                ? `<button type="button" class="sheet-remove-attack-btn" data-char-id="${escapeHtml(String(char.id))}" data-attack-id="${atk.userAttackId ? escapeHtml(String(atk.userAttackId)) : ''}" data-attack-sig="${atk.userAttackId ? '' : escapeHtml(attackSigJson)}">Remove</button>`
-                : '';
-            
-            html += `<div class="sheet-attack-row" style="margin:6px 0;padding:10px 12px;background:rgba(255,68,68,0.08);border-left:3px solid #ff4444;border-radius:6px;">
-                <div class="sheet-attack-roll" data-sheet-roll="attack" data-weapon="${escapedWeapon}" data-to-hit="${th}" data-damage="${escapedDamage}" data-damage-type="${escapedType}" data-char-name="${sheetRollCharNameAttr}" onmouseover="this.style.background='rgba(255,68,68,0.14)';this.style.transform='translateX(3px)'" onmouseout="this.style.background='';this.style.transform='translateX(0)'">
-                <div class="sheet-attack-name">${escapeHtml(atk.name)}${atk.magic_bonus ? ' +' + atk.magic_bonus : ''}${equippedLabel}${customLabel}</div>
-                <div class="sheet-attack-stats" style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:10px;row-gap:2px;">
-                    <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(th)}</span>
-                    <span style="opacity:0.45;">·</span>
-                    <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(dmgStr)}</span>
-                    <span style="opacity: 0.75;">${escapeHtml(atk.type || '')}</span>
-                </div>
-                ${atk.mastery ? `<div class="sheet-attack-meta" style="color: #4a9eff; opacity: 0.95;">Mastery: ${escapeHtml(String(atk.mastery))}</div>` : ''}
-                ${atk.properties ? `<div class="sheet-attack-meta">${escapeHtml(atk.properties.join(', '))}</div>` : ''}
-                </div>${removeBtn}
-            </div>`;
+        charData.attacks.forEach((atk, atkIndex) => {
+            if (atk.name && atk.to_hit !== null && atk.damage) {
+                const weaponName = `${atk.name}${atk.magic_bonus ? ' +' + atk.magic_bonus : ''}`;
+                const escapedWeapon = escapeJs(weaponName);
+                const escapedName = escapeJs(charData.name);
+                const escapedDamage = escapeJs(atk.damage);
+                const escapedType = escapeJs(atk.type || 'damage');
+                const escapedRange = escapeHtml(String(atk.range || ''));
+                html += `<div data-sheet-roll="attack" data-weapon="${escapedWeapon}" data-to-hit="${atk.to_hit}" data-damage="${escapedDamage}" data-damage-type="${escapedType}" data-char-name="${escapedName}" data-range="${escapedRange}" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'">
+                    <div style="font-weight: bold; font-size: 15px;">${weaponName}</div>
+                    <div style="font-size: 13px; margin-top: 5px;">
+                        <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(atk.to_hit)}</span> | 
+                        <span style="color: #ffaa44;">💥 Damage: ${atk.damage}</span> 
+                        <span style="opacity: 0.7;">${atk.type || ''}</span>
+                    </div>
+                    ${atk.mastery ? `<div style="font-size: 11px; color: #4a9eff; margin-top: 3px;">Mastery: ${atk.mastery}</div>` : ''}
+                    ${atk.properties ? `<div style="font-size: 11px; opacity: 0.6; margin-top: 3px;">${atk.properties.join(', ')}</div>` : ''}
+                </div>`;
+            }
         });
         html += `</div>`;
     }
