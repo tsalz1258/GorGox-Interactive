@@ -26,12 +26,8 @@ type Clients = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
 async fn load_characters_from_db(db: &Database, game_state: &Arc<RwLock<GameState>>, db_name: &str) {
     use crate::models::Character;
     
-    // First, try to ensure the style column exists
-    let _ = sqlx::query("ALTER TABLE characters ADD COLUMN style TEXT NOT NULL DEFAULT 'dnd'")
-        .execute(db)
-        .await;
-    
-    // Try loading with style column first
+    // Style column should already exist from database initialization
+    // Try loading with style column first (most common case)
     let query_result = sqlx::query(
         "SELECT id, name, player_name, class, level, max_hp, current_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, proficiency_bonus, character_data, portrait_url, style FROM characters"
     )
@@ -70,23 +66,13 @@ async fn load_characters_from_db(db: &Database, game_state: &Arc<RwLock<GameStat
             info!("✅ Loaded {} characters from {} database", count, db_name);
         }
         Err(e) => {
-            // If query failed due to missing style column, try without it
+            // If query failed due to missing style column (shouldn't happen, but handle gracefully)
             let err_str = e.to_string();
             if err_str.contains("no such column: style") {
-                warn!("⚠️ Style column missing, trying to load without it and migrate...");
-                // Try to add the column again
-                if let Err(migrate_err) = sqlx::query("ALTER TABLE characters ADD COLUMN style TEXT NOT NULL DEFAULT 'dnd'")
-                    .execute(db)
-                    .await
-                {
-                    let migrate_err_str = migrate_err.to_string();
-                    if !migrate_err_str.contains("duplicate") && !migrate_err_str.contains("already exists") {
-                        error!("❌ Failed to add style column: {}", migrate_err);
-                    }
-                }
-                // Retry the query
+                warn!("⚠️ Style column missing in {} database, trying fallback query...", db_name);
+                // Try loading without style column (legacy support)
                 if let Ok(rows) = sqlx::query(
-                    "SELECT id, name, player_name, class, level, max_hp, current_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, proficiency_bonus, character_data, portrait_url, style FROM characters"
+                    "SELECT id, name, player_name, class, level, max_hp, current_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, proficiency_bonus, character_data, portrait_url FROM characters"
                 )
                 .fetch_all(db)
                 .await
@@ -118,9 +104,9 @@ async fn load_characters_from_db(db: &Database, game_state: &Arc<RwLock<GameStat
                         gs.characters.insert(char.id.clone(), char);
                         count += 1;
                     }
-                    info!("✅ Loaded {} characters from {} database (after migration)", count, db_name);
+                    info!("✅ Loaded {} characters from {} database (legacy format)", count, db_name);
                 } else {
-                    error!("❌ Failed to load characters from {} database even after migration attempt", db_name);
+                    error!("❌ Failed to load characters from {} database even with fallback", db_name);
                 }
             } else {
                 error!("❌ Failed to load characters from {} database: {}", db_name, e);
@@ -138,9 +124,14 @@ pub async fn start_server(
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
     // CRITICAL: Load all characters from database on startup
+    // Do this in parallel to speed up startup
     info!("🔄 Loading characters from databases on startup...");
-    load_characters_from_db(&dnd_db, &game_state, "D&D").await;
-    load_characters_from_db(&starwars_db, &game_state, "Star Wars").await;
+    let dnd_future = load_characters_from_db(&dnd_db, &game_state, "D&D");
+    let sw_future = load_characters_from_db(&starwars_db, &game_state, "Star Wars");
+    
+    // Run both in parallel
+    tokio::join!(dnd_future, sw_future);
+    
     let char_count = game_state.read().await.characters.len();
     if char_count > 0 {
         info!("✅ Successfully loaded {} total characters into game state on startup", char_count);
@@ -294,16 +285,42 @@ async fn handle_socket(
     let shutdown_tx_clone = shutdown_tx.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
-            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
-                handle_client_message(
-                    client_msg,
-                    &session_id,
-                    &game_state,
-                    &clients,
-                    &dnd_db_clone,
-                    &starwars_db_clone,
-                    &shutdown_tx_clone,
-                ).await;
+            match serde_json::from_str::<ClientMessage>(&text) {
+                Ok(client_msg) => {
+                    handle_client_message(
+                        client_msg,
+                        &session_id,
+                        &game_state,
+                        &clients,
+                        &dnd_db_clone,
+                        &starwars_db_clone,
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                        &shutdown_tx_clone,
+                    ).await;
+                }
+                Err(e) => {
+                    error!("Failed to deserialize client message: {}", e);
+                    error!("   Message text: {}", text);
+=======
+=======
+>>>>>>> Stashed changes
+                    ).await;
+                }
+                Err(e) => {
+                    error!("❌ Failed to deserialize client message: {}", e);
+                    error!("   Message text: {}", text);
+                    // Try to log what type of message it was supposed to be
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
+                    if let Ok(partial) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if let Some(msg_type) = partial.get("type") {
+                            error!("   Message type: {}", msg_type);
+                        }
+                    }
+                }
             }
         }
     });
@@ -397,16 +414,34 @@ async fn handle_client_message(
             info!("Player {} connected as {}", player_name_clone, if is_dm { "DM" } else { "Player" });
             game_state.write().await.add_player(session_id.to_string(), player_name, is_dm);
             
+            let role_msg = ServerMessage::PlayerRole { is_dm };
+            send_to_client(clients, session_id, &role_msg).await;
+            
             // IMPORTANT: Send current game state immediately to new player
             // This ensures they see the map, tokens, and characters right away
             let gs = game_state.read().await;
             
             // Send current map if loaded
             if let Some(ref map) = gs.current_map {
-                let map_loaded = ServerMessage::MapLoaded { map: map.clone() };
+                let map_loaded = ServerMessage::MapLoaded {
+                    map: map.clone(),
+                    player_map_viewport: gs.player_map_viewport.clone(),
+                };
                 send_to_client(clients, session_id, &map_loaded).await;
                 info!("📤 Sent current map to new player: {}", map.name);
             }
+
+            // Player map viewport (anti-metagame window) — must be sent on join or players who
+            // connect after the DM enabled it never receive enabled:true and see the full map.
+            let vp = gs.player_map_viewport.clone();
+            let vp_msg = ServerMessage::PlayerMapViewportUpdated {
+                enabled: vp.enabled,
+                x: vp.x,
+                y: vp.y,
+                width: vp.width,
+                height: vp.height,
+            };
+            send_to_client(clients, session_id, &vp_msg).await;
             
             let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
             
@@ -462,6 +497,7 @@ async fn handle_client_message(
         }
         
         // Essential token management handlers
+<<<<<<< Updated upstream
         ClientMessage::PlaceToken { entity_id, entity_type, x, y, size, display_name: client_display_name } => {
             use crate::models::{Token, TokenType};
 
@@ -504,14 +540,75 @@ async fn handle_client_message(
                 map_id,
                 entity_id,
                 entity_type,
+=======
+        ClientMessage::PlaceToken { entity_id, entity_type, x, y } => {
+            use crate::models::Token;
+            
+            let map_id = {
+                let gs = game_state.read().await;
+                gs.current_map.as_ref().map(|m| m.id.clone()).unwrap_or_default()
+<<<<<<< Updated upstream
+            };
+            
+            let token = Token {
+                id: uuid::Uuid::new_v4().to_string(),
+                map_id: map_id.clone(),
+                entity_id: entity_id.clone(),
+                entity_type: entity_type.clone(),
+>>>>>>> Stashed changes
                 x,
                 y,
                 size: size.unwrap_or(1.0),
                 image_url,
                 display_name,
             };
+<<<<<<< Updated upstream
 
-            game_state.write().await.add_token(token.clone());
+            info!(
+                "Placing token: entity_id={}, type={:?}, pos=({}, {}), map_id={}",
+                token.entity_id, token.entity_type, token.x, token.y, token.map_id
+            );
+
+=======
+            
+            info!("📍 Placing token: entity_id={}, type={:?}, pos=({}, {}), map_id='{}'", 
+                entity_id, entity_type, x, y, map_id);
+            
+>>>>>>> Stashed changes
+=======
+            };
+            
+            let token = Token {
+                id: uuid::Uuid::new_v4().to_string(),
+                map_id: map_id.clone(),
+                entity_id: entity_id.clone(),
+                entity_type: entity_type.clone(),
+                x,
+                y,
+                size: 1.0,
+                image_url: None,
+            };
+            
+            info!("📍 Placing token: entity_id={}, type={:?}, pos=({}, {}), map_id='{}'", 
+                entity_id, entity_type, x, y, map_id);
+            
+>>>>>>> Stashed changes
+            let mut gs = game_state.write().await;
+            gs.add_token(token.clone());
+            let token_count = gs.tokens.len();
+            drop(gs);
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+
+            info!("Token placed. Total tokens in game state: {}", token_count);
+=======
+=======
+>>>>>>> Stashed changes
+            
+            info!("✅ Token placed. Total tokens in game state: {}", token_count);
+            
+            // Broadcast token update to all clients
+>>>>>>> Stashed changes
             let tokens = game_state.read().await.tokens.clone();
             let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
             let token_update = ServerMessage::TokenUpdate { tokens };
@@ -519,11 +616,19 @@ async fn handle_client_message(
         }
         
         ClientMessage::MoveToken { token_id, x, y } => {
-            if game_state.write().await.move_token(&token_id, x, y) {
+            let moved = {
+                let mut gs = game_state.write().await;
+                gs.move_token(&token_id, x as f32, y as f32)
+            };
+            
+            if moved {
+                info!("📍 Token {} moved to ({}, {})", token_id, x, y);
                 let tokens = game_state.read().await.tokens.clone();
                 let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
+            } else {
+                warn!("⚠️ Failed to move token {} - token not found", token_id);
             }
         }
         
@@ -929,9 +1034,21 @@ async fn handle_client_message(
             // Send full game state to this client (for slow connections / Refresh button)
             let gs = game_state.read().await;
             if let Some(ref map) = gs.current_map {
-                let map_loaded = ServerMessage::MapLoaded { map: map.clone() };
+                let map_loaded = ServerMessage::MapLoaded {
+                    map: map.clone(),
+                    player_map_viewport: gs.player_map_viewport.clone(),
+                };
                 send_to_client(clients, session_id, &map_loaded).await;
             }
+            let vp = gs.player_map_viewport.clone();
+            let vp_msg = ServerMessage::PlayerMapViewportUpdated {
+                enabled: vp.enabled,
+                x: vp.x,
+                y: vp.y,
+                width: vp.width,
+                height: vp.height,
+            };
+            send_to_client(clients, session_id, &vp_msg).await;
             let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
             let characters: Vec<crate::models::Character> = gs.characters.values().cloned().collect();
             if !characters.is_empty() {
@@ -1027,6 +1144,7 @@ async fn handle_client_message(
         ClientMessage::CreateMap { name, image_data, width, height } => {
             use std::fs;
             use std::path::Path;
+            use crate::models::Token;
             
             let map_id = Uuid::new_v4().to_string();
             let image_path = format!("static/maps/{}.png", map_id);
@@ -1051,6 +1169,67 @@ async fn handle_client_message(
                 error!("Failed to decode base64 image data");
             }
             
+            // Save current state if there are tokens on current map
+            let gs = game_state.read().await;
+            let map_state_json = if let Some(ref current_map) = gs.current_map {
+                // Collect all tokens, HP values, and enemy instances for this map
+                let tokens_for_map: Vec<&Token> = gs.tokens.iter()
+                    .filter(|t| t.map_id == current_map.id)
+                    .collect();
+                
+                if !tokens_for_map.is_empty() {
+                    let mut state_data = serde_json::Map::new();
+                    
+                    // Save tokens with their positions
+                    let tokens_data: Vec<serde_json::Value> = tokens_for_map.iter().map(|token| {
+                        let mut token_data = serde_json::Map::new();
+                        token_data.insert("id".to_string(), serde_json::Value::String(token.id.clone()));
+                        token_data.insert("entity_id".to_string(), serde_json::Value::String(token.entity_id.clone()));
+                        token_data.insert("entity_type".to_string(), serde_json::Value::String(format!("{:?}", token.entity_type)));
+                        token_data.insert("x".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.x as f64).unwrap()));
+                        token_data.insert("y".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.y as f64).unwrap()));
+                        token_data.insert("size".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.size as f64).unwrap()));
+                        if let Some(img) = &token.image_url {
+                            token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
+                        }
+                        
+                        // Add HP values from characters or enemy instances
+                        if token.entity_type == crate::models::TokenType::Player {
+                            if let Some(char) = gs.characters.get(&token.entity_id) {
+                                token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.current_hp)));
+                                token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.max_hp)));
+                            }
+                        } else if token.entity_type == crate::models::TokenType::Enemy {
+                            if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                                token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.current_hp)));
+                                token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.max_hp)));
+                            }
+                        }
+                        
+                        serde_json::Value::Object(token_data)
+                    }).collect();
+                    state_data.insert("tokens".to_string(), serde_json::Value::Array(tokens_data));
+                    
+                    // Save combat state if active
+                    if gs.combat.active {
+                        let combat_data = serde_json::json!({
+                            "active": true,
+                            "round": gs.combat.round,
+                            "current_turn_index": gs.combat.current_turn_index,
+                            "participants": gs.combat.participants
+                        });
+                        state_data.insert("combat".to_string(), combat_data);
+                    }
+                    
+                    Some(serde_json::to_string(&serde_json::Value::Object(state_data)).unwrap_or_default())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            drop(gs);
+            
             let map = Map {
                 id: map_id.clone(),
                 name: name.clone(),
@@ -1058,11 +1237,12 @@ async fn handle_client_message(
                 grid_size: 50,
                 width,
                 height,
+                map_state: map_state_json.clone(),
             };
             
             // Save to database
             if let Err(e) = sqlx::query(
-                "INSERT OR REPLACE INTO maps (id, name, image_path, grid_size, width, height) VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT OR REPLACE INTO maps (id, name, image_path, grid_size, width, height, map_state) VALUES (?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&map_id)
             .bind(&name)
@@ -1070,20 +1250,438 @@ async fn handle_client_message(
             .bind(50)
             .bind(width)
             .bind(height)
+            .bind(&map_state_json)
             .execute(dnd_db)
             .await
             {
                 error!("Failed to save map to database: {}", e);
             }
             
-            game_state.write().await.load_map(map.clone(), true);
-            let map_loaded = ServerMessage::MapLoaded { map };
+            let mut gs = game_state.write().await;
+            gs.load_map(map.clone(), true);
+            gs.player_map_viewport = crate::models::PlayerMapViewport::default();
+            drop(gs);
+            let vp = game_state.read().await.player_map_viewport.clone();
+            let map_loaded = ServerMessage::MapLoaded {
+                map,
+                player_map_viewport: vp.clone(),
+            };
             broadcast_message(clients, &map_loaded).await;
+            let vp_msg = ServerMessage::PlayerMapViewportUpdated {
+                enabled: vp.enabled,
+                x: vp.x,
+                y: vp.y,
+                width: vp.width,
+                height: vp.height,
+            };
+            broadcast_message(clients, &vp_msg).await;
+        }
+        
+        ClientMessage::SaveMap { map_id } => {
+            use crate::models::Token;
+            
+            info!("💾 Saving map state for map: {}", map_id);
+            
+            // Collect all data while holding the lock
+            let (tokens_count, map_state_json, actual_map_id) = {
+                let gs = game_state.read().await;
+                
+                // Verify this is the current map and get the actual map ID
+                let actual_map_id = if let Some(ref current_map) = gs.current_map {
+                    if current_map.id != map_id {
+                        let error = ServerMessage::Error { 
+                            message: format!("Map {} is not currently loaded. Load it first before saving.", map_id) 
+                        };
+                        drop(gs);
+                        broadcast_message(clients, &error).await;
+                        return;
+                    }
+                    current_map.id.clone()
+                } else {
+                    let error = ServerMessage::Error { 
+                        message: "No map is currently loaded.".to_string() 
+                    };
+                    drop(gs);
+                    broadcast_message(clients, &error).await;
+                    return;
+                };
+                
+                info!("💾 Current map ID: {}, Requested map ID: {}", actual_map_id, map_id);
+                info!("💾 Total tokens in game state: {}", gs.tokens.len());
+                
+                // IMPORTANT: Save ALL tokens currently in game state when a map is loaded
+                // This is because tokens visible on the current map are all in the game state
+                // The map_id field might be wrong/empty, but if they're in game state with a map loaded,
+                // they belong to that map
+                let tokens_for_map: Vec<&Token> = gs.tokens.iter().collect();
+                
+                let token_count = tokens_for_map.len();
+                info!("💾 Saving all {} tokens from game state (they belong to current map)", token_count);
+                
+                // Log all tokens for debugging
+                if token_count > 0 {
+                    info!("💾 Tokens to save:");
+                    for (i, token) in tokens_for_map.iter().enumerate() {
+                        info!("💾   {}. Token {}: map_id='{}', entity_id='{}', type={:?}, pos=({}, {})", 
+                            i + 1, token.id, token.map_id, token.entity_id, token.entity_type, token.x, token.y);
+                    }
+                } else {
+                    warn!("⚠️ WARNING: No tokens found in game state! This might mean:");
+                    warn!("   1. Tokens were never placed on the server");
+                    warn!("   2. Tokens were cleared when map was loaded");
+                    warn!("   3. There's a synchronization issue between client and server");
+                }
+                
+                info!("💾 Found {} tokens to save for map {}", token_count, actual_map_id);
+                
+                let mut state_data = serde_json::Map::new();
+                
+                // Save tokens with their positions and HP
+                let tokens_data: Vec<serde_json::Value> = tokens_for_map.iter().map(|token| {
+                    let mut token_data = serde_json::Map::new();
+                    token_data.insert("id".to_string(), serde_json::Value::String(token.id.clone()));
+                    token_data.insert("entity_id".to_string(), serde_json::Value::String(token.entity_id.clone()));
+                    token_data.insert("entity_type".to_string(), serde_json::Value::String(format!("{:?}", token.entity_type)));
+                    token_data.insert("x".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.x as f64).unwrap()));
+                    token_data.insert("y".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.y as f64).unwrap()));
+                    token_data.insert("size".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.size as f64).unwrap()));
+                    if let Some(ref img) = token.image_url {
+                        token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
+                    }
+                    
+                    // Add HP values from characters or enemy instances
+                    if token.entity_type == crate::models::TokenType::Player {
+                        if let Some(char) = gs.characters.get(&token.entity_id) {
+                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.current_hp)));
+                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.max_hp)));
+                            info!("💾 Saved token {} (Player) with HP: {}/{}", token.id, char.current_hp, char.max_hp);
+                        }
+                    } else if token.entity_type == crate::models::TokenType::Enemy {
+                        if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.current_hp)));
+                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.max_hp)));
+                            info!("💾 Saved token {} (Enemy) with HP: {}/{}", token.id, enemy.current_hp, enemy.max_hp);
+                        }
+                    }
+                    
+                    serde_json::Value::Object(token_data)
+                }).collect();
+                state_data.insert("tokens".to_string(), serde_json::Value::Array(tokens_data));
+                
+                // Save combat state if active
+                if gs.combat.active {
+                    let combat_data = serde_json::json!({
+                        "active": true,
+                        "round": gs.combat.round,
+                        "current_turn_index": gs.combat.current_turn_index,
+                        "participants": gs.combat.participants
+                    });
+                    state_data.insert("combat".to_string(), combat_data);
+                    info!("💾 Saved combat state: Round {}, Turn {}", gs.combat.round, gs.combat.current_turn_index);
+                }
+                
+                let map_state_json = serde_json::to_string(&serde_json::Value::Object(state_data)).unwrap_or_default();
+                (token_count, map_state_json, actual_map_id)
+            }; // Lock is dropped here
+            
+            info!("💾 Map state JSON length: {} bytes", map_state_json.len());
+            info!("💾 Saving to map ID: {}", actual_map_id);
+            
+            // Update map in database with state (use actual_map_id, not the passed map_id)
+            if let Err(e) = sqlx::query(
+                "UPDATE maps SET map_state = ? WHERE id = ?"
+            )
+            .bind(&map_state_json)
+            .bind(&actual_map_id)
+            .execute(dnd_db)
+            .await
+            {
+                error!("❌ Failed to save map state to database: {}", e);
+                let error = ServerMessage::Error { 
+                    message: format!("Failed to save map state: {}", e) 
+                };
+                broadcast_message(clients, &error).await;
+            } else {
+                info!("✅ Map state saved successfully for map: {} ({} tokens)", actual_map_id, tokens_count);
+                // Broadcast success message
+                let success = ServerMessage::Error { 
+                    message: format!("✅ Map state saved successfully! ({} tokens, {} bytes)", tokens_count, map_state_json.len()) 
+                };
+                broadcast_message(clients, &success).await;
+            }
+        }
+        
+        ClientMessage::SaveMap { map_id } => {
+            use crate::models::Token;
+            
+            info!("💾 Saving map state for map: {}", map_id);
+            
+            // Collect all data while holding the lock
+            let (tokens_count, map_state_json, actual_map_id) = {
+                let gs = game_state.read().await;
+                
+                // Verify this is the current map and get the actual map ID
+                let actual_map_id = if let Some(ref current_map) = gs.current_map {
+                    if current_map.id != map_id {
+                        let error = ServerMessage::Error { 
+                            message: format!("Map {} is not currently loaded. Load it first before saving.", map_id) 
+                        };
+                        drop(gs);
+                        broadcast_message(clients, &error).await;
+                        return;
+                    }
+                    current_map.id.clone()
+                } else {
+                    let error = ServerMessage::Error { 
+                        message: "No map is currently loaded.".to_string() 
+                    };
+                    drop(gs);
+                    broadcast_message(clients, &error).await;
+                    return;
+                };
+                
+                info!("💾 Current map ID: {}, Requested map ID: {}", actual_map_id, map_id);
+                info!("💾 Total tokens in game state: {}", gs.tokens.len());
+                
+                // IMPORTANT: Save ALL tokens currently in game state when a map is loaded
+                // This is because tokens visible on the current map are all in the game state
+                // The map_id field might be wrong/empty, but if they're in game state with a map loaded,
+                // they belong to that map
+                let tokens_for_map: Vec<&Token> = gs.tokens.iter().collect();
+                
+                let token_count = tokens_for_map.len();
+                info!("💾 Saving all {} tokens from game state (they belong to current map)", token_count);
+                
+                // Log all tokens for debugging
+                if token_count > 0 {
+                    info!("💾 Tokens to save:");
+                    for (i, token) in tokens_for_map.iter().enumerate() {
+                        info!("💾   {}. Token {}: map_id='{}', entity_id='{}', type={:?}, pos=({}, {})", 
+                            i + 1, token.id, token.map_id, token.entity_id, token.entity_type, token.x, token.y);
+                    }
+                } else {
+                    warn!("⚠️ WARNING: No tokens found in game state! This might mean:");
+                    warn!("   1. Tokens were never placed on the server");
+                    warn!("   2. Tokens were cleared when map was loaded");
+                    warn!("   3. There's a synchronization issue between client and server");
+                }
+                
+                info!("💾 Found {} tokens to save for map {}", token_count, actual_map_id);
+                
+                let mut state_data = serde_json::Map::new();
+                
+                // Save tokens with their positions and HP
+                let tokens_data: Vec<serde_json::Value> = tokens_for_map.iter().map(|token| {
+                    let mut token_data = serde_json::Map::new();
+                    token_data.insert("id".to_string(), serde_json::Value::String(token.id.clone()));
+                    token_data.insert("entity_id".to_string(), serde_json::Value::String(token.entity_id.clone()));
+                    token_data.insert("entity_type".to_string(), serde_json::Value::String(format!("{:?}", token.entity_type)));
+                    token_data.insert("x".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.x as f64).unwrap()));
+                    token_data.insert("y".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.y as f64).unwrap()));
+                    token_data.insert("size".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.size as f64).unwrap()));
+                    if let Some(ref img) = token.image_url {
+                        token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
+                    }
+                    
+                    // Add HP values from characters or enemy instances
+                    if token.entity_type == crate::models::TokenType::Player {
+                        if let Some(char) = gs.characters.get(&token.entity_id) {
+                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.current_hp)));
+                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.max_hp)));
+                            info!("💾 Saved token {} (Player) with HP: {}/{}", token.id, char.current_hp, char.max_hp);
+                        }
+                    } else if token.entity_type == crate::models::TokenType::Enemy {
+                        if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.current_hp)));
+                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.max_hp)));
+                            info!("💾 Saved token {} (Enemy) with HP: {}/{}", token.id, enemy.current_hp, enemy.max_hp);
+                        }
+                    }
+                    
+                    serde_json::Value::Object(token_data)
+                }).collect();
+                state_data.insert("tokens".to_string(), serde_json::Value::Array(tokens_data));
+                
+                // Save combat state if active
+                if gs.combat.active {
+                    let combat_data = serde_json::json!({
+                        "active": true,
+                        "round": gs.combat.round,
+                        "current_turn_index": gs.combat.current_turn_index,
+                        "participants": gs.combat.participants
+                    });
+                    state_data.insert("combat".to_string(), combat_data);
+                    info!("💾 Saved combat state: Round {}, Turn {}", gs.combat.round, gs.combat.current_turn_index);
+                }
+                
+                let map_state_json = serde_json::to_string(&serde_json::Value::Object(state_data)).unwrap_or_default();
+                (token_count, map_state_json, actual_map_id)
+            }; // Lock is dropped here
+            
+            info!("💾 Map state JSON length: {} bytes", map_state_json.len());
+            info!("💾 Saving to map ID: {}", actual_map_id);
+            
+            // Update map in database with state (use actual_map_id, not the passed map_id)
+            if let Err(e) = sqlx::query(
+                "UPDATE maps SET map_state = ? WHERE id = ?"
+            )
+            .bind(&map_state_json)
+            .bind(&actual_map_id)
+            .execute(dnd_db)
+            .await
+            {
+                error!("❌ Failed to save map state to database: {}", e);
+                let error = ServerMessage::Error { 
+                    message: format!("Failed to save map state: {}", e) 
+                };
+                broadcast_message(clients, &error).await;
+            } else {
+                info!("✅ Map state saved successfully for map: {} ({} tokens)", actual_map_id, tokens_count);
+                // Broadcast success message
+                let success = ServerMessage::Error { 
+                    message: format!("✅ Map state saved successfully! ({} tokens, {} bytes)", tokens_count, map_state_json.len()) 
+                };
+                broadcast_message(clients, &success).await;
+            }
+        }
+        
+        ClientMessage::SaveMap { map_id } => {
+            use crate::models::Token;
+            
+            info!("💾 Saving map state for map: {}", map_id);
+            
+            // Collect all data while holding the lock
+            let (tokens_count, map_state_json, actual_map_id) = {
+                let gs = game_state.read().await;
+                
+                // Verify this is the current map and get the actual map ID
+                let actual_map_id = if let Some(ref current_map) = gs.current_map {
+                    if current_map.id != map_id {
+                        let error = ServerMessage::Error { 
+                            message: format!("Map {} is not currently loaded. Load it first before saving.", map_id) 
+                        };
+                        drop(gs);
+                        broadcast_message(clients, &error).await;
+                        return;
+                    }
+                    current_map.id.clone()
+                } else {
+                    let error = ServerMessage::Error { 
+                        message: "No map is currently loaded.".to_string() 
+                    };
+                    drop(gs);
+                    broadcast_message(clients, &error).await;
+                    return;
+                };
+                
+                info!("💾 Current map ID: {}, Requested map ID: {}", actual_map_id, map_id);
+                info!("💾 Total tokens in game state: {}", gs.tokens.len());
+                
+                // IMPORTANT: Save ALL tokens currently in game state when a map is loaded
+                // This is because tokens visible on the current map are all in the game state
+                // The map_id field might be wrong/empty, but if they're in game state with a map loaded,
+                // they belong to that map
+                let tokens_for_map: Vec<&Token> = gs.tokens.iter().collect();
+                
+                let token_count = tokens_for_map.len();
+                info!("💾 Saving all {} tokens from game state (they belong to current map)", token_count);
+                
+                // Log all tokens for debugging
+                if token_count > 0 {
+                    info!("💾 Tokens to save:");
+                    for (i, token) in tokens_for_map.iter().enumerate() {
+                        info!("💾   {}. Token {}: map_id='{}', entity_id='{}', type={:?}, pos=({}, {})", 
+                            i + 1, token.id, token.map_id, token.entity_id, token.entity_type, token.x, token.y);
+                    }
+                } else {
+                    warn!("⚠️ WARNING: No tokens found in game state! This might mean:");
+                    warn!("   1. Tokens were never placed on the server");
+                    warn!("   2. Tokens were cleared when map was loaded");
+                    warn!("   3. There's a synchronization issue between client and server");
+                }
+                
+                info!("💾 Found {} tokens to save for map {}", token_count, actual_map_id);
+                
+                let mut state_data = serde_json::Map::new();
+                
+                // Save tokens with their positions and HP
+                let tokens_data: Vec<serde_json::Value> = tokens_for_map.iter().map(|token| {
+                    let mut token_data = serde_json::Map::new();
+                    token_data.insert("id".to_string(), serde_json::Value::String(token.id.clone()));
+                    token_data.insert("entity_id".to_string(), serde_json::Value::String(token.entity_id.clone()));
+                    token_data.insert("entity_type".to_string(), serde_json::Value::String(format!("{:?}", token.entity_type)));
+                    token_data.insert("x".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.x as f64).unwrap()));
+                    token_data.insert("y".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.y as f64).unwrap()));
+                    token_data.insert("size".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.size as f64).unwrap()));
+                    if let Some(ref img) = token.image_url {
+                        token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
+                    }
+                    
+                    // Add HP values from characters or enemy instances
+                    if token.entity_type == crate::models::TokenType::Player {
+                        if let Some(char) = gs.characters.get(&token.entity_id) {
+                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.current_hp)));
+                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.max_hp)));
+                            info!("💾 Saved token {} (Player) with HP: {}/{}", token.id, char.current_hp, char.max_hp);
+                        }
+                    } else if token.entity_type == crate::models::TokenType::Enemy {
+                        if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.current_hp)));
+                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.max_hp)));
+                            info!("💾 Saved token {} (Enemy) with HP: {}/{}", token.id, enemy.current_hp, enemy.max_hp);
+                        }
+                    }
+                    
+                    serde_json::Value::Object(token_data)
+                }).collect();
+                state_data.insert("tokens".to_string(), serde_json::Value::Array(tokens_data));
+                
+                // Save combat state if active
+                if gs.combat.active {
+                    let combat_data = serde_json::json!({
+                        "active": true,
+                        "round": gs.combat.round,
+                        "current_turn_index": gs.combat.current_turn_index,
+                        "participants": gs.combat.participants
+                    });
+                    state_data.insert("combat".to_string(), combat_data);
+                    info!("💾 Saved combat state: Round {}, Turn {}", gs.combat.round, gs.combat.current_turn_index);
+                }
+                
+                let map_state_json = serde_json::to_string(&serde_json::Value::Object(state_data)).unwrap_or_default();
+                (token_count, map_state_json, actual_map_id)
+            }; // Lock is dropped here
+            
+            info!("💾 Map state JSON length: {} bytes", map_state_json.len());
+            info!("💾 Saving to map ID: {}", actual_map_id);
+            
+            // Update map in database with state (use actual_map_id, not the passed map_id)
+            if let Err(e) = sqlx::query(
+                "UPDATE maps SET map_state = ? WHERE id = ?"
+            )
+            .bind(&map_state_json)
+            .bind(&actual_map_id)
+            .execute(dnd_db)
+            .await
+            {
+                error!("❌ Failed to save map state to database: {}", e);
+                let error = ServerMessage::Error { 
+                    message: format!("Failed to save map state: {}", e) 
+                };
+                broadcast_message(clients, &error).await;
+            } else {
+                info!("✅ Map state saved successfully for map: {} ({} tokens)", actual_map_id, tokens_count);
+                // Broadcast success message
+                let success = ServerMessage::Error { 
+                    message: format!("✅ Map state saved successfully! ({} tokens, {} bytes)", tokens_count, map_state_json.len()) 
+                };
+                broadcast_message(clients, &success).await;
+            }
         }
         
         ClientMessage::ListMaps => {
             if let Ok(rows) = sqlx::query(
-                "SELECT id, name, image_path, grid_size, width, height FROM maps ORDER BY name"
+                "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps ORDER BY name"
             )
             .fetch_all(dnd_db)
             .await
@@ -1096,6 +1694,7 @@ async fn handle_client_message(
                         grid_size: row.get::<i32, _>(3),
                         width: row.get::<i32, _>(4),
                         height: row.get::<i32, _>(5),
+                        map_state: row.get::<Option<String>, _>(6),
                     }
                 }).collect();
                 let map_list = ServerMessage::MapList { maps };
@@ -1150,7 +1749,7 @@ async fn handle_client_message(
                     
                     // Broadcast updated map list
                     if let Ok(rows) = sqlx::query(
-                        "SELECT id, name, image_path, grid_size, width, height FROM maps ORDER BY name"
+                        "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps ORDER BY name"
                     )
                     .fetch_all(dnd_db)
                     .await
@@ -1163,6 +1762,7 @@ async fn handle_client_message(
                                 grid_size: row.get::<i32, _>(3),
                                 width: row.get::<i32, _>(4),
                                 height: row.get::<i32, _>(5),
+                                map_state: row.get::<Option<String>, _>(6),
                             }
                         }).collect();
                         let map_list = ServerMessage::MapList { maps };
@@ -1175,28 +1775,352 @@ async fn handle_client_message(
         }
         
         ClientMessage::LoadMap { map_id, clear_tokens } => {
+            use crate::models::Token;
+            
             // Load map from database
             let clear = clear_tokens.unwrap_or(true); // Default to true for backward compatibility
             info!("Loading map: {} (clear_tokens: {})", map_id, clear);
-            if let Ok(Some(map_row)) = sqlx::query_as::<_, (String, String, String, i32, i32, i32)>(
-                "SELECT id, name, image_path, grid_size, width, height FROM maps WHERE id = ?"
+            if let Ok(Some(map_row)) = sqlx::query_as::<_, (String, String, String, i32, i32, i32, Option<String>)>(
+                "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps WHERE id = ?"
             )
             .bind(&map_id)
             .fetch_optional(dnd_db)
             .await
             {
                 let map = Map {
-                    id: map_row.0,
-                    name: map_row.1,
+                    id: map_row.0.clone(),
+                    name: map_row.1.clone(),
                     image_path: map_row.2.clone(),
                     grid_size: map_row.3,
                     width: map_row.4,
                     height: map_row.5,
+                    map_state: map_row.6.clone(),
                 };
                 info!("Map loaded from DB: {} - image_path: {}", map.name, map_row.2);
-                game_state.write().await.load_map(map.clone(), clear);
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                let map_state_json = map_row.6.clone();
+                let loaded_map_id = map.id.clone();
+                let mut restore_combat = false;
+
+                let mut gs = game_state.write().await;
+                gs.load_map(map.clone(), clear);
+                gs.player_map_viewport = crate::models::PlayerMapViewport::default();
+
+                if let Some(ref state_json) = map_state_json {
+                    if !clear {
+                        info!("Restoring map state for: {}", map.name);
+
+                        if let Ok(state_data) = serde_json::from_str::<serde_json::Value>(state_json) {
+=======
+=======
+>>>>>>> Stashed changes
+                
+                let mut gs = game_state.write().await;
+                gs.load_map(map.clone(), clear);
+                
+                // Restore state if map_state exists and we're not clearing tokens
+                if let Some(ref state_json) = map_row.6 {
+                    if !clear {
+                        info!("🔄 Restoring map state for: {}", map.name);
+                        
+                        if let Ok(state_data) = serde_json::from_str::<serde_json::Value>(state_json) {
+                            // Restore tokens
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
+                            if let Some(tokens_array) = state_data.get("tokens").and_then(|v| v.as_array()) {
+                                for token_data in tokens_array {
+                                    if let (Some(id), Some(entity_id), Some(entity_type_str), Some(x), Some(y)) = (
+                                        token_data.get("id").and_then(|v| v.as_str()),
+                                        token_data.get("entity_id").and_then(|v| v.as_str()),
+                                        token_data.get("entity_type").and_then(|v| v.as_str()),
+                                        token_data.get("x").and_then(|v| v.as_f64()),
+                                        token_data.get("y").and_then(|v| v.as_f64()),
+                                    ) {
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+                                        // Parse entity type
+>>>>>>> Stashed changes
+=======
+                                        // Parse entity type
+>>>>>>> Stashed changes
+                                        let entity_type = if entity_type_str == "Player" {
+                                            crate::models::TokenType::Player
+                                        } else if entity_type_str == "Enemy" {
+                                            crate::models::TokenType::Enemy
+                                        } else if entity_type_str == "NPC" {
+                                            crate::models::TokenType::NPC
+                                        } else {
+                                            crate::models::TokenType::Object
+                                        };
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+
+                                        let size = token_data.get("size").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                                        let image_url = token_data
+                                            .get("image_url")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+                                        let display_name = token_data
+                                            .get("display_name")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+
+                                        let token = Token {
+                                            id: id.to_string(),
+                                            map_id: loaded_map_id.clone(),
+=======
+=======
+>>>>>>> Stashed changes
+                                        
+                                        let size = token_data.get("size").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                                        let image_url = token_data.get("image_url").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                        
+                                        let token = Token {
+                                            id: id.to_string(),
+                                            map_id: map_id.clone(),
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
+                                            entity_id: entity_id.to_string(),
+                                            entity_type: entity_type.clone(),
+                                            x: x as f32,
+                                            y: y as f32,
+                                            size,
+                                            image_url,
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                                            display_name,
+                                        };
+
+                                        if !gs.tokens.iter().any(|t| t.id == token.id) {
+                                            gs.tokens.push(token.clone());
+
+=======
+=======
+>>>>>>> Stashed changes
+                                        };
+                                        
+                                        // Add token if it doesn't exist
+                                        if !gs.tokens.iter().any(|t| t.id == token.id) {
+                                            gs.tokens.push(token.clone());
+                                            
+                                            // Restore HP values
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
+                                            if let (Some(current_hp), Some(max_hp)) = (
+                                                token_data.get("current_hp").and_then(|v| v.as_i64()),
+                                                token_data.get("max_hp").and_then(|v| v.as_i64()),
+                                            ) {
+                                                if entity_type == crate::models::TokenType::Player {
+                                                    if let Some(char) = gs.characters.get_mut(entity_id) {
+                                                        char.current_hp = current_hp as i32;
+                                                        char.max_hp = max_hp as i32;
+                                                    }
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                                                } else if matches!(
+                                                    entity_type,
+                                                    crate::models::TokenType::Enemy | crate::models::TokenType::NPC
+                                                ) {
+=======
+                                                } else if entity_type == crate::models::TokenType::Enemy {
+>>>>>>> Stashed changes
+=======
+                                                } else if entity_type == crate::models::TokenType::Enemy {
+>>>>>>> Stashed changes
+                                                    if let Some(enemy) = gs.enemy_instances.get_mut(entity_id) {
+                                                        enemy.current_hp = current_hp as i32;
+                                                        enemy.max_hp = max_hp as i32;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                                info!("Restored {} tokens from map state", tokens_array.len());
+                            }
+
+=======
+=======
+>>>>>>> Stashed changes
+                                info!("✅ Restored {} tokens", tokens_array.len());
+                            }
+                            
+                            // Restore combat state if it was saved
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
+                            if let Some(combat_data) = state_data.get("combat") {
+                                if let Some(active) = combat_data.get("active").and_then(|v| v.as_bool()) {
+                                    if active {
+                                        if let Some(participants) = combat_data.get("participants") {
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                                            if let Ok(participants_vec) =
+                                                serde_json::from_value::<Vec<CombatParticipant>>(participants.clone())
+                                            {
+                                                let round =
+                                                    combat_data.get("round").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+                                                let current_turn_index = combat_data
+                                                    .get("current_turn_index")
+                                                    .and_then(|v| v.as_i64())
+                                                    .unwrap_or(0) as usize;
+
+=======
+=======
+>>>>>>> Stashed changes
+                                            if let Ok(participants_vec) = serde_json::from_value::<Vec<CombatParticipant>>(participants.clone()) {
+                                                let round = combat_data.get("round").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+                                                let current_turn_index = combat_data.get("current_turn_index").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+                                                
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
+                                                gs.combat.participants = participants_vec;
+                                                gs.combat.active = true;
+                                                gs.combat.round = round;
+                                                gs.combat.current_turn_index = current_turn_index;
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                                                restore_combat = true;
+
+                                                info!(
+                                                    "Restored combat state: Round {}, Turn {}",
+                                                    round, current_turn_index
+                                                );
+=======
+                                                
+                                                info!("✅ Restored combat state: Round {}, Turn {}", round, current_turn_index);
+>>>>>>> Stashed changes
+=======
+                                                
+                                                info!("✅ Restored combat state: Round {}, Turn {}", round, current_turn_index);
+>>>>>>> Stashed changes
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+                            warn!("Failed to parse map state JSON");
+                        }
+                    }
+                }
+
+                let vp = gs.player_map_viewport.clone();
+                drop(gs);
+
+                if map_state_json.is_some() && !clear {
+                    let characters: Vec<Character> =
+                        game_state.read().await.characters.values().cloned().collect();
+                    let character_list = ServerMessage::CharacterList { characters, style: None };
+                    broadcast_message(clients, &character_list).await;
+
+                    let tokens = game_state.read().await.tokens.clone();
+                    let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                    let token_update = ServerMessage::TokenUpdate { tokens };
+                    broadcast_message(clients, &token_update).await;
+
+                    if restore_combat {
+                        let gs_read = game_state.read().await;
+                        let participants = gs_read.combat.participants.clone();
+                        let turn = gs_read
+                            .combat
+                            .get_current_participant()
+                            .map(|c| (c.id.clone(), c.name.clone()));
+                        drop(gs_read);
+
+                        let combat_started = ServerMessage::CombatStarted { participants };
+                        broadcast_message(clients, &combat_started).await;
+
+                        if let Some((current_turn, participant_name)) = turn {
+                            let turn_changed = ServerMessage::TurnChanged {
+                                current_turn,
+                                participant_name,
+                            };
+                            broadcast_message(clients, &turn_changed).await;
+                        }
+                    }
+                }
+
+                let map_loaded = ServerMessage::MapLoaded {
+                    map,
+                    player_map_viewport: vp.clone(),
+                };
+=======
+=======
+>>>>>>> Stashed changes
+                            warn!("⚠️ Failed to parse map state JSON");
+                        }
+                    }
+                }
+                
+                // Broadcast character list update to reflect HP changes
+                let characters: Vec<Character> = game_state.read().await.characters.values().cloned().collect();
+                let character_list = ServerMessage::CharacterList { characters, style: None };
+                broadcast_message(clients, &character_list).await;
+                
+                drop(gs);
+                
+                // Broadcast token update after restoring
+                let tokens = game_state.read().await.tokens.clone();
+                let token_update = ServerMessage::TokenUpdate { tokens };
+                broadcast_message(clients, &token_update).await;
+                
+                // Broadcast combat state if restored
+                if let Some(ref state_json) = map_row.6 {
+                    if !clear {
+                        if let Ok(state_data) = serde_json::from_str::<serde_json::Value>(state_json) {
+                            if let Some(combat_data) = state_data.get("combat") {
+                                if let Some(active) = combat_data.get("active").and_then(|v| v.as_bool()) {
+                                    if active {
+                                        let gs = game_state.read().await;
+                                        let participants = gs.combat.participants.clone();
+                                        drop(gs);
+                                        let combat_started = ServerMessage::CombatStarted { participants };
+                                        broadcast_message(clients, &combat_started).await;
+                                        
+                                        // Broadcast current turn
+                                        let gs = game_state.read().await;
+                                        if let Some(current) = gs.combat.get_current_participant() {
+                                            let turn_changed = ServerMessage::TurnChanged {
+                                                current_turn: current.id.clone(),
+                                                participant_name: current.name.clone(),
+                                            };
+                                            drop(gs);
+                                            broadcast_message(clients, &turn_changed).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 let map_loaded = ServerMessage::MapLoaded { map };
+>>>>>>> Stashed changes
                 broadcast_message(clients, &map_loaded).await;
+                let vp_msg = ServerMessage::PlayerMapViewportUpdated {
+                    enabled: vp.enabled,
+                    x: vp.x,
+                    y: vp.y,
+                    width: vp.width,
+                    height: vp.height,
+                };
+                broadcast_message(clients, &vp_msg).await;
             } else {
                 warn!("Map not found in database: {}", map_id);
                 let error = ServerMessage::Error { message: format!("Map not found: {}", map_id) };
@@ -1213,15 +2137,25 @@ async fn handle_client_message(
             
             // Clear all tokens
             gs.tokens.clear();
+            gs.player_map_viewport = crate::models::PlayerMapViewport::default();
             
             // Clear token update (empty tokens array)
             let token_update = ServerMessage::TokenUpdate { tokens: Vec::new() };
+            let vp = gs.player_map_viewport.clone();
             drop(gs); // Release write lock before broadcasting
             
             // Broadcast map cleared and empty token update to all clients
             let map_cleared = ServerMessage::MapCleared;
             broadcast_message(clients, &map_cleared).await;
             broadcast_message(clients, &token_update).await;
+            let vp_msg = ServerMessage::PlayerMapViewportUpdated {
+                enabled: vp.enabled,
+                x: vp.x,
+                y: vp.y,
+                width: vp.width,
+                height: vp.height,
+            };
+            broadcast_message(clients, &vp_msg).await;
             
             info!("✅ Map and tokens cleared, broadcast to all clients");
         }
@@ -1229,6 +2163,56 @@ async fn handle_client_message(
         ClientMessage::MapSettingsChanged { grid_size, width, height } => {
             let settings = ServerMessage::MapSettingsChanged { grid_size, width, height };
             broadcast_message(clients, &settings).await;
+        }
+        
+        ClientMessage::SetPlayerMapViewport {
+            enabled,
+            x,
+            y,
+            width,
+            height,
+        } => {
+            let is_dm = game_state
+                .read()
+                .await
+                .players
+                .get(session_id)
+                .map(|p| p.is_dm)
+                .unwrap_or(false);
+            if !is_dm {
+                return;
+            }
+            let mut w = width.max(32.0);
+            let mut h = height.max(32.0);
+            let mut vx = x;
+            let mut vy = y;
+            {
+                let gs = game_state.read().await;
+                if let Some(ref m) = gs.current_map {
+                    let mw = m.width as f32;
+                    let mh = m.height as f32;
+                    w = w.min(mw);
+                    h = h.min(mh);
+                    vx = vx.clamp(0.0, (mw - w).max(0.0));
+                    vy = vy.clamp(0.0, (mh - h).max(0.0));
+                }
+            }
+            let mut gs = game_state.write().await;
+            gs.player_map_viewport.enabled = enabled;
+            gs.player_map_viewport.x = vx;
+            gs.player_map_viewport.y = vy;
+            gs.player_map_viewport.width = w;
+            gs.player_map_viewport.height = h;
+            let vp = gs.player_map_viewport.clone();
+            drop(gs);
+            let msg = ServerMessage::PlayerMapViewportUpdated {
+                enabled: vp.enabled,
+                x: vp.x,
+                y: vp.y,
+                width: vp.width,
+                height: vp.height,
+            };
+            broadcast_message(clients, &msg).await;
         }
         
         // Character handlers

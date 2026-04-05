@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v35'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v40'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 var lastActionBarScrollBeforeClick = null; // Capture scroll on mousedown so we restore to pre-click position (avoid grid dragging down)
 var actionBarScrollLockUntil = 0; // Until this timestamp, we force-restore scroll on any scroll event (stops grid drag)
 (function () { try { console.log('%c[GorGox] app.js ' + APP_UI_VERSION + ' loaded', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
@@ -8,6 +8,8 @@ let ws = null;
 let selectedStyle = 'dnd'; // 'dnd' or 'starwars'
 let sessionId = null;
 let isDM = false; // THIS NEVER CHANGES AFTER CONNECTION
+/** Server echo of Connect `is_dm` — used for player viewport fog so it matches the session role. */
+let serverIsDm = null;
 let myPlayerName = ''; // Store our player name
 let myCharacterId = null; // Track which character this player controls
 let playerActionBarVisible = true; // Toggle for bottom action bar (players only)
@@ -21,6 +23,10 @@ let characters = [];
 let enemies = [];
 let npcs = []; // NPCs loaded from npc.json
 let selectedToken = null;
+/** When set, next token click on the grid will be used as the target for this attack (then cleared). */
+let pendingTargetAttack = null;
+/** When set, next click(s) will be used for tech/force power: single token, or AOE center (circle) or origin then direction (cone). */
+let pendingTargetPower = null;
 let connectedPlayers = []; // Track all connected players
 let combatState = {
     active: false,
@@ -72,6 +78,12 @@ let coneDistance = 15; // Default cone distance in feet (optional, defaults to 1
 let circleRadius = 25; // Default circle radius in feet
 let currentPlacementShape = null; // Shape being placed (cone or circle)
 let conePlacementState = null; // Track cone placement: {startX, startY} or null
+
+// DM: rectangle in map pixels — only this region is drawn for non-DM clients when enabled (synced by server)
+let playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+let dmPlayerViewportToolActive = false;
+let playerViewportDrag = null; // { mode, startMx, startMy, ox, oy, ow, oh }
+let playerViewportSendTimer = null;
 
 // Ping system
 let activePings = []; // Array of active pings: [{x, y, timestamp, playerName, id}]
@@ -164,6 +176,7 @@ function connect() {
 function performConnection(playerName, isDmValue, style) {
     myPlayerName = playerName;
     isDM = isDmValue;
+    serverIsDm = null;
     selectedStyle = style;
     cancelReconnect();
     
@@ -402,6 +415,12 @@ function handleServerMessage(message) {
     }
     
     switch (message.type) {
+        case 'PlayerRole':
+            // Authoritative session role from server (same source as Connect); used for map fog.
+            serverIsDm = message.is_dm === true;
+            renderCanvas();
+            break;
+            
         case 'Connected':
             console.log('✅ Connected message received! Session ID:', message.session_id);
             sessionId = message.session_id;
@@ -448,6 +467,7 @@ function handleServerMessage(message) {
                 if (shutdownSection) shutdownSection.classList.remove('hidden');
                 updatePlayerConnectionLink();
                 document.getElementById('playerControls').classList.add('hidden');
+                syncPlayerViewportCheckbox();
                 console.log('DM MODE ACTIVATED - Full controls enabled, NO character selection');
             } else {
                 // Players: allow one auto-open of character select this session; then only button opens it
@@ -545,6 +565,11 @@ function handleServerMessage(message) {
                 canvas.width = currentMap.width;
                 canvas.height = currentMap.height;
             }
+            // Viewport is bundled with the map so players always get fog state in the same tick
+            // (avoids only seeing full map if a separate WS message was dropped or reordered).
+            if (message.player_map_viewport != null && typeof message.player_map_viewport === 'object') {
+                applyPlayerMapViewportFromServer(message.player_map_viewport);
+            }
             console.log('🗺️ MapLoaded - image_path:', message.map.image_path);
             loadMapImage(message.map.image_path);
             renderCanvas(); // Draw immediately so tokens show even before map image loads
@@ -566,6 +591,10 @@ function handleServerMessage(message) {
             measurementShapes = [];
             rulerStart = null;
             rulerEnd = null;
+            playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+            dmPlayerViewportToolActive = false;
+            playerViewportDrag = null;
+            syncPlayerViewportCheckbox();
             
             // Update UI
             const mapNameElement = document.getElementById('currentMapName');
@@ -612,9 +641,13 @@ function handleServerMessage(message) {
                 currentMap.height = message.height;
                 currentMap.grid_size = gridSize;
             }
-            // Don't reset zoom for players, just re-render
+            clampPlayerMapViewportToMap();
             renderCanvas();
             addLogEntry(`🗺️ Map settings updated: Grid ${gridSize}px, Size ${message.width}x${message.height}`, 'info');
+            break;
+            
+        case 'PlayerMapViewportUpdated':
+            applyPlayerMapViewportFromServer(message);
             break;
             
         case 'RulerUpdate':
@@ -855,6 +888,8 @@ function handleServerMessage(message) {
                 console.warn('⚠️ NPC instance count changed! Before:', npcInstancesBefore.length, 'After:', npcInstancesAfter.length);
             }
             
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
             // Update selectedToken if it still exists in the new tokens array
             // CRITICAL: Preserve the size from selectedToken if it was manually set
             if (selectedToken) {
@@ -876,6 +911,26 @@ function handleServerMessage(message) {
             }
             
             // Always render canvas when tokens update - this ensures all clients see the tokens
+=======
+=======
+>>>>>>> Stashed changes
+            // Update selected token if it still exists
+            if (selectedToken) {
+                const updatedToken = tokens.find(t => t.id === selectedToken.id);
+                if (updatedToken) {
+                    selectedToken = updatedToken;
+                    updateTokenInfo();
+                } else {
+                    selectedToken = null;
+                    updateTokenInfo();
+                }
+            }
+            
+            // CRITICAL: Re-render canvas to show updated token positions
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
             renderCanvas();
             
             if (combatState.active) {
@@ -1644,8 +1699,15 @@ function handleServerMessage(message) {
             break;
             
         case 'Error':
-            alert('Error: ' + message.message);
-            addLogEntry('Error: ' + message.message, 'damage');
+            // Check if this is actually a success message (server uses Error for both)
+            if (message.message.includes('saved successfully') || message.message.includes('Map state saved')) {
+                addLogEntry(message.message, 'info');
+                // Show a brief success notification instead of alert
+                console.log('✅', message.message);
+            } else {
+                alert('Error: ' + message.message);
+                addLogEntry('Error: ' + message.message, 'damage');
+            }
             break;
             
         case 'AllCustomSpells':
@@ -1831,6 +1893,199 @@ function loadInitialData() {
 }
 
 // Canvas Setup and Rendering
+function syncPlayerViewportCheckbox() {
+    const el = document.getElementById('playerViewportEnabled');
+    if (el) el.checked = !!playerMapViewport.enabled;
+    const btn = document.getElementById('playerViewportToolBtn');
+    if (btn) {
+        btn.style.background = dmPlayerViewportToolActive ? '#357abd' : '#2a3a5a';
+        btn.textContent = dmPlayerViewportToolActive ? '✅ Done moving box' : '📐 Move / resize box';
+    }
+}
+
+function viewportEnabledFromServer(raw) {
+    if (raw === true || raw === 1) return true;
+    if (typeof raw === 'string' && raw.trim().toLowerCase() === 'true') return true;
+    return false;
+}
+
+function applyPlayerMapViewportFromServer(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    playerMapViewport.enabled = viewportEnabledFromServer(msg.enabled);
+    playerMapViewport.x = Number(msg.x) || 0;
+    playerMapViewport.y = Number(msg.y) || 0;
+    playerMapViewport.width = Math.max(32, Number(msg.width) || 640);
+    playerMapViewport.height = Math.max(32, Number(msg.height) || 480);
+    clampPlayerMapViewportToMap();
+    syncPlayerViewportCheckbox();
+    renderCanvas();
+}
+
+function clampPlayerMapViewportToMap() {
+    if (!currentMap || !currentMap.width) return;
+    const mw = currentMap.width;
+    const mh = currentMap.height;
+    let w = Math.max(32, Math.min(playerMapViewport.width, mw));
+    let h = Math.max(32, Math.min(playerMapViewport.height, mh));
+    let x = Math.max(0, Math.min(playerMapViewport.x, mw - w));
+    let y = Math.max(0, Math.min(playerMapViewport.y, mh - h));
+    playerMapViewport.width = w;
+    playerMapViewport.height = h;
+    playerMapViewport.x = x;
+    playerMapViewport.y = y;
+}
+
+function ensureDefaultPlayerMapViewport() {
+    if (!currentMap || !currentMap.width) return;
+    const mw = currentMap.width;
+    const mh = currentMap.height;
+    const w = Math.min(700, Math.max(200, mw * 0.45));
+    const h = Math.min(525, Math.max(200, mh * 0.45));
+    playerMapViewport.width = w;
+    playerMapViewport.height = h;
+    playerMapViewport.x = (mw - w) / 2;
+    playerMapViewport.y = (mh - h) / 2;
+}
+
+function onPlayerViewportEnabledChange() {
+    if (!isDM) return;
+    const el = document.getElementById('playerViewportEnabled');
+    playerMapViewport.enabled = !!(el && el.checked);
+    if (playerMapViewport.enabled) {
+        ensureDefaultPlayerMapViewport();
+    } else {
+        dmPlayerViewportToolActive = false;
+    }
+    sendPlayerMapViewportToServer();
+    syncPlayerViewportCheckbox();
+    renderCanvas();
+}
+
+function togglePlayerViewportTool() {
+    if (!isDM) return;
+    dmPlayerViewportToolActive = !dmPlayerViewportToolActive;
+    syncPlayerViewportCheckbox();
+    renderCanvas();
+}
+
+function sendPlayerMapViewportToServer() {
+    if (!isDM || !ws || ws.readyState !== WebSocket.OPEN) return;
+    clampPlayerMapViewportToMap();
+    sendMessage({
+        type: 'SetPlayerMapViewport',
+        enabled: playerMapViewport.enabled,
+        x: playerMapViewport.x,
+        y: playerMapViewport.y,
+        width: playerMapViewport.width,
+        height: playerMapViewport.height
+    });
+}
+
+function scheduleSendPlayerMapViewport() {
+    if (!isDM) return;
+    if (playerViewportSendTimer) clearTimeout(playerViewportSendTimer);
+    playerViewportSendTimer = setTimeout(() => {
+        playerViewportSendTimer = null;
+        sendPlayerMapViewportToServer();
+    }, 80);
+}
+
+function hitTestPlayerViewport(mx, my) {
+    const vp = playerMapViewport;
+    if (!vp.enabled || !currentMap) return null;
+    const t = 14 / zoom;
+    const corners = [
+        ['nw', vp.x, vp.y],
+        ['ne', vp.x + vp.width, vp.y],
+        ['sw', vp.x, vp.y + vp.height],
+        ['se', vp.x + vp.width, vp.y + vp.height]
+    ];
+    for (let i = 0; i < corners.length; i++) {
+        const c = corners[i];
+        if (Math.abs(mx - c[1]) <= t && Math.abs(my - c[2]) <= t) return c[0];
+    }
+    const edge = 12 / zoom;
+    if (my >= vp.y - t && my <= vp.y + edge && mx >= vp.x - t && mx <= vp.x + vp.width + t) return 'n';
+    if (my >= vp.y + vp.height - edge && my <= vp.y + vp.height + t && mx >= vp.x - t && mx <= vp.x + vp.width + t) return 's';
+    if (mx >= vp.x - t && mx <= vp.x + edge && my >= vp.y - t && my <= vp.y + vp.height + t) return 'w';
+    if (mx >= vp.x + vp.width - edge && mx <= vp.x + vp.width + t && my >= vp.y - t && my <= vp.y + vp.height + t) return 'e';
+    if (mx >= vp.x && mx <= vp.x + vp.width && my >= vp.y && my <= vp.y + vp.height) return 'move';
+    return null;
+}
+
+function drawPlayerViewportHandles(vp) {
+    const s = 9 / zoom;
+    const corners = [
+        [vp.x, vp.y],
+        [vp.x + vp.width, vp.y],
+        [vp.x, vp.y + vp.height],
+        [vp.x + vp.width, vp.y + vp.height]
+    ];
+    ctx.fillStyle = 'rgba(120, 200, 255, 0.95)';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1 / zoom;
+    corners.forEach(([cx, cy]) => {
+        ctx.fillRect(cx - s, cy - s, s * 2, s * 2);
+        ctx.strokeRect(cx - s, cy - s, s * 2, s * 2);
+    });
+}
+
+function applyPlayerViewportDrag(mx, my) {
+    const d = playerViewportDrag;
+    if (!d || !currentMap) return;
+    const dx = mx - d.startMx;
+    const dy = my - d.startMy;
+    const ox = d.ox, oy = d.oy, ow = d.ow, oh = d.oh;
+    let x = ox, y = oy, w = ow, h = oh;
+    switch (d.mode) {
+        case 'move':
+            x = ox + dx;
+            y = oy + dy;
+            break;
+        case 'se':
+            w = ow + dx;
+            h = oh + dy;
+            break;
+        case 'nw':
+            x = ox + dx;
+            y = oy + dy;
+            w = ow - dx;
+            h = oh - dy;
+            break;
+        case 'ne':
+            y = oy + dy;
+            w = ow + dx;
+            h = oh - dy;
+            break;
+        case 'sw':
+            x = ox + dx;
+            w = ow - dx;
+            h = oh + dy;
+            break;
+        case 'n':
+            y = oy + dy;
+            h = oh - dy;
+            break;
+        case 's':
+            h = oh + dy;
+            break;
+        case 'e':
+            w = ow + dx;
+            break;
+        case 'w':
+            x = ox + dx;
+            w = ow - dx;
+            break;
+        default:
+            return;
+    }
+    playerMapViewport.x = x;
+    playerMapViewport.y = y;
+    playerMapViewport.width = Math.max(32, w);
+    playerMapViewport.height = Math.max(32, h);
+    clampPlayerMapViewportToMap();
+}
+
 function setupCanvas() {
     if (!canvas) {
         console.error('❌ [SETUP CANVAS] Canvas is null!');
@@ -1871,10 +2126,18 @@ function renderCanvas() {
     ctx.translate(panX, panY);
     ctx.scale(zoom, zoom);
     
+    const mapW = (currentMap && currentMap.width) ? currentMap.width : canvas.width;
+    const mapH = (currentMap && currentMap.height) ? currentMap.height : canvas.height;
+    const vp = playerMapViewport;
+    const mapReadyForFog = currentMap && currentMap.image && currentMap.width && currentMap.height;
+    const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+    const playerFogActive = viewerIsPlayer && vp.enabled && mapReadyForFog;
+    const dmVpGuide = isDM && vp.enabled && mapReadyForFog;
+    
     // Draw map image if loaded
     // CRITICAL: Double-check currentMap is not null and has an image before drawing
     // This prevents drawing a cleared map
-    if (currentMap && currentMap.image && currentMap.id) {
+    if (currentMap && currentMap.image) {
         try {
             ctx.drawImage(currentMap.image, 0, 0);
         } catch (e) {
@@ -1894,6 +2157,9 @@ function renderCanvas() {
     tokens.forEach(token => {
         drawToken(token);
     });
+    
+    // Draw targeting range circle when choosing a target (attack or power with range)
+    drawTargetingRangeCircle();
     
     // Draw all measurement shapes
     if (measurementShapes.length > 0) {
@@ -1953,7 +2219,48 @@ function renderCanvas() {
     // Update highlighted tokens (remove expired ones)
     updateHighlightedTokens();
     
+    if (dmVpGuide) {
+        const x0 = vp.x, y0 = vp.y, w0 = vp.width, h0 = vp.height;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.52)';
+        ctx.fillRect(0, 0, mapW, y0);
+        ctx.fillRect(0, y0 + h0, mapW, Math.max(0, mapH - y0 - h0));
+        ctx.fillRect(0, y0, Math.max(0, x0), h0);
+        ctx.fillRect(x0 + w0, y0, Math.max(0, mapW - x0 - w0), h0);
+        ctx.strokeStyle = 'rgba(100, 200, 255, 0.95)';
+        ctx.lineWidth = 2 / zoom;
+        ctx.setLineDash([10 / zoom, 7 / zoom]);
+        ctx.strokeRect(x0, y0, w0, h0);
+        ctx.setLineDash([]);
+        if (dmPlayerViewportToolActive) {
+            drawPlayerViewportHandles(vp);
+        }
+    }
+    
     ctx.restore();
+    
+    // Players: mask in **canvas pixel space** after pan/zoom (covers the framebuffer, not map units).
+    if (playerFogActive) {
+        const x0 = vp.x * zoom + panX;
+        const y0 = vp.y * zoom + panY;
+        const w0 = vp.width * zoom;
+        const h0 = vp.height * zoom;
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const midTop = Math.max(0, y0);
+        const midBot = Math.min(ch, y0 + h0);
+        const midH = Math.max(0, midBot - midTop);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#050508';
+        ctx.fillRect(0, 0, cw, Math.max(0, Math.min(y0, ch)));
+        ctx.fillRect(0, Math.min(ch, y0 + h0), cw, Math.max(0, ch - Math.min(ch, y0 + h0)));
+        ctx.fillRect(0, midTop, Math.max(0, Math.min(x0, cw)), midH);
+        ctx.fillRect(Math.min(cw, x0 + w0), midTop, Math.max(0, cw - Math.min(cw, x0 + w0)), midH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x0, y0, w0, h0);
+        ctx.restore();
+    }
 }
 
 // Update highlighted tokens and remove expired ones
@@ -2436,6 +2743,84 @@ function drawGrid() {
     }
 }
 
+// Draw range circle when in targeting mode (attack or single-target power with range)
+function drawTargetingRangeCircle() {
+    var rangeFeet = null;
+    var rangeMinMax = null; // { min, max } for 50/200 style
+    var centerToken = null;
+    if (pendingTargetAttack) {
+        var r = pendingTargetAttack.range;
+        if (r != null && typeof r === 'object' && typeof r.min === 'number' && typeof r.max === 'number' && r.min > 0 && r.max >= r.min)
+            rangeMinMax = r;
+        else if (r != null && typeof r === 'number' && r > 0)
+            rangeFeet = r;
+        else
+            rangeFeet = 30; // default when no range
+        centerToken = tokens.find(function(t) {
+            if (t.entity_type !== 'Player') return false;
+            if (myCharacterId && t.entity_id === myCharacterId) return true;
+            var c = characters.find(function(ch) { return ch.id === t.entity_id; });
+            return c && (c.name || '').trim() === (pendingTargetAttack.characterName || '').trim();
+        });
+    } else if (pendingTargetPower && pendingTargetPower.targetType === 'creature' && pendingTargetPower.range != null) {
+        var pr = pendingTargetPower.range;
+        if (typeof pr === 'object' && typeof pr.min === 'number' && typeof pr.max === 'number') rangeMinMax = pr;
+        else if (typeof pr === 'number' && pr > 0) rangeFeet = pr;
+        if (rangeFeet == null && !rangeMinMax) return;
+        centerToken = tokens.find(function(t) {
+            if (t.entity_type !== 'Player') return false;
+            if (myCharacterId && t.entity_id === myCharacterId) return true;
+            var c = characters.find(function(ch) { return ch.id === t.entity_id; });
+            return c && (c.name || '').trim() === (pendingTargetPower.characterName || '').trim();
+        });
+    }
+    if (!centerToken) return;
+    var centerX = centerToken.x * gridSize + gridSize / 2;
+    var centerY = centerToken.y * gridSize + gridSize / 2;
+
+    if (rangeMinMax) {
+        var innerPx = (rangeMinMax.min / 5) * gridSize;
+        var outerPx = (rangeMinMax.max / 5) * gridSize;
+        ctx.save();
+        // Outer circle (long range)
+        ctx.fillStyle = 'rgba(201, 162, 39, 0.12)';
+        ctx.strokeStyle = 'rgba(201, 162, 39, 0.85)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, outerPx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = '11px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(rangeMinMax.max + ' ft (long)', centerX, centerY - outerPx - 5);
+        // Inner circle (normal range)
+        ctx.fillStyle = 'rgba(100, 200, 100, 0.2)';
+        ctx.strokeStyle = 'rgba(100, 220, 100, 0.95)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, innerPx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(rangeMinMax.min + ' ft (normal)', centerX, centerY - innerPx - 5);
+        ctx.restore();
+    } else if (rangeFeet != null && rangeFeet > 0) {
+        var radiusPixels = (rangeFeet / 5) * gridSize;
+        ctx.fillStyle = 'rgba(201, 162, 39, 0.2)';
+        ctx.strokeStyle = 'rgba(201, 162, 39, 0.95)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radiusPixels, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(rangeFeet + ' ft range', centerX, centerY - radiusPixels - 6);
+    }
+}
+
 // Draw movement range for current turn
 function drawMovementRange() {
     if (!combatState.active) return;
@@ -2619,7 +3004,14 @@ function drawToken(token) {
         // Portrait: prefer server-provided token.image_url so players see it without needing enemy list
         const portraitSrc = token.image_url || (() => {
             const enemyByTemplate = enemies.find(e => e.id === token.entity_id);
-            return enemyByTemplate && (enemyByTemplate.portrait_url || enemyByTemplate.local_portrait);
+            if (enemyByTemplate && (enemyByTemplate.portrait_url || enemyByTemplate.local_portrait))
+                return enemyByTemplate.portrait_url || enemyByTemplate.local_portrait;
+            // NPC from npc.json: use portrait by index in file order (static/enemy_portraits/0.png, 1.png, ...)
+            if (enemyByTemplate && enemyByTemplate.npcData && Array.isArray(npcs)) {
+                const npcIndex = npcs.findIndex(n => n && n.name === enemyByTemplate.npcData.name);
+                if (npcIndex >= 0) return '/static/enemy_portraits/' + npcIndex + '.png';
+            }
+            return null;
         })();
         if (portraitSrc) {
             hasPortrait = true;
@@ -2817,8 +3209,11 @@ function onCanvasMouseDown(e) {
     const mouseX = (e.clientX - rect.left - panX) / zoom;
     const mouseY = (e.clientY - rect.top - panY) / zoom;
     
-    // Measurement tools take priority - prevent ALL token interactions
-    if (measurementToolType) {
+    // Targeting mode: next click chooses attack or power target (takes priority over measurement)
+    if (pendingTargetAttack || pendingTargetPower) {
+        // Handled below with token/grid click
+    } else if (measurementToolType) {
+        // Measurement tools - prevent token interactions
         // Always prevent default for clicks when using measurement tools
         // But allow normal scrolling when not clicking
         e.preventDefault();
@@ -2929,28 +3324,77 @@ function onCanvasMouseDown(e) {
         return; // Stop here - don't process token clicks
     }
     
+    if (isDM && dmPlayerViewportToolActive && playerMapViewport.enabled && currentMap && currentMap.id) {
+        const hit = hitTestPlayerViewport(mouseX, mouseY);
+        if (hit) {
+            e.preventDefault();
+            playerViewportDrag = {
+                mode: hit,
+                startMx: mouseX,
+                startMy: mouseY,
+                ox: playerMapViewport.x,
+                oy: playerMapViewport.y,
+                ow: playerMapViewport.width,
+                oh: playerMapViewport.height
+            };
+            isDragging = false;
+            return;
+        }
+    }
+    
     // Check if clicking on a token - always use circular bounds
     let clickedToken = null;
     for (let token of tokens) {
         const tokenSize = token.size || 1.0;
-        // Calculate circle radius based on size (same as drawToken)
         const radius = gridSize * tokenSize / 2;
-        
-        // Token center position
         const tokenX = token.x * gridSize + gridSize / 2;
         const tokenY = token.y * gridSize + gridSize / 2;
-        
-        // Check if click is within circular bounds
         const dist = Math.sqrt(Math.pow(mouseX - tokenX, 2) + Math.pow(mouseY - tokenY, 2));
-        const clicked = dist <= radius;
-        
-        if (clicked) {
+        if (dist <= radius) {
             clickedToken = token;
             break;
         }
     }
-    
+    const gridX = Math.floor(mouseX / gridSize);
+    const gridY = Math.floor(mouseY / gridSize);
+
+    if (pendingTargetPower) {
+        const p = pendingTargetPower;
+        if (p.targetType === 'creature') {
+            if (clickedToken) {
+                resolvePowerOnToken(clickedToken);
+                return;
+            }
+        } else {
+            if (p.aoeShape === 'circle') {
+                const tokensInArea = getTokensInCircle(gridX, gridY, p.aoeSize);
+                resolvePowerOnArea(tokensInArea);
+                return;
+            }
+            if (p.aoeShape === 'cone') {
+                if (!p.aoeOrigin) {
+                    p.aoeOrigin = { gx: gridX, gy: gridY };
+                    addLogEntry('Click again to set cone direction (Escape to cancel).', 'info');
+                    renderCanvas();
+                    return;
+                }
+                const ox = p.aoeOrigin.gx + 0.5;
+                const oy = p.aoeOrigin.gy + 0.5;
+                const dx = (gridX + 0.5) - ox;
+                const dy = (gridY + 0.5) - oy;
+                const dir = Math.atan2(dy, dx);
+                const tokensInArea = getTokensInCone(p.aoeOrigin.gx, p.aoeOrigin.gy, dir, p.coneAngle || 60, p.aoeSize);
+                resolvePowerOnArea(tokensInArea);
+                return;
+            }
+        }
+    }
+
     if (clickedToken) {
+        if (pendingTargetAttack) {
+            resolveTargetedAttack(clickedToken);
+            return;
+        }
         selectedToken = clickedToken;
         updateTokenInfo();
         renderCanvas();
@@ -2989,14 +3433,25 @@ function onCanvasMouseMove(e) {
         return;
     }
     
+    if (playerViewportDrag && isDM) {
+        const rect = canvas.getBoundingClientRect();
+        const mx = (e.clientX - rect.left - panX) / zoom;
+        const my = (e.clientY - rect.top - panY) / zoom;
+        applyPlayerViewportDrag(mx, my);
+        scheduleSendPlayerMapViewport();
+        renderCanvas();
+        return;
+    }
+    
     // Normal token/pan dragging when no measurement tool is active
     if (isDragging) {
         panX = e.clientX - dragStartX;
         panY = e.clientY - dragStartY;
         renderCanvas();
     } else if (selectedToken) {
-        // Show cursor for moving tokens
         canvas.style.cursor = 'move';
+    } else {
+        canvas.style.cursor = '';
     }
 }
 
@@ -3007,15 +3462,23 @@ function onCanvasMouseUp(e) {
         return;
     }
     
+    if (playerViewportDrag) {
+        playerViewportDrag = null;
+        if (isDM) sendPlayerMapViewportToServer();
+        renderCanvas();
+        return;
+    }
+    
     if (isDragging) {
         isDragging = false;
     } else if (selectedToken && e.button === 0) {
         // FIX: DM can move any token, players restricted
         if (!isDM) {
-            // Players can only move their own character token
+            // Players can only move their own character token (don't alert when they clicked an enemy, e.g. after targeting)
             if (!myCharacterId || selectedToken.entity_id !== myCharacterId) {
-                alert("You can only move your own character!");
-                addLogEntry("You can only move your own character", "damage");
+                selectedToken = null;
+                updateTokenInfo();
+                renderCanvas();
                 return;
             }
             
@@ -3036,14 +3499,20 @@ function onCanvasMouseUp(e) {
         const gridX = Math.floor(mouseX / gridSize);
         const gridY = Math.floor(mouseY / gridSize);
         
-        sendMessage({
-            type: 'MoveToken',
-            token_id: selectedToken.id,
-            x: gridX,
-            y: gridY
-        });
-        
-        addLogEntry(`Moved to (${gridX}, ${gridY})`, 'info');
+        // Only move if position actually changed
+        if (selectedToken.x !== gridX || selectedToken.y !== gridY) {
+            console.log(`📍 Moving token ${selectedToken.id} from (${selectedToken.x}, ${selectedToken.y}) to (${gridX}, ${gridY})`);
+            sendMessage({
+                type: 'MoveToken',
+                token_id: selectedToken.id,
+                x: gridX,
+                y: gridY
+            });
+            
+            addLogEntry(`Moving token to (${gridX}, ${gridY})`, 'info');
+        } else {
+            console.log('📍 Token already at this position, skipping move');
+        }
     }
 }
 
@@ -4726,7 +5195,7 @@ function populatePlayerActionBar() {
             techPowersEl.innerHTML = html;
             techPowersEl.querySelectorAll('.bar-tech-power-btn').forEach(btn => {
                 btn.onclick = function() {
-                    addLogEntry((this.dataset.charName || charName) + ' uses Tech Power: ' + (this.dataset.power || ''), 'info');
+                    requestPowerTarget('tech', this.dataset.power, this.dataset.charName || charName);
                 };
             });
         }
@@ -4758,7 +5227,7 @@ function populatePlayerActionBar() {
             forcePowersEl.innerHTML = html;
             forcePowersEl.querySelectorAll('.bar-force-power-btn').forEach(btn => {
                 btn.onclick = function() {
-                    addLogEntry((this.dataset.charName || charName) + ' uses Force Power: ' + (this.dataset.power || ''), 'info');
+                    requestPowerTarget('force', this.dataset.power, this.dataset.charName || charName);
                 };
             });
         }
@@ -4804,15 +5273,15 @@ function populatePlayerActionBar() {
                 const toHit = atk.to_hit !== undefined ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : 0);
                 const dmg = atk.damage || atk.damage_dice || '1d4';
                 const dmgType = atk.type || atk.damage_type || 'damage';
-                const rangeStr = (atk.range && String(atk.range).trim()) ? String(atk.range).trim() : '';
-                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '" data-range="' + escapeHtml(rangeStr) + '">' + escapeHtml(name) + '</button>';
+                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + '</button>';
             });
         }
         html += '</div>';
         attacksEl.innerHTML = html;
         attacksEl.querySelectorAll('.bar-attack-btn').forEach(btn => {
             btn.onclick = function() {
-                rollAttack(this.dataset.weapon, parseInt(this.dataset.tohit, 10), this.dataset.damage, this.dataset.type, this.dataset.name);
+                const rangeInput = (this.dataset.range || '').trim() ? this.dataset.range : null;
+                requestAttackTarget(this.dataset.weapon, parseInt(this.dataset.tohit, 10), this.dataset.damage, this.dataset.type, this.dataset.name, rangeInput);
             };
         });
     }
@@ -5185,7 +5654,7 @@ function populateAttacks(charData, charForEquip) {
         };
         
         btn.onclick = function() {
-            const toHitMod = attack.to_hit !== undefined && attack.to_hit !== null ? attack.to_hit : (attack.toHit || 0);
+            const toHitMod = attack.to_hit || 0;
             rollAttack(attack.name, toHitMod, damage, damageType, myPlayerName);
         };
         
@@ -5816,16 +6285,21 @@ function renderSavedMapsList(maps) {
                 </div>
                 <div style="font-size: 11px; color: #888; margin-bottom: 8px;">
                     ${map.width} × ${map.height}px
+                    ${map.map_state ? '<span style="color: #4a9eff; margin-left: 8px;">💾 Has saved state</span>' : '<span style="color: #888; margin-left: 8px;">No saved state</span>'}
                 </div>
-                <div style="display: flex; gap: 8px;">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                     <button onclick="loadMap('${map.id}', false)" 
-                            style="flex: 1; padding: 6px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">
+                            style="flex: 1; min-width: 100px; padding: 6px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">
                         📍 Load
                     </button>
                     <button onclick="loadMap('${map.id}', true)" 
-                            style="flex: 1; padding: 6px; background: #44ff44; color: #000; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
-                        🖼️ Load in Background
+                            style="flex: 1; min-width: 100px; padding: 6px; background: #44ff44; color: #000; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
+                        🖼️ Load with State
                     </button>
+                    ${isDM && isCurrentMap ? `<button onclick="saveMap('${map.id}')" 
+                            style="flex: 1; min-width: 100px; padding: 6px; background: #ffaa44; color: #000; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
+                        💾 Save State
+                    </button>` : ''}
                 </div>
             </div>
         `;
@@ -5868,10 +6342,73 @@ function loadMap(mapId, inBackground = false) {
     });
     
     if (inBackground) {
-        addLogEntry('Loading map in background (tokens preserved)', 'info');
+        addLogEntry('Loading map with saved state (tokens and HP will be restored)', 'info');
+    } else {
+        addLogEntry('Loading map (clearing existing tokens)', 'info');
     }
     
     closeModal('mapUploadModal');
+}
+
+// Save current map state (tokens, HP, positions, etc.)
+function saveMap(mapId) {
+    if (!isDM) {
+        alert('Only DM can save map state!');
+        return;
+    }
+    
+    if (!currentMap) {
+        alert('No map is currently loaded!');
+        return;
+    }
+    
+    if (currentMap.id !== mapId) {
+        alert(`This map (${currentMap.name}) is not the one you're trying to save. Load the correct map first.`);
+        return;
+    }
+    
+    // IMPORTANT: Don't filter tokens by map_id on client side
+    // The server will handle all tokens in game state when a map is loaded
+    // Client-side tokens might have wrong/empty map_id, but server knows which map is loaded
+    console.log('💾 Saving map state for:', mapId);
+    console.log('   Current map:', currentMap.name);
+    console.log('   Total tokens visible:', tokens.length);
+    console.log('   All tokens:', tokens.map(t => ({ 
+        id: t.id, 
+        map_id: t.map_id || '(empty)', 
+        x: t.x, 
+        y: t.y, 
+        entity_id: t.entity_id 
+    })));
+    
+    // Warn if no tokens visible, but still allow saving (server might have tokens we don't see)
+    if (tokens.length === 0) {
+        if (!confirm('No tokens are currently visible. The server will save all tokens in its game state.\n\nContinue saving?')) {
+            return;
+        }
+    }
+    
+    sendMessage({
+        type: 'SaveMap',
+        map_id: mapId
+    });
+    
+    addLogEntry(`💾 Saving map state for "${currentMap.name}" (${tokens.length} visible tokens, server will check all)...`, 'info');
+    
+    // Refresh map list after a short delay to show updated state indicator
+    setTimeout(() => {
+        sendMessage({ type: 'ListMaps' });
+    }, 1500);
+}
+
+// Save current map state (convenience function for button)
+function saveCurrentMapState() {
+    if (!currentMap) {
+        alert('No map is currently loaded!');
+        return;
+    }
+    
+    saveMap(currentMap.id);
 }
 
 // Enemy Management
@@ -6388,14 +6925,18 @@ function clearCurrentMap() {
     measurementShapes = [];
     rulerStart = null;
     rulerEnd = null;
-    
+    playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+    dmPlayerViewportToolActive = false;
+    playerViewportDrag = null;
+    syncPlayerViewportCheckbox();
+
     // Update UI
     const mapNameElement = document.getElementById('currentMapName');
     if (mapNameElement) {
         mapNameElement.textContent = 'No map loaded';
     }
     updateTokenInfo();
-    
+
     // Clear canvas completely
     if (ctx && canvas) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -6886,7 +7427,10 @@ function spawnNPC(npc) {
         isNPC: true, // CRITICAL FLAG: identifies this as an NPC instance
         npcData: npc // CRITICAL: Store full NPC data for character sheet
     };
-    
+    // Portrait by index in npc.json order (static/enemy_portraits/0.png, 1.png, ...)
+    const npcIndex = npcs.findIndex(n => n && n.name === npc.name);
+    if (npcIndex >= 0) npcEnemy.local_portrait = '/static/enemy_portraits/' + npcIndex + '.png';
+
     // Check if this ID already exists (shouldn't happen, but safety check)
     const existing = enemies.find(e => e.id === instanceId);
     if (existing) {
@@ -7382,8 +7926,9 @@ function showNPCCharacterSheet(entityId) {
                 const escapedType = escapeJs(attack.damageType || '');
                 const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
                 const escapedDescription = attack.description ? escapeJs(attack.description) : '';
+                const escapedRange = escapeJs(String(attack.range || ''));
                 if (attack.type === 'weapon' && attack.toHit !== null) {
-                    html += `<div onclick='rollAttack("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div><div style="font-size: 13px; margin-top: 5px;"><span style="color: #44ff44;">⚔️ To Hit: ${formatMod(attack.toHit)}</span> | <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage || '')}</span> ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div></div>`;
+                    html += `<div onclick='requestAttackTarget("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}", "${escapedRange}")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div><div style="font-size: 13px; margin-top: 5px;"><span style="color: #44ff44;">⚔️ To Hit: ${formatMod(attack.toHit)}</span> | <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage || '')}</span> ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div></div>`;
                 } else if (attack.type === 'saving_throw' && attack.saveDC) {
                     const damageRollCode = attack.damage ? `const dmgResult = rollDice("${escapedDamage}"); addLogEntry("${escapedWeapon} damage: " + dmgResult.breakdown + " ${escapedType} = " + dmgResult.total, "damage");` : '';
                     html += `<div onclick='${damageRollCode}addLogEntry("${escapedWeapon}: DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save - ${escapedDamage ? escapedDamage + ' ' + escapedType : 'No damage'} damage", "info")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,170,68,0.1); border-left: 3px solid #ffaa44; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,170,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,170,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div><div style="font-size: 13px; margin-top: 5px;"><span style="color: #ffaa44;">🛡️ DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save</span> ${attack.damage ? `| <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage)}</span>` : ''} ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div></div>`;
@@ -7640,10 +8185,10 @@ function showNPCCharacterSheet(entityId) {
                 
                 // Escape description for tooltip
                 const escapedDescription = attack.description ? escapeJs(attack.description) : '';
-                
+                const escapedRange = escapeJs(String(attack.range || ''));
                 if (attack.type === 'weapon' && attack.toHit !== null) {
                     // Standard weapon attack
-                    html += `<div onclick='rollAttack("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}")' 
+                    html += `<div onclick='requestAttackTarget("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}", "${escapedRange}")' 
                         onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
                         onmouseout="hideSpellTooltip()" 
                         style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" 
@@ -7784,7 +8329,8 @@ function showNPCCharacterSheet(entityId) {
                     
                     if (matchingAttack.type === 'weapon' && matchingAttack.toHit !== null) {
                         // Weapon attack - roll the attack when clicked
-                        attackRollCode = `rollAttack('${escapedWeapon}', ${matchingAttack.toHit}, '${escapedDamage}', '${escapedType}', '${escapedEnemyName}');`;
+                        const escapedRange = escapeJs(String(matchingAttack.range || ''));
+                        attackRollCode = `requestAttackTarget('${escapedWeapon}', ${matchingAttack.toHit}, '${escapedDamage}', '${escapedType}', '${escapedEnemyName}', '${escapedRange}');`;
                     } else if (matchingAttack.type === 'saving_throw' && matchingAttack.saveDC) {
                         // Saving throw attack - roll damage when clicked
                         const damageRollCode = matchingAttack.damage ? `const dmgResult = rollDice("${escapedDamage}"); addLogEntry("${escapedWeapon} damage: " + dmgResult.breakdown + " ${escapedType} = " + dmgResult.total, "damage");` : '';
@@ -9652,16 +10198,10 @@ async function importCharacter() {
             
             const baseScores = charData.baseAbilityScores || {};
             
-            let ac = 10;
-            if (charData.equipment) {
-                const armor = charData.equipment.find(eq => eq.equipped && eq.category === 'Equipment');
-                if (armor) {
-                    if (armor.name.includes('Fiber')) ac = 11;
-                    else if (armor.name.includes('Lightweight')) ac = 12;
-                    else if (armor.name.includes('Medium')) ac = 13;
-                    else if (armor.name.includes('Heavy')) ac = 15;
-                }
-            }
+            // Use AC from converted Roll20/SW5e data directly (already includes armor, shields, mods)
+            const ac = (charData.ac && (typeof charData.ac.base === 'number' ? charData.ac.base : parseInt(String(charData.ac.base || '').replace(/\D+/g, '') || '0', 10)))
+                || charData.armor_class
+                || 10;
             
             const dexMod = Math.floor(((baseScores.Dexterity || 10) - 10) / 2);
             const speed = charData.speed?.walk ? parseInt(String(charData.speed.walk).replace(/\D+/g, '') || '30', 10) : 30;
@@ -11103,7 +11643,8 @@ function setupCharacterSheetRollHandlers(container) {
             const toHit = parseInt(el.getAttribute('data-to-hit'), 10);
             const damage = el.getAttribute('data-damage') || '';
             const dmgType = el.getAttribute('data-damage-type') || '';
-            rollAttack(weapon, isNaN(toHit) ? 0 : toHit, damage, dmgType, charName);
+            const rangeAttr = el.getAttribute('data-range') || '';
+            requestAttackTarget(weapon, isNaN(toHit) ? 0 : toHit, damage, dmgType, charName, rangeAttr.trim() ? rangeAttr : null);
         }
     }, true);
 }
@@ -11280,7 +11821,340 @@ function rollDice(notation) {
     return { total, rolls, breakdown };
 }
 
-// Roll attack with weapon
+// --- Targeting system for attacks ---
+/** Parse range string to a number (feet) or { min, max } for "x/y" (e.g. "50/200" = 50 normal, 200 long). */
+function parseRangeFeet(str) {
+    if (str == null || str === '') return null;
+    if (typeof str === 'number' && !isNaN(str)) return str;
+    if (typeof str === 'object' && str !== null && typeof str.min === 'number' && typeof str.max === 'number') return str;
+    var s = String(str).trim();
+    // "50/200" or "30 / 60" or "50 feet / 200 feet"
+    var twoPart = s.match(/^(\d+)\s*(?:feet|ft|'\s*)?\s*\/\s*(\d+)\s*(?:feet|ft|'\s*)?/i) || s.match(/^(\d+)\s*\/\s*(\d+)/);
+    if (twoPart) {
+        var minFt = parseInt(twoPart[1], 10);
+        var maxFt = parseInt(twoPart[2], 10);
+        if (minFt > 0 && maxFt >= minFt) return { min: minFt, max: maxFt };
+    }
+    var match = s.match(/(\d+)\s*(?:feet|ft|'\s*)?/i) || s.match(/(\d+)/);
+    if (match) return parseInt(match[1], 10);
+    return null;
+}
+
+function getTokenAC(token) {
+    if (!token) return 10;
+    if (token.entity_type === 'Player') {
+        const char = characters.find(c => c.id === token.entity_id);
+        return (char && char.armor_class !== undefined && char.armor_class !== null) ? char.armor_class : 10;
+    }
+    if (token.entity_type === 'Enemy') {
+        const participant = combatState.participants.find(p => p.id === token.id);
+        const enemy = enemies.find(e => e.id === token.entity_id);
+        if (participant && participant.armor_class !== undefined && participant.armor_class !== null) return participant.armor_class;
+        return (enemy && enemy.armor_class !== undefined && enemy.armor_class !== null) ? enemy.armor_class : 10;
+    }
+    return 10;
+}
+
+function getTokenDisplayName(token) {
+    if (!token) return 'Target';
+    if (token.entity_type === 'Player') {
+        const char = characters.find(c => c.id === token.entity_id);
+        return char ? char.name : 'Player';
+    }
+    if (token.entity_type === 'Enemy') {
+        const enemy = enemies.find(e => e.id === token.entity_id);
+        const clientName = (enemy && enemy.name) ? enemy.name : token.display_name;
+        if (clientName) return clientName;
+        const p = combatState.participants.find(p => p.id === token.id);
+        if (p && p.name) {
+            const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(p.name).trim());
+            if (!looksLikeUuid) return p.name;
+        }
+        return token.display_name || 'Enemy';
+    }
+    return token.display_name || 'Target';
+}
+
+function applyDamageToToken(targetToken, damage) {
+    const participant = combatState.participants.find(p => p.id === targetToken.id);
+    const targetName = getTokenDisplayName(targetToken);
+    if (targetToken.entity_type === 'Player') {
+        const char = characters.find(c => c.id === targetToken.entity_id);
+        if (char) {
+            const oldHp = char.current_hp !== undefined && char.current_hp !== null ? char.current_hp : char.max_hp;
+            const maxHp = char.max_hp || 100;
+            previousHpValues.set(targetToken.entity_id, { hp: oldHp, maxHp: maxHp });
+        }
+    } else if (targetToken.entity_type === 'Enemy') {
+        const enemy = enemies.find(e => e.id === targetToken.entity_id);
+        if (enemy) {
+            const oldHp = enemy.current_hp !== undefined && enemy.current_hp !== null ? enemy.current_hp : (enemy.max_hp || 100);
+            const maxHp = enemy.max_hp || 100;
+            previousHpValues.set('enemy-' + targetToken.entity_id, { hp: oldHp, maxHp: maxHp });
+        }
+    }
+    if (participant) {
+        const oldHp = participant.current_hp;
+        participant.current_hp = Math.max(0, participant.current_hp - damage);
+        if (targetToken.entity_type !== 'Enemy') {
+            addLogEntry(`${targetName} takes ${damage} damage! (${oldHp} → ${participant.current_hp} HP)`, 'damage');
+        }
+    }
+    if (targetToken.entity_type === 'Player') {
+        const char = characters.find(c => c.id === targetToken.entity_id);
+        if (char) char.current_hp = Math.max(0, (char.current_hp !== undefined && char.current_hp !== null ? char.current_hp : char.max_hp) - damage);
+    } else if (targetToken.entity_type === 'Enemy') {
+        const enemy = enemies.find(e => e.id === targetToken.entity_id);
+        if (enemy) {
+            const currentHp = enemy.current_hp !== undefined && enemy.current_hp !== null ? enemy.current_hp : (enemy.max_hp || 100);
+            enemy.current_hp = Math.max(0, currentHp - damage);
+            if (participant) participant.current_hp = enemy.current_hp;
+        }
+    }
+    sendMessage({ type: 'DealDamage', target_id: targetToken.id, damage: damage });
+    updateInitiativeList();
+    updateTokenInfo();
+    renderCanvas();
+}
+
+function rollDamageForAttack(damageNotation, isCrit) {
+    const flatMatch = damageNotation.match(/^(\d+)$/);
+    if (flatMatch) {
+        const n = parseInt(flatMatch[1]);
+        return { total: isCrit ? n * 2 : n, breakdown: isCrit ? n + ' + ' + n + ' = ' + (n * 2) + ' CRIT!' : String(n) };
+    }
+    const match = damageNotation.match(/(\d+)d(\d+)([+-]\d+)?/i);
+    if (!match) {
+        const r = rollDice(damageNotation);
+        return { total: r.total, breakdown: r.breakdown };
+    }
+    const numDice = parseInt(match[1]);
+    const diceSize = parseInt(match[2]);
+    const modifier = match[3] ? parseInt(match[3]) : 0;
+    const diceToRoll = isCrit ? numDice * 2 : numDice;
+    let rolls = [];
+    let total = modifier;
+    for (let i = 0; i < diceToRoll; i++) {
+        const roll = Math.floor(Math.random() * diceSize) + 1;
+        rolls.push(roll);
+        total += roll;
+    }
+    const breakdown = (isCrit ? '(' + rolls.join('+') + ') CRIT!' : '(' + rolls.join('+') + ')') + (modifier !== 0 ? (modifier >= 0 ? '+' + modifier : modifier) : '') + ' = ' + total;
+    return { total, breakdown };
+}
+
+function resolveTargetedAttack(targetToken) {
+    const p = pendingTargetAttack;
+    if (!p || !targetToken) return;
+    const targetAC = getTokenAC(targetToken);
+    const targetName = getTokenDisplayName(targetToken);
+    const toHitRoll = Math.floor(Math.random() * 20) + 1;
+    const toHitTotal = toHitRoll + p.toHitMod;
+    const isCrit = toHitRoll === 20;
+    const isFumble = toHitRoll === 1;
+    const hit = isCrit || (!isFumble && toHitTotal >= targetAC);
+    pendingTargetAttack = null;
+    if (canvas) canvas.style.cursor = '';
+    if (hit) {
+        const damageResult = rollDamageForAttack(p.damageNotation, isCrit);
+        const dmg = damageResult.total;
+        addRollEntry('⚔️ ' + p.characterName + ' attacks ' + targetName + ' with ' + p.weaponName + ': ' + toHitRoll + (p.toHitMod >= 0 ? '+' : '') + p.toHitMod + ' = ' + toHitTotal + ' vs AC ' + targetAC + ' — HIT! Damage: ' + damageResult.breakdown + ' ' + p.damageType + (isCrit ? ' 🎉 CRITICAL HIT!' : ''), isCrit, false);
+        applyDamageToToken(targetToken, dmg);
+    } else {
+        addRollEntry('⚔️ ' + p.characterName + ' attacks ' + targetName + ' with ' + p.weaponName + ': ' + toHitRoll + (p.toHitMod >= 0 ? '+' : '') + p.toHitMod + ' = ' + toHitTotal + ' vs AC ' + targetAC + ' — MISS!', false, isFumble);
+    }
+    updateTokenInfo();
+    renderCanvas();
+}
+
+function requestAttackTarget(weaponName, toHitMod, damageNotation, damageType, characterName, rangeInput) {
+    var range = null;
+    if (rangeInput != null) {
+        if (typeof rangeInput === 'string') range = parseRangeFeet(rangeInput);
+        else if (typeof rangeInput === 'object' && rangeInput !== null && typeof rangeInput.min === 'number' && typeof rangeInput.max === 'number') range = rangeInput;
+        else if (typeof rangeInput === 'number' && !isNaN(rangeInput)) range = rangeInput;
+    }
+    pendingTargetAttack = {
+        weaponName: weaponName,
+        toHitMod: toHitMod,
+        damageNotation: damageNotation,
+        damageType: damageType,
+        characterName: characterName,
+        range: range
+    };
+    addLogEntry('Click a token on the grid to choose your target (press Escape to cancel).', 'info');
+    if (canvas) canvas.style.cursor = 'crosshair';
+    renderCanvas();
+}
+
+function cancelTargeting() {
+    if (pendingTargetAttack) {
+        pendingTargetAttack = null;
+        addLogEntry('Targeting cancelled.', 'info');
+        if (canvas) canvas.style.cursor = '';
+        renderCanvas();
+    }
+    if (pendingTargetPower) {
+        pendingTargetPower = null;
+        addLogEntry('Power targeting cancelled.', 'info');
+        if (canvas) canvas.style.cursor = '';
+        renderCanvas();
+    }
+}
+
+// --- Tech/Force power targeting (single target or AOE) ---
+function getPowerTargetingInfo(charData, powerName, powerType) {
+    var details = powerType === 'tech' ? (charData.techPowerDetails || []) : (charData.forcePowerDetails || []);
+    function fromClass() {
+        var classes = charData.classes || [];
+        for (var i = 0; i < classes.length; i++) {
+            var d = powerType === 'tech' ? (classes[i].techPowerDetails || []) : (classes[i].forcePowerDetails || []);
+            for (var j = 0; j < d.length; j++) {
+                if (d[j] && (d[j].name || '').trim().toLowerCase() === (powerName || '').trim().toLowerCase()) return d[j];
+            }
+        }
+        return null;
+    }
+    var detail = null;
+    for (var k = 0; k < details.length; k++) {
+        if (details[k] && (details[k].name || '').trim().toLowerCase() === (powerName || '').trim().toLowerCase()) {
+            detail = details[k];
+            break;
+        }
+    }
+    if (!detail) detail = fromClass();
+    var rangeFeet = parseRangeFeet(detail.range || detail.powerrange);
+    if (detail && (detail.targetType === 'aoe' || detail.aoeShape || detail.aoeSize)) {
+        return {
+            targetType: detail.targetType || 'aoe',
+            aoeShape: (detail.aoeShape || 'circle').toLowerCase(),
+            aoeSize: typeof detail.aoeSize === 'number' ? detail.aoeSize : (parseInt(detail.aoeSize, 10) || 15),
+            coneAngle: typeof detail.coneAngle === 'number' ? detail.coneAngle : (parseInt(detail.coneAngle, 10) || 60),
+            range: rangeFeet
+        };
+    }
+    return { targetType: 'creature', range: rangeFeet };
+}
+
+function getTokensInCircle(centerGx, centerGy, radiusFeet) {
+    var radiusSquares = radiusFeet / 5;
+    var inArea = [];
+    tokens.forEach(function(t) {
+        var tx = t.x + 0.5;
+        var ty = t.y + 0.5;
+        var dist = Math.sqrt(Math.pow(tx - centerGx - 0.5, 2) + Math.pow(ty - centerGy - 0.5, 2));
+        if (dist <= radiusSquares) inArea.push(t);
+    });
+    return inArea;
+}
+
+function getTokensInCone(originGx, originGy, directionRad, coneAngleDeg, lengthFeet) {
+    var lengthSquares = lengthFeet / 5;
+    var halfAngle = (coneAngleDeg / 2) * (Math.PI / 180);
+    var inArea = [];
+    tokens.forEach(function(t) {
+        var tx = t.x + 0.5;
+        var ty = t.y + 0.5;
+        var dx = tx - (originGx + 0.5);
+        var dy = ty - (originGy + 0.5);
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > lengthSquares) return;
+        var angle = Math.atan2(dy, dx);
+        var diff = Math.abs(angle - directionRad);
+        if (diff > Math.PI) diff = 2 * Math.PI - diff;
+        if (diff <= halfAngle) inArea.push(t);
+    });
+    return inArea;
+}
+
+function resolvePowerOnToken(token) {
+    var p = pendingTargetPower;
+    if (!p || !token) return;
+    var targetName = getTokenDisplayName(token);
+    var icon = p.powerType === 'tech' ? '&#9889;' : '&#9733;';
+    var typeLabel = p.powerType === 'tech' ? 'Tech Power' : 'Force Power';
+    addRollEntry(icon + ' ' + p.characterName + ' uses ' + typeLabel + ': ' + p.powerName + ' on ' + targetName, false, false);
+    addLogEntry(p.characterName + ' uses ' + typeLabel + ' "' + p.powerName + '" on ' + targetName + '.', 'info');
+    if (p.powerType === 'tech') useTechPoint(); else useForcePoint();
+    populatePlayerActionBar();
+    pendingTargetPower = null;
+    if (canvas) canvas.style.cursor = '';
+    updateTokenInfo();
+    renderCanvas();
+}
+
+function resolvePowerOnArea(tokensInArea) {
+    var p = pendingTargetPower;
+    if (!p) return;
+    var names = tokensInArea.map(function(t) { return getTokenDisplayName(t); });
+    var icon = p.powerType === 'tech' ? '&#9889;' : '&#9733;';
+    var typeLabel = p.powerType === 'tech' ? 'Tech Power' : 'Force Power';
+    var areaDesc = p.aoeShape === 'cone' ? (p.aoeSize + 'ft cone') : (p.aoeSize + 'ft radius');
+    addRollEntry(icon + ' ' + p.characterName + ' uses ' + typeLabel + ': ' + p.powerName + ' (AOE ' + areaDesc + ') — ' + names.length + ' target(s): ' + names.join(', '), false, false);
+    addLogEntry(p.characterName + ' uses ' + typeLabel + ' "' + p.powerName + '" on area — ' + names.length + ' target(s): ' + names.join(', '), 'info');
+    if (p.powerType === 'tech') useTechPoint(); else useForcePoint();
+    populatePlayerActionBar();
+    pendingTargetPower = null;
+    if (canvas) canvas.style.cursor = '';
+    updateTokenInfo();
+    renderCanvas();
+}
+
+function requestPowerTarget(powerType, powerName, characterName) {
+    var myChar = characters.find(function(c) { return c.id === myCharacterId; });
+    if (!myChar) return;
+    var charData = myChar;
+    if (myChar.character_data) {
+        try {
+            var parsed = JSON.parse(myChar.character_data);
+            charData = parsed.character || parsed;
+        } catch (e) {}
+    }
+    var pts = powerType === 'tech' ? getTechPointsFromCharData(charData, myChar) : getForcePointsFromCharData(charData);
+    if (pts.max > 0 && pts.current <= 0) {
+        addLogEntry('No ' + (powerType === 'tech' ? 'tech' : 'force') + ' points remaining.', 'info');
+        return;
+    }
+    var info = getPowerTargetingInfo(charData, powerName, powerType);
+    if (info.targetType === 'aoe') {
+        pendingTargetAttack = null;
+        pendingTargetPower = {
+            powerType: powerType,
+            powerName: powerName,
+            characterName: characterName,
+            targetType: 'aoe',
+            aoeShape: info.aoeShape === 'cone' ? 'cone' : 'circle',
+            aoeSize: info.aoeSize,
+            coneAngle: info.coneAngle || 60,
+            aoeOrigin: null
+        };
+        var msg = info.aoeShape === 'cone' ? 'Click origin of cone, then click direction (Escape to cancel).' : 'Click center of area (Escape to cancel).';
+        addLogEntry(msg, 'info');
+    } else {
+        pendingTargetAttack = null;
+        pendingTargetPower = {
+            powerType: powerType,
+            powerName: powerName,
+            characterName: characterName,
+            targetType: 'creature',
+            range: info.range || null
+        };
+        addLogEntry('Click a token on the grid to choose your target (Escape to cancel).', 'info');
+    }
+    if (canvas) canvas.style.cursor = 'crosshair';
+    renderCanvas();
+}
+
+function cancelPowerTargeting() {
+    if (pendingTargetPower) {
+        pendingTargetPower = null;
+        addLogEntry('Power targeting cancelled.', 'info');
+        if (canvas) canvas.style.cursor = '';
+        renderCanvas();
+    }
+}
+
+// Roll attack with weapon (untargeted — use requestAttackTarget for targeted attacks)
 function rollAttack(weaponName, toHitMod, damageNotation, damageType, characterName) {
     console.log(`⚔️ Rolling attack with ${weaponName} for ${characterName}`);
     console.log(`   To Hit: +${toHitMod}`);
@@ -11971,7 +12845,7 @@ window.addEventListener('message', (event) => {
                 rollSkill(params.skillName, params.modifier, params.characterName);
                 break;
             case 'attack':
-                rollAttack(params.weaponName, params.toHitMod, params.damageNotation, params.damageType, params.characterName);
+                requestAttackTarget(params.weaponName, params.toHitMod, params.damageNotation, params.damageType, params.characterName, params.range != null ? params.range : params.rangeFeet);
                 break;
             case 'actionFromSheet':
                 if (typeof params.index === 'number') rollActionFromSheet(params.index);
@@ -14937,6 +15811,14 @@ async function saveGameState() {
             gridSize: gridSize
         },
         
+        playerMapViewport: {
+            enabled: playerMapViewport.enabled,
+            x: playerMapViewport.x,
+            y: playerMapViewport.y,
+            width: playerMapViewport.width,
+            height: playerMapViewport.height
+        },
+        
         // Tokens with HP values from their entities
         tokens: tokens.map(token => {
             const tokenData = {
@@ -15472,6 +16354,13 @@ async function loadGameStateFromData(gameState, sourceName) {
         // Update UI
         updateInitiativeList();
         updateCombatStatus();
+        
+        if (gameState.playerMapViewport) {
+            applyPlayerMapViewportFromServer(gameState.playerMapViewport);
+            if (isDM) {
+                setTimeout(() => sendPlayerMapViewportToServer(), 900);
+            }
+        }
         
         // Final render to ensure map and tokens are visible for all clients
         renderCanvas();

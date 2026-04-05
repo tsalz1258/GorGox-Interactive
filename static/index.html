@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gorgox Interactive (v32)</title>
-    <link rel="stylesheet" href="/static/style.css?v=35">
+    <link rel="stylesheet" href="/static/style.css?v=36">
 </head>
 <body>
     <div id="app">
@@ -52,6 +52,7 @@
                         <h3>Controls</h3>
                         <div id="dmControls" class="hidden">
                             <button onclick="showMapUpload()">📍 Upload Map</button>
+                            <button onclick="saveCurrentMapState()" id="saveMapStateBtn" style="background: #ffaa44; color: #000; font-weight: bold;">💾 Save Map State</button>
                             <button onclick="showMapSettings()">⚙️ Map Settings</button>
                             <button onclick="showEnemyManager()">👹 Enemy Database</button>
                             <button onclick="showCharacterManager()">👤 Characters</button>
@@ -64,6 +65,15 @@
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                             <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
                             <button onclick="toggleCombat()">⚔️ Toggle Combat</button>
+                            <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.12);">
+                                <div style="font-size:11px;font-weight:bold;color:#aa88ff;margin-bottom:6px;">👁️ Player map (anti-metagame)</div>
+                                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px;">
+                                    <input type="checkbox" id="playerViewportEnabled" onchange="onPlayerViewportEnabledChange()">
+                                    <span>Players only see inside the box</span>
+                                </label>
+                                <button type="button" id="playerViewportToolBtn" onclick="togglePlayerViewportTool()" style="width:100%;margin-bottom:6px;background:#2a3a5a;color:#fff;">📐 Move / resize box</button>
+                                <p style="font-size:10px;opacity:0.7;margin:0;line-height:1.35;">You always see the full map. Turn on, then use the tool to drag the cyan window. Players get fog outside it.</p>
+                            </div>
                         </div>
                         <div id="playerControls">
                             <button onclick="showCharacterSelect()">Select Character</button>
@@ -905,7 +915,7 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
-    <script src="/static/app.js?v=35"></script>
+    <script src="/static/app.js?v=40"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

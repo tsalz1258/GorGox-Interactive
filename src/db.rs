@@ -160,7 +160,8 @@ pub async fn init_db_with_style(style: &str) -> Result<Database> {
             image_path TEXT NOT NULL,
             grid_size INTEGER NOT NULL,
             width INTEGER NOT NULL,
-            height INTEGER NOT NULL
+            height INTEGER NOT NULL,
+            map_state TEXT
         )
         "#,
     )
@@ -200,6 +201,25 @@ pub async fn init_db_with_style(style: &str) -> Result<Database> {
         }
         Err(e) => {
             tracing::warn!("⚠️ Enemies table migration warning: {}", e);
+        }
+    }
+    
+    // Migrate maps table to add map_state column
+    tracing::info!("🔄 Migrating: Ensuring 'map_state' column exists in maps table...");
+    match sqlx::query("ALTER TABLE maps ADD COLUMN map_state TEXT")
+        .execute(&pool)
+        .await
+    {
+        Ok(_) => {
+            tracing::info!("✅ Successfully added 'map_state' column to maps table");
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("duplicate column") || err_str.contains("already exists") {
+                tracing::info!("✅ 'map_state' column already exists in maps table");
+            } else {
+                tracing::warn!("⚠️ Maps table migration warning: {}", e);
+            }
         }
     }
     

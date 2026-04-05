@@ -1,5 +1,5 @@
 use crate::combat::CombatState;
-use crate::models::{Character, EnemyInstance, Map, PlayerConnection, Token};
+use crate::models::{Character, EnemyInstance, Map, PlayerConnection, PlayerMapViewport, Token};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -10,6 +10,8 @@ pub struct GameState {
     pub characters: HashMap<String, Character>,
     pub enemy_instances: HashMap<String, EnemyInstance>,
     pub combat: CombatState,
+    /// Region of the map (pixel coords) visible to non-DM clients when enabled
+    pub player_map_viewport: PlayerMapViewport,
 }
 
 impl GameState {
@@ -21,6 +23,7 @@ impl GameState {
             characters: HashMap::new(),
             enemy_instances: HashMap::new(),
             combat: CombatState::new(),
+            player_map_viewport: PlayerMapViewport::default(),
         }
     }
 
@@ -45,10 +48,16 @@ impl GameState {
     }
 
     pub fn load_map(&mut self, map: Map, clear_tokens: bool) {
-        self.current_map = Some(map);
+        self.current_map = Some(map.clone());
         // Clear tokens when loading a new map (unless loading in background)
         if clear_tokens {
             self.tokens.clear();
+        } else {
+            // Update map_id for all existing tokens to match the loaded map
+            // This fixes tokens that might have empty or wrong map_id
+            for token in &mut self.tokens {
+                token.map_id = map.id.clone();
+            }
         }
     }
 

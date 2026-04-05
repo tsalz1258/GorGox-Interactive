@@ -66,6 +66,8 @@ pub struct Map {
     pub grid_size: i32,
     pub width: i32,
     pub height: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map_state: Option<String>, // JSON string containing tokens, HP values, etc.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ pub struct Token {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
 pub enum TokenType {
     Player,
     Enemy,
@@ -120,6 +123,7 @@ pub enum ClientMessage {
     
     // Map management (DM only)
     CreateMap { name: String, image_data: String, width: i32, height: i32 },
+    SaveMap { map_id: String }, // Save current tokens, HP, and state to map
     ListMaps,
     LoadMap { map_id: String, clear_tokens: Option<bool> },
     DeleteMap { map_id: String },
