@@ -62,6 +62,7 @@
                             <button onclick="showSettings()" style="background: #ffaa44; color: white; font-weight: bold;">⚙️ Settings</button>
                             <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
                             <button onclick="showPlaceCharacter()">🎭 Place Character</button>
+                            <button type="button" onclick="showPlaceObjectModal()" style="background:#6a6a6a;color:#fff;font-weight:bold;">📦 Place Object</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                             <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
                             <button onclick="toggleCombat()">⚔️ Toggle Combat</button>
@@ -78,6 +79,7 @@
                         <div id="playerControls">
                             <button onclick="showCharacterSelect()">Select Character</button>
                             <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
+                            <button type="button" id="armstechPlayerBtn" onclick="openArmstechTracker()" style="display:none;background:#2a4a3a;color:#a8f0c8;font-weight:bold;border:1px solid #44aa66;">🔧 Armstech</button>
                             <button id="playerActionBarToggleBtn" onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold;" title="Toggle the action bar at the bottom (On/Off)">📊 Action Bar (On)</button>
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
                             <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
@@ -431,6 +433,21 @@
             </div>
         </div>
 
+        <!-- Place Object (DM): grey map token with custom label for everyone -->
+        <div id="placeObjectModal" class="modal">
+            <div class="modal-content">
+                <h2>📦 Place Object</h2>
+                <p style="font-size: 13px; opacity: 0.85; margin-bottom: 12px;">Places a grey token (not a creature). Drag it on the map like any token. You can hide it from players so only you see it.</p>
+                <label for="placeObjectNameInput" style="display:block;font-size:12px;margin-bottom:6px;opacity:0.9;">Label (shown under token)</label>
+                <input type="text" id="placeObjectNameInput" maxlength="80" placeholder="e.g. Chest, Lever, Portal" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmPlaceObjectToken();}" style="width:100%;padding:10px;background:#2a2a2a;border:1px solid #555;color:#fff;border-radius:5px;box-sizing:border-box;margin-bottom:12px;">
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:16px;cursor:pointer;color:#ddd;"><input type="checkbox" id="placeObjectHiddenFromPlayers"/> Hidden from players (DM-only on map)</label>
+                <div class="modal-actions">
+                    <button type="button" onclick="confirmPlaceObjectToken()" style="background:#6a6a6a;color:#fff;font-weight:bold;">Place on map</button>
+                    <button type="button" onclick="closeModal('placeObjectModal')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Sound Board Modal -->
         <div id="soundBoardModal" class="modal">
             <div class="modal-content large">
@@ -537,6 +554,7 @@
                         <button id="updateCharacterFromJsonBtn" onclick="document.getElementById('updateCharacterJsonFile').click()" style="display: none; background: #c9a227; color: #1a1510; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;" title="Upload a new character sheet JSON (e.g. from SW5e export) to update this character (level up).">⬆️ Level Up (Update from JSON)</button>
                         <input type="file" id="updateCharacterJsonFile" accept=".json,application/json" style="display: none;" onchange="handleUpdateCharacterJsonFile(this)">
                         <button id="linkDiscordBtn" onclick="openDiscordLinkModal()" style="background: #5865f2; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;">🔗 Link Discord</button>
+                        <button type="button" id="armstechTrackerBtn" style="display: none; background: #2a4a3a; color: #a8f0c8; padding: 8px 15px; border: 1px solid #44aa66; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;">🔧 Armstech</button>
                         <button id="openSheetInNewWindowBtn" onclick="openCharacterSheetInNewWindow()" style="background: #4a9eff; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;">🖥️ Open in New Window</button>
                     </div>
                 </div>
@@ -546,6 +564,18 @@
                     <button id="editCharacterBtn" class="hidden" onclick="handleEditCharacterBtnClick()" style="background: #ffaa44; color: #000; font-weight: bold;">✏️ Edit</button>
                     <button id="cancelEditCharacterBtn" class="hidden" onclick="cancelCharacterEditMode()" style="background: #555; color: white;">Cancel</button>
                     <button onclick="closeModal('characterSheetModal')">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Armstech Engineering (Engineer / Jaster) — body filled by app.js -->
+        <div id="armstechModal" class="modal" style="z-index: 100050;">
+            <div class="modal-content large" style="max-width: 920px;">
+                <h2 id="armstechModalTitle" style="margin-top: 0; color: #a8f0c8;">Armstech Engineering</h2>
+                <p style="font-size: 12px; opacity: 0.85; margin-bottom: 12px;">Track your modified weapon, slots, tech DC, and equipped modifications.</p>
+                <div id="armstechModalBody"></div>
+                <div class="modal-actions">
+                    <button type="button" onclick="closeArmstechModal()">Close</button>
                 </div>
             </div>
         </div>
@@ -905,7 +935,7 @@
         padding: 15px; 
         max-width: 400px; 
         min-width: 250px;
-        z-index: 99999; 
+        z-index: 200000; 
         box-shadow: 0 8px 32px rgba(170,136,255,0.5); 
         color: #fff; 
         font-size: 13px; 
@@ -915,7 +945,8 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
-    <script src="/static/app.js?v=40"></script>
+    <script src="/static/data/armstech_data.js?v=68"></script>
+    <script src="/static/app.js?v=70"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

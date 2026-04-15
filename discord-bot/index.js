@@ -79,6 +79,8 @@ async function initializeEncryption() {
     }
     
     console.log('✅ Encryption ready! Loading Discord.js and voice module...\n');
+    console.log('📌 Discord Developer Portal → Bot → enable **MESSAGE CONTENT** + **SERVER MEMBERS** intents if needed.');
+    console.log('📌 Voice still requires libsodium working; set DISCORD_VOICE_DEBUG=1 for extra join logs.\n');
     
     // NOW load Discord.js and @discordjs/voice after encryption is ready
     const { Client, GatewayIntentBits, Events, ActivityType } = require('discord.js');
@@ -95,7 +97,7 @@ async function initializeEncryption() {
         process.exit(1);
     }
     
-    const { joinVoiceChannel } = require('@discordjs/voice');
+    const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
     
     // Verify encryption detection
     console.log('🔍 Verifying encryption detection after @discordjs/voice load...');
@@ -323,7 +325,11 @@ async function initializeEncryption() {
 
     // Track speaking status
     const speakingUsers = new Map();
-    
+    /** Throttle Opus `data` fallback so we don't call handlers every packet */
+    const opusFallbackLastFire = new Map();
+    /** Legacy: keyed by channel id; prefer getVoiceConnection(guildId) */
+    const voiceConnections = new Map();
+
     client.once(Events.ClientReady, async () => {
     console.log(`✅ Discord bot logged in as ${client.user.tag}!`);
     console.log(`   Bot ID: ${client.user.id}`);
@@ -384,40 +390,72 @@ async function initializeEncryption() {
         
         // Join the channel
         console.log(`   🤖 Joining voice channel: ${targetChannel.name}...`);
+        const voiceDebug = process.env.DISCORD_VOICE_DEBUG === '1';
         const connection = joinVoiceChannel({
             channelId: targetChannel.id,
             guildId: targetChannel.guild.id,
             adapterCreator: targetChannel.guild.voiceAdapterCreator,
             selfDeaf: false,
             selfMute: true,
+            debug: voiceDebug,
         });
         
         voiceConnections.set(targetChannel.id, connection);
-        
-        connection.on('stateChange', (oldState, newState) => {
-            console.log(`   🔌 Voice connection state: ${oldState.status} -> ${newState.status}`);
-            if (newState.status === 'ready') {
-                console.log(`   ✅ Bot successfully joined voice channel: ${targetChannel.name}!`);
-                setupSpeakingDetection(connection, targetChannel);
-            }
-        });
-        
-        connection.on('error', (error) => {
-            console.error(`   ❌ Voice connection error:`, error);
-        });
+        wireVoiceConnectionLifecycle(connection);
+        if (connection.state.status === 'ready') {
+            setupSpeakingDetection(connection);
+        }
         
     } catch (error) {
         console.error(`   ❌ Error joining configured voice channel:`, error);
     }
 }
 
-    // Store voice connections per channel
-    const voiceConnections = new Map();
-    
+    function getLiveVoiceChannelFromConnection(connection) {
+        if (!connection || !connection.joinConfig) return null;
+        const { guildId, channelId } = connection.joinConfig;
+        if (!guildId || !channelId) return null;
+        const guild = client.guilds.cache.get(guildId);
+        return guild ? guild.channels.cache.get(channelId) : null;
+    }
+
+    async function resolveVoiceChannel(guild, channelId) {
+        if (!guild || !channelId) return null;
+        let ch = guild.channels.cache.get(channelId);
+        if (ch && ch.isVoiceBased()) return ch;
+        try {
+            ch = await guild.channels.fetch(channelId);
+            return ch && ch.isVoiceBased() ? ch : null;
+        } catch (e) {
+            console.error(`   ❌ Could not fetch voice channel ${channelId}:`, e.message);
+            return null;
+        }
+    }
+
+    /** One stateChange + error handler per VoiceConnection (@discordjs/voice reuses one connection per guild). */
+    function wireVoiceConnectionLifecycle(connection) {
+        if (connection._gorgoxLifecycleWired) return;
+        connection._gorgoxLifecycleWired = true;
+        connection.on('stateChange', (oldS, newS) => {
+            console.log(`   🔌 Voice connection state: ${oldS.status} -> ${newS.status}`);
+            if (newS.status === 'ready') {
+                const ch = getLiveVoiceChannelFromConnection(connection);
+                console.log(`   ✅ Voice ready — monitoring: ${ch ? ch.name : connection.joinConfig.channelId}`);
+                setupSpeakingDetection(connection);
+            }
+        });
+        connection.on('error', (error) => {
+            const msg = error && error.message ? error.message : String(error);
+            console.error(`   ❌ Voice connection error:`, msg);
+            if (msg.includes('encryption') || msg.includes('compatible encryption')) {
+                console.error('   → Fix: ensure libsodium-wrappers works, or install VS Build Tools + sodium-native (see CRITICAL_ISSUE.md)');
+            }
+        });
+    }
+
     // Monitor voice state changes
     client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-    console.log(`🔊 VoiceStateUpdate event triggered`);
-    console.log(`   Old: channel=${oldState.channelId}, New: channel=${newState.channelId}`);
+    console.log(`🔊 VoiceStateUpdate: old=${oldState.channelId} new=${newState.channelId}`);
     
     if (!newState.member) {
         console.log(`   ⚠️ No member in newState`);
@@ -439,97 +477,44 @@ async function initializeEncryption() {
     
     // If user joined a voice channel, ensure bot is in that channel
     if (newState.channelId && newState.channelId !== oldState.channelId) {
-        const channel = newState.channel;
-        console.log(`   📍 User ${username} joined channel: ${channel ? channel.name : 'unknown'}`);
+        const channel = await resolveVoiceChannel(newState.guild, newState.channelId);
+        console.log(`   📍 User ${username} joined: ${channel ? channel.name : '(could not resolve channel)'}`);
         
         if (!channel) {
-            console.log(`   ❌ Channel is null!`);
+            console.log(`   ❌ Voice channel missing from cache and fetch failed — check bot permissions & channel id`);
             return;
         }
         
-        if (!voiceConnections.has(channel.id)) {
-            console.log(`   🤖 Bot not in channel yet, joining...`);
-            try {
-                const connection = joinVoiceChannel({
-                    channelId: channel.id,
-                    guildId: channel.guild.id,
-                    adapterCreator: channel.guild.voiceAdapterCreator,
-                    selfDeaf: false, // Don't deafen - we need to receive audio
-                    selfMute: true,  // Mute ourselves so we don't transmit
-                });
-                
-                console.log(`   ✅ Voice connection created`);
-                voiceConnections.set(channel.id, connection);
-                
-                // Wait for connection to be ready
-                connection.on('stateChange', (oldState, newState) => {
-                    console.log(`   🔌 Voice connection state: ${oldState.status} -> ${newState.status}`);
-                    if (newState.status === 'ready') {
-                        console.log(`   ✅ Bot ready in voice channel: ${channel.name}`);
-                        setupSpeakingDetection(connection, channel);
-                    }
-                });
-                
-                // Handle errors
-                connection.on('error', (error) => {
-                    console.error(`   ❌ Voice connection error:`, error.message);
-                    if (error.message.includes('encryption')) {
-                        console.error('');
-                        console.error('╔════════════════════════════════════════════════════════════╗');
-                        console.error('║  ENCRYPTION ERROR - Voice Detection Disabled                ║');
-                        console.error('╠════════════════════════════════════════════════════════════╣');
-                        console.error('║  The bot cannot detect speaking without encryption.         ║');
-                        console.error('║                                                              ║');
-                        console.error('║  SOLUTIONS:                                                  ║');
-                        console.error('║  1. Install Visual Studio Build Tools:                      ║');
-                        console.error('║     https://visualstudio.microsoft.com/downloads/           ║');
-                        console.error('║     Then: npm install sodium-native --force                 ║');
-                        console.error('║                                                              ║');
-                        console.error('║  2. OR manually highlight characters in-game                ║');
-                        console.error('║     using the test command or other methods                 ║');
-                        console.error('╚════════════════════════════════════════════════════════════╝');
-                        console.error('');
-                    }
-                });
-                
-            } catch (error) {
-                console.error(`   ❌ Error joining voice channel:`, error);
-                console.error(`   Error details:`, error.stack);
+        const voiceDebug = process.env.DISCORD_VOICE_DEBUG === '1';
+        try {
+            const connection = joinVoiceChannel({
+                channelId: channel.id,
+                guildId: channel.guild.id,
+                adapterCreator: channel.guild.voiceAdapterCreator,
+                selfDeaf: false,
+                selfMute: true,
+                debug: voiceDebug,
+            });
+            voiceConnections.set(channel.id, connection);
+            wireVoiceConnectionLifecycle(connection);
+            if (connection.state.status === 'ready') {
+                setupSpeakingDetection(connection);
             }
-        } else {
-            console.log(`   ✅ Bot already in channel`);
-            // Bot is already in channel, but user just joined - subscribe to this user's audio
-            const existingConnection = voiceConnections.get(channel.id);
-            if (existingConnection && existingConnection.state.status === 'ready') {
-                const userIdToSubscribe = newState.member.user.id;
-                console.log(`   🔧 Subscribing to new user: ${username} (${userIdToSubscribe})...`);
-                try {
-                    const subscription = existingConnection.receiver.subscribe(userIdToSubscribe, {
-                        end: { behavior: 'manual' }
-                    });
-                    if (subscription) {
-                        console.log(`   ✅ Subscribed to audio from ${username}`);
-                    } else {
-                        console.log(`   ⚠️ Subscription returned null for ${username}`);
-                    }
-                } catch (error) {
-                    console.error(`   ❌ Could not subscribe to ${username}:`, error.message);
-                }
-            }
+        } catch (error) {
+            console.error(`   ❌ Error joining voice channel:`, error);
+            console.error(`   Error details:`, error.stack);
         }
     }
     
     // If user left the channel, check if bot should leave too
     if (!newState.channelId && oldState.channelId) {
-        const channel = oldState.channel;
+        const channel = await resolveVoiceChannel(oldState.guild, oldState.channelId);
         if (channel) {
             console.log(`   👋 User ${username} left channel: ${channel.name}`);
-            // Check if anyone else is in the channel
             const membersInChannel = channel.members.filter(m => !m.user.bot);
             console.log(`   👥 Non-bot members remaining: ${membersInChannel.size}`);
             if (membersInChannel.size === 0) {
-                // No one left, disconnect bot
-                const connection = voiceConnections.get(channel.id);
+                const connection = getVoiceConnection(channel.guild.id) || voiceConnections.get(channel.id);
                 if (connection) {
                     connection.destroy();
                     voiceConnections.delete(channel.id);
@@ -541,386 +526,71 @@ async function initializeEncryption() {
 });
 
     // Setup speaking detection for a voice connection
-    function setupSpeakingDetection(connection, channel) {
-    console.log(`   🔧 Setting up speaking detection for channel: ${channel.name}`);
-    console.log(`   👥 Members in channel: ${channel.members.size}`);
-    
-    // Map SSRC to user ID (SpeakingMap uses SSRCs, not user IDs)
-    const ssrcToUserId = new Map();
-    const userIdToSsrc = new Map();
-    
-    // Track speaking timeouts for "stopped speaking" detection
-    const speakingTimeouts = new Map();
-    
-    // Helper to reset the "stopped speaking" timeout
-    const resetSpeakingTimeout = (userId, username) => {
-        // Clear existing timeout
-        if (speakingTimeouts.has(userId)) {
-            clearTimeout(speakingTimeouts.get(userId));
+    // SpeakingMap: 'start'/'end' (userId). Always resolve channel from connection.joinConfig (stale closures broke member lookup).
+    // Fallback: subscribe Opus streams — helps if SpeakingMap is quiet on some setups.
+    function setupSpeakingDetection(connection) {
+        const channel = getLiveVoiceChannelFromConnection(connection);
+        const chName = channel ? channel.name : String(connection.joinConfig.channelId || '?');
+        console.log(`   🔧 Speaking detection for: ${chName}`);
+        console.log(`   👥 Members in channel: ${channel ? channel.members.size : '?'}`);
+
+        if (!connection.receiver || !connection.receiver.speaking) {
+            console.error(`   ❌ Voice receiver has no speaking map — connection not fully ready or encryption failed`);
+            return;
         }
-        
-        // Set new timeout - if no audio for 500ms, mark as stopped
-        const timeout = setTimeout(() => {
-            const wasSpeaking = speakingUsers.get(userId) || false;
-            if (wasSpeaking) {
-                console.log(`   🔇 ${username} stopped speaking (no audio for 500ms)`);
-                speakingUsers.set(userId, false);
-            }
-            speakingTimeouts.delete(userId);
-        }, 500);
-        
-        speakingTimeouts.set(userId, timeout);
-    };
-    
-    // Function to subscribe to all current members
-    const subscribeToMembers = () => {
-        channel.members.forEach((member) => {
-            if (member.user.bot) {
-                console.log(`   ⏭️ Skipping bot: ${member.user.username}`);
-                return;
-            }
-            
-            const userId = member.user.id;
-            const username = member.user.username;
-            
-            console.log(`   📡 Attempting to subscribe to: ${username} (${userId})`);
-            
-            try {
-                const subscription = connection.receiver.subscribe(userId, {
-                    end: {
-                        behavior: 'manual'
-                    }
-                });
-                
-                if (subscription) {
-                    console.log(`   ✅ Subscribed to audio from ${username}`);
-                    
-                    // Monitor the subscription for audio packets - when packets arrive, user is speaking
-                    subscription.on('data', (chunk) => {
-                        // Audio data received = user is speaking!
-                        const wasSpeaking = speakingUsers.get(userId) || false;
-                        if (!wasSpeaking) {
-                            console.log(`\n   🎤🎤🎤 AUDIO DETECTED: ${username} is speaking! (userId: ${userId}) 🎤🎤🎤\n`);
-                            handleUserStartedSpeaking(member, channel);
-                            speakingUsers.set(userId, true);
-                        }
-                        // Reset timeout - user is still speaking
-                        resetSpeakingTimeout(userId, username);
-                    });
-                    
-                    // Also listen for readable events
-                    subscription.on('readable', () => {
-                        // Data is available to read
-                        const wasSpeaking = speakingUsers.get(userId) || false;
-                        if (!wasSpeaking) {
-                            console.log(`\n   🎤🎤🎤 READABLE: ${username} is speaking! (userId: ${userId}) 🎤🎤🎤\n`);
-                            handleUserStartedSpeaking(member, channel);
-                            speakingUsers.set(userId, true);
-                        }
-                        // Reset timeout - user is still speaking
-                        resetSpeakingTimeout(userId, username);
-                        
-                        // Try to read the data to trigger more events
-                        try {
-                            while (subscription.readable && subscription.read() !== null) {
-                                // Consume data
-                            }
-                        } catch (e) {
-                            // Ignore read errors
-                        }
-                    });
-                    
-                    // The subscription might have SSRC info
-                    // Try to get SSRC if available
-                    if (subscription.ssrc !== undefined) {
-                        const ssrc = subscription.ssrc;
-                        ssrcToUserId.set(ssrc, userId);
-                        userIdToSsrc.set(userId, ssrc);
-                        console.log(`   🔑 Mapped SSRC ${ssrc} to user ${username} (${userId})`);
-                    }
-                    
-                    // Try to access SSRC from internal properties
-                    if (subscription.ssrc === undefined && subscription._ssrc !== undefined) {
-                        const ssrc = subscription._ssrc;
-                        ssrcToUserId.set(ssrc, userId);
-                        userIdToSsrc.set(userId, ssrc);
-                        console.log(`   🔑 Mapped SSRC ${ssrc} (from _ssrc) to user ${username} (${userId})`);
-                    }
-                } else {
-                    console.log(`   ⚠️ Subscription returned null for ${username}`);
-                }
-            } catch (error) {
-                console.error(`   ❌ Could not subscribe to ${username}:`, error.message);
-            }
+
+        const sm = connection.receiver.speaking;
+        if (sm._gorgoxSpeakingWired) {
+            console.log(`   ℹ️ Speaking listeners already attached`);
+            return;
+        }
+        sm._gorgoxSpeakingWired = true;
+
+        sm.on('start', (userId) => {
+            const ch = getLiveVoiceChannelFromConnection(connection);
+            if (!ch || !ch.isVoiceBased()) return;
+            const member = ch.members.get(userId);
+            if (!member || member.user.bot) return;
+            const label = member.displayName || member.user.username;
+            console.log(`   🎤 SpeakingMap start: ${label} (${userId})`);
+            handleUserStartedSpeaking(member, connection);
         });
-    };
-    
-    // Subscribe immediately to current members
-    subscribeToMembers();
-    
-    // Also subscribe when new members join
-    channel.guild.client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-        if (newState.channelId === channel.id && newState.channelId !== oldState.channelId) {
-            // Someone joined this channel
-            const member = newState.member;
-            if (member && !member.user.bot) {
-                console.log(`   🆕 ${member.user.username} joined ${channel.name}, subscribing...`);
+
+        sm.on('end', (userId) => {
+            speakingUsers.set(userId, false);
+            opusFallbackLastFire.delete(userId);
+        });
+
+        if (channel) {
+            channel.members.forEach((member) => {
+                if (member.user.bot) return;
                 try {
-                    const subscription = connection.receiver.subscribe(member.user.id, { end: { behavior: 'manual' } });
-                    if (subscription) {
-                        console.log(`   ✅ Subscribed to new member: ${member.user.username}`);
-                        
-                        // Monitor audio packets for this new member too
-                        const userId = member.user.id;
-                        const username = member.user.username;
-                        
-                        subscription.on('data', (chunk) => {
-                            const wasSpeaking = speakingUsers.get(userId) || false;
-                            if (!wasSpeaking) {
-                                console.log(`\n   🎤🎤🎤 AUDIO: ${username} is speaking! 🎤🎤🎤\n`);
-                                handleUserStartedSpeaking(member, channel);
-                                speakingUsers.set(userId, true);
-                            }
-                            // Reset timeout
-                            if (typeof resetSpeakingTimeout === 'function') {
-                                resetSpeakingTimeout(userId, username);
-                            }
+                    const stream = connection.receiver.subscribe(member.id, { end: { behavior: 'manual' } });
+                    if (stream && !stream._gorgoxOpusFallback) {
+                        stream._gorgoxOpusFallback = true;
+                        stream.on('data', () => {
+                            const ch2 = getLiveVoiceChannelFromConnection(connection);
+                            if (!ch2) return;
+                            const m = ch2.members.get(member.id);
+                            if (m && !m.user.bot) handleUserStartedSpeaking(m, connection);
                         });
-                        
-                        subscription.on('readable', () => {
-                            const wasSpeaking = speakingUsers.get(userId) || false;
-                            if (!wasSpeaking) {
-                                console.log(`\n   🎤🎤🎤 READABLE: ${username} is speaking! 🎤🎤🎤\n`);
-                                handleUserStartedSpeaking(member, channel);
-                                speakingUsers.set(userId, true);
-                            }
-                            // Reset timeout
-                            if (typeof resetSpeakingTimeout === 'function') {
-                                resetSpeakingTimeout(userId, username);
-                            }
-                            
-                            // Consume data
-                            try {
-                                while (subscription.readable && subscription.read() !== null) {
-                                    // Consume data to trigger more events
-                                }
-                            } catch (e) {
-                                // Ignore read errors
-                            }
-                        });
-                    }
-                } catch (error) {
-                    console.error(`   ❌ Could not subscribe to new member:`, error.message);
-                }
-            }
-        }
-    });
-    
-    // Monitor speaking state using periodic polling
-    // The speaking map is a Map that updates when users speak
-    const speakingCheckInterval = setInterval(() => {
-        if (!connection.receiver || connection.state.status !== 'ready') {
-            console.log(`   ⚠️ Connection not ready, clearing interval`);
-            clearInterval(speakingCheckInterval);
-            return;
-        }
-        
-        // Check speaking map - it's a Map
-        const speakingMap = connection.receiver.speaking;
-        
-        if (!speakingMap) {
-            return;
-        }
-        
-        // Log speaking map state for debugging (first time only)
-        if (!speakingCheckInterval._loggedOnce) {
-            console.log(`   🔍 Speaking map type: ${speakingMap.constructor.name}`);
-            console.log(`   🔍 Speaking map size: ${speakingMap instanceof Map ? speakingMap.size : 'N/A'}`);
-            console.log(`   🔍 Channel members to check: ${channel.members.size}`);
-            
-            // Try to inspect the speaking map structure
-            try {
-                if (speakingMap instanceof Map) {
-                    const entries = Array.from(speakingMap.entries());
-                    console.log(`   🔍 Speaking map has ${entries.length} entries:`, entries.slice(0, 5));
-                } else if (speakingMap.forEach) {
-                    const entries = [];
-                    speakingMap.forEach((value, key) => {
-                        entries.push([key, value]);
-                    });
-                    console.log(`   🔍 Speaking map forEach found ${entries.length} entries:`, entries.slice(0, 5));
-                } else if (speakingMap.keys) {
-                    const keys = Array.from(speakingMap.keys());
-                    console.log(`   🔍 Speaking map has keys:`, keys.slice(0, 5));
-                }
-            } catch (e) {
-                console.log(`   🔍 Could not inspect speaking map structure:`, e.message);
-            }
-            
-            speakingCheckInterval._loggedOnce = true;
-            console.log(`   ✅ Speaking detection polling started - checking every 200ms`);
-        }
-        
-        // Check all members currently in the channel
-        let checkedCount = 0;
-        channel.members.forEach((member) => {
-            if (member.user.bot) return;
-            checkedCount++;
-            
-            const userId = member.user.id;
-            const username = member.user.username;
-            
-            // Check if user is speaking
-            // SpeakingMap uses SSRCs (audio source identifiers) as keys, not user IDs
-            // We need to check both by user ID and by SSRC
-            let isCurrentlySpeaking = false;
-            try {
-                // First, try checking by user ID (might work in some versions)
-                if (typeof speakingMap.has === 'function') {
-                    // Try with user ID as string
-                    isCurrentlySpeaking = speakingMap.has(userId) || speakingMap.has(userId.toString());
-                }
-                
-                // If that didn't work, check by SSRC
-                if (!isCurrentlySpeaking && userIdToSsrc.has(userId)) {
-                    const ssrc = userIdToSsrc.get(userId);
-                    if (typeof speakingMap.has === 'function') {
-                        isCurrentlySpeaking = speakingMap.has(ssrc) || speakingMap.has(ssrc.toString());
-                    }
-                }
-                
-                // Alternative: Iterate through speaking map and match by SSRC
-                if (!isCurrentlySpeaking) {
-                    try {
-                        // Try iterating the speaking map
-                        if (speakingMap.forEach) {
-                            speakingMap.forEach((bitfield, key) => {
-                                // Check if this SSRC belongs to our user
-                                const ssrcKey = typeof key === 'number' ? key : parseInt(key);
-                                if (ssrcToUserId.has(ssrcKey) && ssrcToUserId.get(ssrcKey) === userId) {
-                                    // This SSRC belongs to our user
-                                    // Bitfield: 1 = speaking, 2 = soundshare
-                                    if (typeof bitfield === 'number') {
-                                        isCurrentlySpeaking = (bitfield & 1) !== 0 || (bitfield & 2) !== 0;
-                                    } else {
-                                        isCurrentlySpeaking = Boolean(bitfield);
-                                    }
-                                }
-                            });
-                        } else if (speakingMap[Symbol.iterator]) {
-                            // Try iterator protocol
-                            for (const [key, bitfield] of speakingMap) {
-                                const ssrcKey = typeof key === 'number' ? key : parseInt(key);
-                                if (ssrcToUserId.has(ssrcKey) && ssrcToUserId.get(ssrcKey) === userId) {
-                                    if (typeof bitfield === 'number') {
-                                        isCurrentlySpeaking = (bitfield & 1) !== 0 || (bitfield & 2) !== 0;
-                                    } else {
-                                        isCurrentlySpeaking = Boolean(bitfield);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        // Iteration failed
-                    }
-                }
-                
-                // Final fallback: Try get method
-                if (!isCurrentlySpeaking && typeof speakingMap.get === 'function') {
-                    // Try user ID
-                    let bitfield = speakingMap.get(userId) || speakingMap.get(userId.toString());
-                    
-                    // Try SSRC
-                    if (!bitfield && userIdToSsrc.has(userId)) {
-                        const ssrc = userIdToSsrc.get(userId);
-                        bitfield = speakingMap.get(ssrc) || speakingMap.get(ssrc.toString());
-                    }
-                    
-                    if (typeof bitfield === 'number') {
-                        isCurrentlySpeaking = (bitfield & 1) !== 0 || (bitfield & 2) !== 0;
-                    } else if (bitfield !== undefined && bitfield !== null) {
-                        isCurrentlySpeaking = Boolean(bitfield);
-                    }
-                }
-            } catch (error) {
-                console.error(`   ⚠️ Error checking speaking status for ${username}:`, error.message);
-                return;
-            }
-            
-            const wasSpeaking = speakingUsers.get(userId) || false;
-            
-            // Enhanced debug logging - log periodically when not speaking, always when speaking
-            // Also log what's actually in the speaking map to help debug
-            const shouldLog = isCurrentlySpeaking || (checkedCount <= 10 && Date.now() % 2000 < 200);
-            if (shouldLog) {
-                let debugInfo = {
-                    username,
-                    userId,
-                    isSpeaking: isCurrentlySpeaking,
-                    wasSpeaking,
-                    mapSize: 'unknown',
-                    mapKeys: [],
-                    ssrcMapped: userIdToSsrc.has(userId)
-                };
-                
-                // Try to get info about the speaking map
-                try {
-                    if (speakingMap.size !== undefined) {
-                        debugInfo.mapSize = speakingMap.size;
-                    }
-                    
-                    // Try to get all keys
-                    if (speakingMap.keys) {
-                        const keys = Array.from(speakingMap.keys());
-                        debugInfo.mapKeys = keys.slice(0, 5).map(k => `${k} (${typeof k})`);
-                    }
-                    
-                    // Check user ID directly
-                    if (typeof speakingMap.get === 'function') {
-                        const userBitfield = speakingMap.get(userId) || speakingMap.get(userId.toString());
-                        debugInfo.userIdBitfield = userBitfield;
-                        
-                        // Check SSRC if mapped
-                        if (userIdToSsrc.has(userId)) {
-                            const ssrc = userIdToSsrc.get(userId);
-                            const ssrcBitfield = speakingMap.get(ssrc) || speakingMap.get(ssrc.toString());
-                            debugInfo.ssrcBitfield = ssrcBitfield;
-                        }
                     }
                 } catch (e) {
-                    debugInfo.error = e.message;
+                    console.error(`   ⚠️ subscribe ${member.user.username}:`, e.message);
                 }
-                
-                console.log(`   🔍 ${username}:`, JSON.stringify(debugInfo, null, 2));
-            }
-            
-            if (isCurrentlySpeaking && !wasSpeaking) {
-                // User just started speaking
-                console.log(`\n   🎤🎤🎤 DETECTED: ${username} started speaking! (userId: ${userId}) 🎤🎤🎤\n`);
-                handleUserStartedSpeaking(member, channel);
-            } else if (!isCurrentlySpeaking && wasSpeaking) {
-                // User just stopped speaking
-                console.log(`   🔇 ${username} stopped speaking`);
-                speakingUsers.set(userId, false);
-            }
-        });
-        
-        if (checkedCount > 0 && !speakingCheckInterval._debugLogged) {
-            console.log(`   ✅ Checked ${checkedCount} member(s) in ${channel.name}`);
-            speakingCheckInterval._debugLogged = true;
+            });
         }
-    }, 200); // Check every 200ms for better responsiveness
-    
-    console.log(`   ✅ Speaking detection active (checking every 200ms)`);
-    console.log(`   💡 Bot is now listening for voice activity in: ${channel.name}`);
-}
+
+        console.log(`   ✅ Speaking detection active (SpeakingMap + optional Opus stream fallback)`);
+    }
 
     // Handle when user starts speaking
-    function handleUserStartedSpeaking(user, channel) {
+    function handleUserStartedSpeaking(user, connection) {
     const userId = user.user.id;
     const username = user.user.username;
     const wasSpeaking = speakingUsers.get(userId) || false;
+    const liveCh = getLiveVoiceChannelFromConnection(connection);
+    const channelLabel = (liveCh && liveCh.name) ? liveCh.name : '(voice)';
     
     if (!wasSpeaking) {
         console.log(`\n╔════════════════════════════════════════════════════════════╗`);
@@ -928,7 +598,7 @@ async function initializeEncryption() {
         console.log(`╠════════════════════════════════════════════════════════════╣`);
         console.log(`║  User: ${username.padEnd(50)} ║`);
         console.log(`║  Discord ID: ${userId.padEnd(45)} ║`);
-        console.log(`║  Channel: ${channel.name.padEnd(49)} ║`);
+        console.log(`║  Channel: ${channelLabel.padEnd(49)} ║`);
         console.log(`║  Game server: ${isConnectedToGame ? '✅ Connected' : '❌ Not connected'.padEnd(42)} ║`);
         console.log(`║  WebSocket: ${gameWebSocket && gameWebSocket.readyState === WebSocket.OPEN ? '✅ Ready' : '❌ Not ready'.padEnd(45)} ║`);
         console.log(`╚════════════════════════════════════════════════════════════╝`);
@@ -961,7 +631,7 @@ async function initializeEncryption() {
             }
             console.log(``);
         }, 100);
-    } else {
+    } else if (process.env.DISCORD_VOICE_VERBOSE === '1') {
         console.log(`   ⏭️ ${username} already marked as speaking, skipping...`);
     }
 }
@@ -993,34 +663,40 @@ async function initializeEncryption() {
         await message.reply(`🔊 You are in voice channel: ${voiceChannel.name}. Bot will attempt to join...`);
         
         try {
-            if (voiceConnections.has(voiceChannel.id)) {
-                await message.reply(`✅ Bot is already in that channel!`);
+            const voiceDebug = process.env.DISCORD_VOICE_DEBUG === '1';
+            let connection = getVoiceConnection(voiceChannel.guild.id);
+            if (
+                connection &&
+                connection.joinConfig.channelId === voiceChannel.id &&
+                connection.state.status === 'ready'
+            ) {
+                wireVoiceConnectionLifecycle(connection);
+                setupSpeakingDetection(connection);
+                await message.reply(`✅ Bot already connected to ${voiceChannel.name}. Speaking detection refreshed.`);
                 return;
             }
-            
-            const connection = joinVoiceChannel({
+
+            connection = joinVoiceChannel({
                 channelId: voiceChannel.id,
                 guildId: voiceChannel.guild.id,
                 adapterCreator: voiceChannel.guild.voiceAdapterCreator,
                 selfDeaf: false,
                 selfMute: true,
+                debug: voiceDebug,
             });
-            
+
             voiceConnections.set(voiceChannel.id, connection);
-            
-            connection.on('stateChange', (oldState, newState) => {
-                console.log(`🔌 Manual join - Voice connection state: ${oldState.status} -> ${newState.status}`);
+            wireVoiceConnectionLifecycle(connection);
+            if (connection.state.status === 'ready') {
+                setupSpeakingDetection(connection);
+                await message.reply(`✅ Voice already ready in ${voiceChannel.name}!`);
+            }
+
+            connection.once('stateChange', (oldState, newState) => {
                 if (newState.status === 'ready') {
-                    message.reply(`✅ Bot successfully joined voice channel: ${voiceChannel.name}!`);
-                    setupSpeakingDetection(connection, voiceChannel);
+                    message.reply(`✅ Bot voice ready in: ${voiceChannel.name}!`).catch(() => {});
                 }
             });
-            
-            connection.on('error', (error) => {
-                console.error(`❌ Voice connection error:`, error);
-                message.reply(`❌ Error joining voice channel: ${error.message}`);
-            });
-            
         } catch (error) {
             console.error(`❌ Error joining voice channel:`, error);
             await message.reply(`❌ Error: ${error.message}`);

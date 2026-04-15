@@ -52,13 +52,19 @@ highlightCharacterToken('CHARACTER_ID', 'Username', 3000);
 
 We're exploring alternative methods that don't require voice connections, but this will take time.
 
+## Update (bot code)
+
+The bot was updated to use **`connection.receiver.speaking.on('start' / 'end')`**, which matches **@discordjs/voice v0.14+**. Older code treated `SpeakingMap` like a plain `Map` and never saw speech. Restart the bot after `git pull`.
+
+If the voice connection never reaches **ready**, encryption / native sodium is still the blocker — see Option 1 below.
+
 ## Current Status
 
 - ✅ Bot connects to Discord
 - ✅ Bot can communicate with game server
 - ✅ Manual highlighting works
-- ❌ Voice connections fail (encryption issue)
-- ❌ Automatic speaking detection disabled (requires voice connection)
+- ❌ Voice connections fail (encryption issue) — *when this happens, speaking still cannot work*
+- ✅ Automatic speaking detection — *when voice is connected and decrypted, uses SpeakingMap events*
 
 ## Next Steps
 

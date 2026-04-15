@@ -1,5 +1,8 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v40'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v70'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+/** Above player action bar (99999) and Armstech modal (100050) */
+const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
+var characterSheetListRefreshDebounceId = null; // CharacterList → debounced sheet re-render (see scheduleDebouncedCharacterSheetRefresh)
 var lastActionBarScrollBeforeClick = null; // Capture scroll on mousedown so we restore to pre-click position (avoid grid dragging down)
 var actionBarScrollLockUntil = 0; // Until this timestamp, we force-restore scroll on any scroll event (stops grid drag)
 (function () { try { console.log('%c[GorGox] app.js ' + APP_UI_VERSION + ' loaded', 'color: #4a9eff; font-weight: bold;'); } catch (e) {} })();
@@ -27,6 +30,8 @@ let selectedToken = null;
 let pendingTargetAttack = null;
 /** When set, next click(s) will be used for tech/force power: single token, or AOE center (circle) or origin then direction (cone). */
 let pendingTargetPower = null;
+/** After attack/power target mousedown, ignore the paired mouseup for MoveToken (keeps selectedToken for normal moves). */
+let pendingSkipTokenMoveOnNextMouseUp = false;
 let connectedPlayers = []; // Track all connected players
 let combatState = {
     active: false,
@@ -120,6 +125,7 @@ let conditionsLoaded = false;
 
 // Initialize on page load
 window.addEventListener('DOMContentLoaded', () => {
+    initCampaignNotesPersistence();
     canvas = document.getElementById('mapCanvas');
     if (!canvas) {
         console.error('❌ [INIT] Canvas element not found!');
@@ -201,13 +207,23 @@ function performConnection(playerName, isDmValue, style) {
     };
     
     ws.onmessage = (event) => {
+        let message;
         try {
-            const message = JSON.parse(event.data);
-            handleServerMessage(message);
+            message = JSON.parse(event.data);
         } catch (e) {
             console.error('❌ Error parsing server message:', e);
             console.error('   Raw message:', event.data);
             alert('Error receiving message from server. Please refresh the page.');
+            return;
+        }
+        try {
+            handleServerMessage(message);
+        } catch (e) {
+            console.error('❌ Error handling server message:', e);
+            console.error('   Message type:', message && message.type, 'payload:', message);
+            if (typeof addLogEntry === 'function') {
+                addLogEntry('A server update could not be applied. The game will keep running; check the browser console if issues persist.', 'warning');
+            }
         }
     };
     
@@ -267,6 +283,13 @@ function sendMessage(message) {
     }
 }
 
+/** Label shown on map: snake_case from Rust, or camelCase if present. */
+function coalesceTokenDisplayName(t) {
+    if (!t || typeof t !== 'object') return undefined;
+    const pick = (v) => (v != null && String(v).trim() !== '') ? String(v).trim() : undefined;
+    return pick(t.display_name) ?? pick(t.displayName) ?? pick(t.name);
+}
+
 function buildCharacterUpdatePayload(character) {
     if (!character) return null;
     
@@ -293,10 +316,309 @@ function buildCharacterUpdatePayload(character) {
     };
 }
 
-// Parse custom enemy actions from any supported format into [{ name, description }]
-function parseCustomEnemyActions(enemy) {
-    if (!enemy) return [];
+/**
+ * SW5e builder / Foundry-style JSON → game Character row + charData for character_data.
+ * Uses the same AC/equipment logic as the sheet (recomputeEquipmentBonuses + optional tweaks.armorClass).
+ * options.existing: level-up — keep game id, player_name, portrait when JSON omits them.
+ */
+function convertStarWarsBuilderJsonToGameCharacter(charData, options) {
+    const opts = options || {};
+    const existing = opts.existing || null;
+    if (!charData || typeof charData !== 'object') {
+        return { character: null, storedCharData: null };
+    }
+
+    const hpOverrideRaw = charData.tweaks?.hitPoints?.maximum?.override;
+    const maxHP = (hpOverrideRaw != null && hpOverrideRaw !== '' && !isNaN(Number(hpOverrideRaw)))
+        ? Number(hpOverrideRaw)
+        : (Array.isArray(charData.classes) && charData.classes[0] && Array.isArray(charData.classes[0].hitPoints) && charData.classes[0].hitPoints.length > 0
+            ? charData.classes[0].hitPoints.reduce((sum, hp) => sum + (Number(hp) || 0), 0)
+            : 7) || 7;
+
+    const hitPointsLost = Math.max(0, Number(charData.currentStats?.hitPointsLost) || 0);
+    let currentHP = maxHP - hitPointsLost;
+    currentHP = Math.max(0, Math.min(maxHP, currentHP));
+    const safeCurrentHp = Math.max(1, currentHP);
+
+    const level = Array.isArray(charData.classes) && charData.classes.length > 0
+        ? charData.classes.reduce((sum, cls) => sum + (Number(cls.levels) || 1), 0)
+        : 1;
+
+    const className = Array.isArray(charData.classes) && charData.classes.length > 0
+        ? charData.classes.map(c => `${c.name || 'Class'} ${c.levels != null ? c.levels : 1}`).join(' / ')
+        : 'Unknown';
+
+    const baseScores = charData.baseAbilityScores || {};
+    const dexMod = Math.floor(((baseScores.Dexterity || 10) - 10) / 2);
+    const speedRaw = charData.speed?.walk || charData.speed || 30;
+    const speed = typeof speedRaw === 'string'
+        ? parseInt(String(speedRaw).replace(/\D+/g, '') || '30', 10)
+        : (Number(speedRaw) || 30);
+    const profBonus = level <= 4 ? 2 : level <= 8 ? 3 : level <= 12 ? 4 : level <= 16 ? 5 : 6;
+
+    charData.proficiency_bonus = profBonus;
+
+    let initBonus = dexMod;
+    if (charData.initiative != null && charData.initiative.mod != null) {
+        const im = typeof charData.initiative.mod === 'number'
+            ? charData.initiative.mod
+            : parseInt(String(charData.initiative.mod).replace(/[^0-9\-+]/g, '') || '0', 10);
+        if (!isNaN(im)) initBonus = im;
+    }
+
+    const character = {
+        id: existing ? existing.id : (charData.id || generateUUID()),
+        name: charData.name || (existing && existing.name) || 'Unknown',
+        player_name: (existing && existing.player_name) || charData.player_name || 'Unknown',
+        class: className,
+        level: level,
+        max_hp: maxHP,
+        current_hp: safeCurrentHp,
+        armor_class: 10,
+        initiative_bonus: initBonus,
+        strength: baseScores.Strength || 10,
+        dexterity: baseScores.Dexterity || 10,
+        constitution: baseScores.Constitution || 10,
+        intelligence: baseScores.Intelligence || 10,
+        wisdom: baseScores.Wisdom || 10,
+        charisma: baseScores.Charisma || 10,
+        speed: speed,
+        proficiency_bonus: profBonus,
+        character_data: null
+    };
+
+    let acFromBuilder = null;
+    if (charData.ac != null && charData.ac.base != null && charData.ac.base !== '') {
+        const n = typeof charData.ac.base === 'number' ? charData.ac.base : parseInt(String(charData.ac.base).replace(/\D+/g, ''), 10);
+        if (!isNaN(n)) acFromBuilder = n;
+    }
+    if (acFromBuilder == null && charData.tweaks?.armorClass?.override != null && charData.tweaks.armorClass.override !== '') {
+        const on = Number(charData.tweaks.armorClass.override);
+        if (!isNaN(on)) acFromBuilder = on;
+    }
+
+    applyEquipmentDerivedStats(character, charData);
+
+    if (acFromBuilder != null) {
+        if (!charData.ac) charData.ac = {};
+        charData.ac.base = acFromBuilder;
+        character.armor_class = acFromBuilder;
+    } else {
+        const tweakBonus = Number(charData.tweaks?.armorClass?.bonus);
+        if (!isNaN(tweakBonus) && tweakBonus !== 0) {
+            const b = character.armor_class + tweakBonus;
+            if (!charData.ac) charData.ac = {};
+            charData.ac.base = b;
+            character.armor_class = b;
+        }
+    }
+
+    if (existing && existing.id) {
+        charData.id = existing.id;
+    }
+
+    if (existing && existing.portrait_url && !(charData.image && String(charData.image).trim())) {
+        character.portrait_url = existing.portrait_url;
+    } else if (charData.image && String(charData.image).trim()) {
+        character.portrait_url = charData.image;
+    } else if (existing && existing.portrait_url) {
+        character.portrait_url = existing.portrait_url;
+    }
+
+    character.character_data = JSON.stringify(charData);
+    return { character, storedCharData: charData };
+}
+
+/** Split enemy.actions into core text/object (for editor + action list) and DM-added sheet_attacks[]. */
+function parseEnemyActionsSplit(enemy) {
+    if (!enemy) {
+        return { sheetAttacks: [], mode: 'empty', coreString: '', coreObj: null };
+    }
     let raw = enemy.actions;
+    if (raw === undefined || raw === null) {
+        return { sheetAttacks: [], mode: 'empty', coreString: '', coreObj: null };
+    }
+    if (typeof raw !== 'string') {
+        raw = JSON.stringify(raw);
+    }
+    raw = (raw || '').trim();
+    if (!raw) {
+        return { sheetAttacks: [], mode: 'empty', coreString: '', coreObj: null };
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return { sheetAttacks: [], mode: 'freeform', coreString: raw, coreObj: null };
+    }
+    if (Array.isArray(parsed)) {
+        return { sheetAttacks: [], mode: 'json_array', coreString: raw, coreObj: parsed };
+    }
+    if (!parsed || typeof parsed !== 'object') {
+        return { sheetAttacks: [], mode: 'freeform', coreString: raw, coreObj: null };
+    }
+    const sheetAttacks = Array.isArray(parsed.sheet_attacks)
+        ? parsed.sheet_attacks.filter(a => a && typeof a === 'object').map(normalizeEnemySheetAttackRow)
+        : [];
+    if (typeof parsed._gorg_actions_freeform === 'string') {
+        return { sheetAttacks, mode: 'wrapped', coreString: parsed._gorg_actions_freeform, coreObj: null };
+    }
+    const { sheet_attacks: _sa, ...rest } = parsed;
+    const keys = Object.keys(rest);
+    if (keys.length === 0) {
+        return { sheetAttacks, mode: sheetAttacks.length ? 'empty_json' : 'empty', coreString: '{}', coreObj: {} };
+    }
+    return { sheetAttacks, mode: 'json', coreString: JSON.stringify(rest), coreObj: rest };
+}
+
+function normalizeEnemySheetAttackRow(a) {
+    const toHit = a.to_hit !== undefined && a.to_hit !== null ? a.to_hit : a.toHit;
+    return {
+        name: (a.name && String(a.name).trim()) || 'Attack',
+        to_hit: typeof toHit === 'number' && !isNaN(toHit) ? toHit : parseInt(String(toHit || '0').replace(/[^0-9\-+]/g, '') || '0', 10),
+        damage: (a.damage != null && String(a.damage).trim()) ? String(a.damage).trim() : '1d4',
+        type: (a.type != null && String(a.type).trim()) ? String(a.type).trim() : 'kinetic',
+        range: a.range != null && String(a.range).trim() ? String(a.range).trim() : undefined,
+        userAdded: !!a.userAdded,
+        userAttackId: a.userAttackId || null
+    };
+}
+
+function stringifyEnemyActionsFromSplit(split) {
+    const sa = split.sheetAttacks || [];
+    if (split.mode === 'wrapped') {
+        return JSON.stringify({ _gorg_actions_freeform: split.coreString || '', sheet_attacks: sa });
+    }
+    if (split.mode === 'json' || split.mode === 'empty_json') {
+        const o = { ...(split.coreObj || {}) };
+        if (sa.length) o.sheet_attacks = sa;
+        else delete o.sheet_attacks;
+        return JSON.stringify(o);
+    }
+    if (split.mode === 'json_array') {
+        return split.coreString;
+    }
+    if (split.mode === 'freeform') {
+        if (sa.length) {
+            return JSON.stringify({ _gorg_actions_freeform: split.coreString || '', sheet_attacks: sa });
+        }
+        return split.coreString || '';
+    }
+    if (split.mode === 'empty') {
+        if (sa.length) return JSON.stringify({ sheet_attacks: sa });
+        return '{}';
+    }
+    return split.coreString || '{}';
+}
+
+/** Merge textarea content with preserved sheet_attacks when saving an enemy from the modal. */
+function mergeEnemyActionsFromEditorTextarea(textareaValue, existingEnemy) {
+    const prior = existingEnemy ? parseEnemyActionsSplit(existingEnemy) : { sheetAttacks: [], mode: 'empty', coreString: '', coreObj: null };
+    const t = (textareaValue || '').trim();
+    if (prior.mode === 'wrapped') {
+        return stringifyEnemyActionsFromSplit({
+            sheetAttacks: prior.sheetAttacks,
+            mode: 'wrapped',
+            coreString: t,
+            coreObj: null
+        });
+    }
+    if (prior.mode === 'json_array') {
+        return t.length ? t : '[]';
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(t.length ? t : '{}');
+    } catch {
+        return stringifyEnemyActionsFromSplit({
+            sheetAttacks: prior.sheetAttacks,
+            mode: 'freeform',
+            coreString: t,
+            coreObj: null
+        });
+    }
+    if (Array.isArray(parsed)) {
+        return t.length ? t : '[]';
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && typeof parsed._gorg_actions_freeform !== 'string') {
+        const { sheet_attacks: _ignore, ...rest } = parsed;
+        return stringifyEnemyActionsFromSplit({
+            sheetAttacks: prior.sheetAttacks,
+            mode: Object.keys(rest).length ? 'json' : (prior.sheetAttacks.length ? 'empty_json' : 'empty'),
+            coreString: JSON.stringify(rest),
+            coreObj: rest
+        });
+    }
+    if (prior.sheetAttacks.length > 0) {
+        return stringifyEnemyActionsFromSplit({
+            sheetAttacks: prior.sheetAttacks,
+            mode: 'freeform',
+            coreString: t,
+            coreObj: null
+        });
+    }
+    return t.length ? t : '{}';
+}
+
+/** Database enemy template for a spawned map token (same creature type). */
+function getEnemyTemplateForCustomInstance(enemy) {
+    if (!enemy || !enemy.isCustomInstance || enemy.enemy_id == null || enemy.enemy_id === '') return null;
+    return enemies.find(e => e && String(e.id) === String(enemy.enemy_id) && !e.isCustomInstance) || null;
+}
+
+/** DM-added attacks and the whole actions JSON live on the template; keep every spawned token in sync. */
+function syncCustomEnemyInstanceActionsFromTemplate(templateId, actionsString) {
+    if (templateId == null || templateId === '') return;
+    const actions = typeof actionsString === 'string' ? actionsString : JSON.stringify(actionsString || {});
+    enemies = enemies.map(e => {
+        if (!e || !e.isCustomInstance || String(e.enemy_id) !== String(templateId)) return e;
+        return { ...e, actions };
+    });
+}
+
+/** True if actions JSON (or wrapped freeform) includes a non-empty sheet_attacks array. */
+function enemyActionsHasSheetAttacks(actionsStr) {
+    if (!actionsStr || typeof actionsStr !== 'string' || !actionsStr.trim()) return false;
+    try {
+        const o = JSON.parse(actionsStr);
+        if (o && typeof o === 'object' && Array.isArray(o.sheet_attacks) && o.sheet_attacks.length > 0) return true;
+        const split = parseEnemyActionsSplit({ actions: actionsStr });
+        return (split.sheetAttacks || []).length > 0;
+    } catch (_) {
+        return false;
+    }
+}
+
+/** Pick instance actions: prefer DB payload when it has sheet attacks; else keep local pre-echo copy (CreateEnemy vs Spawn race). */
+function resolveSpawnedInstanceActions(actionsFromServer, tpl, prev) {
+    const serverS = typeof actionsFromServer === 'string' ? actionsFromServer.trim() : '';
+    const tplS = tpl && typeof tpl.actions === 'string' ? tpl.actions.trim() : '';
+    const prevS = prev && typeof prev.actions === 'string' ? prev.actions.trim() : '';
+    if (serverS && enemyActionsHasSheetAttacks(serverS)) return actionsFromServer;
+    if (prevS && enemyActionsHasSheetAttacks(prevS)) return prev.actions;
+    if (serverS) return actionsFromServer;
+    if (tplS) return tpl.actions;
+    if (prevS) return prev.actions;
+    return '{}';
+}
+
+/** Add/remove sheet attacks: always edit the DB template, even when the sheet was opened from a numbered token. */
+function resolveEnemyTemplateForSheetEdits(enemyId) {
+    const inst = enemies.find(e => e && String(e.id) === String(enemyId));
+    if (!inst) return null;
+    if (!inst.isCustomInstance) return inst;
+    return getEnemyTemplateForCustomInstance(inst);
+}
+
+function getEnemySheetAttacksList(enemy) {
+    if (!enemy) return [];
+    const tpl = getEnemyTemplateForCustomInstance(enemy);
+    const source = tpl || enemy;
+    return parseEnemyActionsSplit(source).sheetAttacks || [];
+}
+
+// Parse custom enemy actions from any supported format into [{ name, description }]
+function parseCustomEnemyActionsFromRawString(raw) {
     if (raw === undefined || raw === null) return [];
     if (typeof raw !== 'string') {
         raw = JSON.stringify(raw);
@@ -323,12 +645,19 @@ function parseCustomEnemyActions(enemy) {
             }));
         }
         const obj = parsed.actions && typeof parsed.actions === 'object' ? parsed.actions : parsed;
-        return Object.entries(obj).filter(([k]) => k && typeof k === 'string').map(([name, val]) => ({
+        return Object.entries(obj).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform').map(([name, val]) => ({
             name: name,
             description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
         }));
     }
     return [];
+}
+
+function parseCustomEnemyActions(enemy) {
+    if (!enemy) return [];
+    const tpl = getEnemyTemplateForCustomInstance(enemy);
+    const split = parseEnemyActionsSplit(tpl || enemy);
+    return parseCustomEnemyActionsFromRawString(split.coreString);
 }
 
 // True if name looks like a placed token instance (e.g. "Goblin 1") — never save these to the database
@@ -825,7 +1154,7 @@ function handleServerMessage(message) {
         case 'TokenUpdate':
             console.log('📍 ========== TOKEN UPDATE ==========');
             console.log('Received tokens:', message.tokens);
-            console.log('Number of tokens:', message.tokens.length);
+            console.log('Number of tokens:', Array.isArray(message.tokens) ? message.tokens.length : 0);
             
             // CRITICAL: Before updating tokens, verify NPC instances still exist in enemies array
             const npcInstancesBefore = enemies.filter(e => e && e.isNPC && e.npcData);
@@ -844,13 +1173,21 @@ function handleServerMessage(message) {
                 }
             });
             
+            const prevTokensById = new Map(tokens.map(pt => [pt.id, pt]));
             // Merge server tokens with preserved sizes
             tokens = serverTokens.map(t => {
+                const prev = prevTokensById.get(t.id);
+                const mergedBase = {
+                    ...t,
+                    image_url: t.image_url != null && t.image_url !== '' ? t.image_url : (prev && prev.image_url) ? prev.image_url : t.image_url,
+                    display_name: t.display_name != null && t.display_name !== '' ? t.display_name : (prev && prev.display_name) ? prev.display_name : t.display_name,
+                    hidden_from_players: t.hidden_from_players === true
+                };
                 // Check if we have a manually set size for this token
                 const preservedSize = localTokenSizes.get(t.id);
                 if (preservedSize) {
                     console.log(`✅ Preserving manually set size ${preservedSize} for token ${t.id} (server had: ${t.size})`);
-                    return { ...t, size: preservedSize };
+                    return { ...mergedBase, size: preservedSize };
                 }
                 
                 // Check if server sent a valid size
@@ -862,12 +1199,12 @@ function handleServerMessage(message) {
                 
                 if (hasValidSize) {
                     // Use server's size
-                    return t;
+                    return mergedBase;
                 } else {
                     // Calculate if size is truly missing
                     const calculatedSize = getTokenSize(t.entity_id, t.entity_type);
                     console.log(`🔧 Token ${t.id} (${t.entity_id}) missing/invalid size, calculated: ${calculatedSize}`);
-                    return { ...t, size: calculatedSize };
+                    return { ...mergedBase, size: calculatedSize };
                 }
             });
             
@@ -887,6 +1224,21 @@ function handleServerMessage(message) {
             if (npcInstancesAfter.length !== npcInstancesBefore.length) {
                 console.warn('⚠️ NPC instance count changed! Before:', npcInstancesBefore.length, 'After:', npcInstancesAfter.length);
             }
+            
+            // Update selected token if it still exists (players lose selection if token is DM-hidden)
+            if (selectedToken) {
+                const updatedToken = tokens.find(t => t.id === selectedToken.id);
+                if (updatedToken && isTokenVisibleToViewer(updatedToken)) {
+                    selectedToken = updatedToken;
+                    updateTokenInfo();
+                } else {
+                    selectedToken = null;
+                    updateTokenInfo();
+                }
+            }
+            
+            // CRITICAL: Re-render canvas to show updated token positions
+            renderCanvas();
             
             if (combatState.active) {
                 syncParticipantsWithTokens();
@@ -909,7 +1261,7 @@ function handleServerMessage(message) {
         case 'CombatStarted':
             console.log('⚔️ ========== COMBAT STARTED ==========');
             console.log('📋 Participants received:', message.participants);
-            console.log('📊 Number of participants:', message.participants.length);
+            console.log('📊 Number of participants:', Array.isArray(message.participants) ? message.participants.length : 0);
             
             if (!message.participants || message.participants.length === 0) {
                 console.error('❌ NO PARTICIPANTS IN COMBAT!');
@@ -1521,7 +1873,7 @@ function handleServerMessage(message) {
                 console.log('✅ Accepting CharacterList');
                 
                 // Update HP in combat participants if in combat
-                if (combatState.active && message.characters) {
+                if (combatState.active && Array.isArray(message.characters)) {
                     message.characters.forEach(updatedChar => {
                         const participant = combatState.participants.find(p => p.entity_id === updatedChar.id);
                         if (participant) {
@@ -1535,6 +1887,7 @@ function handleServerMessage(message) {
                 characters = message.characters || [];
                 renderCharacterList();
                 syncCharactersWithServer();
+                updateArmstechPlayerButtonVisibility();
                 
                 // Update character sheet if viewing one
                 if (currentViewingCharacter) {
@@ -1542,7 +1895,7 @@ function handleServerMessage(message) {
                     if (updatedChar) {
                         currentViewingCharacter.current_hp = updatedChar.current_hp;
                         currentViewingCharacter.max_hp = updatedChar.max_hp;
-                        renderCharacterSheetContent();
+                        scheduleDebouncedCharacterSheetRefresh();
                     }
                 }
                 
@@ -1602,18 +1955,71 @@ function handleServerMessage(message) {
             
             // Preserve custom enemy instances (spawned from Enemy Database) - same as NPC instances
             const customEnemyInstances = enemies.filter(e => e && e.isCustomInstance === true);
+            const tplById = new Map();
+            serverEnemies.forEach(e => {
+                if (e && e.id != null) tplById.set(String(e.id), e);
+            });
+            // Refresh actions from server template so DM-added attacks match every token of that type
+            const syncedCustomInstances = customEnemyInstances.map(inst => {
+                const tpl = inst.enemy_id != null ? tplById.get(String(inst.enemy_id)) : null;
+                if (tpl && typeof tpl.actions === 'string') {
+                    return { ...inst, actions: tpl.actions };
+                }
+                return inst;
+            });
             
             // Merge: server templates + ALL local NPC instances + ALL custom enemy instances
             enemies = [
                 ...serverEnemies.filter(e => !npcInstanceMap.has(e.id)), // Server templates that aren't NPC instances
                 ...finalNPCInstances, // ALL NPC instances preserved
-                ...customEnemyInstances // ALL custom enemy instances (multiple of same type allowed)
+                ...syncedCustomInstances // ALL custom enemy instances (multiple of same type allowed)
             ];
             
-            console.log('✅ Merged enemies: ', serverEnemies.length, 'server templates +', finalNPCInstances.length, 'NPC instances +', customEnemyInstances.length, 'custom instances =', enemies.length, 'total');
+            console.log('✅ Merged enemies: ', serverEnemies.length, 'server templates +', finalNPCInstances.length, 'NPC instances +', syncedCustomInstances.length, 'custom instances =', enemies.length, 'total');
             console.log('📋 NPC instance IDs preserved:', finalNPCInstances.map(n => `${n.id}:${n.name}${n.npcData ? ' (has data)' : ' (no data)'}`));
             renderEnemyList();
             break;
+            
+        case 'EnemyInstanceSpawned': {
+            const instanceId = message.instance_id;
+            const templateId = message.enemy_id;
+            const tpl = enemies.find(e => String(e.id) === String(templateId) && !e.isCustomInstance);
+            const idx = enemies.findIndex(e => String(e.id) === String(instanceId));
+            const prev = idx >= 0 ? enemies[idx] : null;
+            const portraitUrl = message.portrait_url || tpl?.portrait_url || null;
+            const resolvedActions = resolveSpawnedInstanceActions(message.actions, tpl, prev);
+            const inst = {
+                id: instanceId,
+                enemy_id: templateId,
+                name: message.name || tpl?.name || 'Enemy',
+                isCustomInstance: true,
+                portrait_url: portraitUrl || undefined,
+                creature_type: tpl?.creature_type || '',
+                challenge_rating: tpl?.challenge_rating ?? 0,
+                max_hp: tpl?.max_hp ?? 10,
+                current_hp: tpl?.current_hp ?? tpl?.max_hp ?? 10,
+                armor_class: tpl?.armor_class ?? 10,
+                initiative_bonus: tpl?.initiative_bonus ?? 0,
+                strength: tpl?.strength ?? 10,
+                dexterity: tpl?.dexterity ?? 10,
+                constitution: tpl?.constitution ?? 10,
+                intelligence: tpl?.intelligence ?? 10,
+                wisdom: tpl?.wisdom ?? 10,
+                charisma: tpl?.charisma ?? 10,
+                speed: tpl?.speed ?? 30,
+                actions: resolvedActions,
+                description: tpl?.description || '',
+                style: tpl?.style
+            };
+            if (idx >= 0) {
+                enemies[idx] = { ...prev, ...inst, portrait_url: portraitUrl || prev.portrait_url };
+            } else {
+                enemies.push(inst);
+            }
+            renderEnemyList();
+            renderCanvas();
+            break;
+        }
             
         case 'SoundPlayed':
             console.log('🔊 Sound received:', message.sound_name);
@@ -1910,6 +2316,7 @@ function onPlayerViewportEnabledChange() {
         ensureDefaultPlayerMapViewport();
     } else {
         dmPlayerViewportToolActive = false;
+        playerViewportDrag = null;
     }
     sendPlayerMapViewportToServer();
     syncPlayerViewportCheckbox();
@@ -1919,6 +2326,7 @@ function onPlayerViewportEnabledChange() {
 function togglePlayerViewportTool() {
     if (!isDM) return;
     dmPlayerViewportToolActive = !dmPlayerViewportToolActive;
+    playerViewportDrag = null;
     syncPlayerViewportCheckbox();
     renderCanvas();
 }
@@ -2050,6 +2458,22 @@ function setupCanvas() {
     canvas.addEventListener('mousemove', onCanvasMouseMove);
     canvas.addEventListener('mouseup', onCanvasMouseUp);
     canvas.addEventListener('wheel', onCanvasWheel);
+    
+    // Releasing outside the canvas (e.g. after pan or DM viewport resize) never fires canvas mouseup — clear stuck drag state
+    document.addEventListener('mouseup', (ev) => {
+        const mapEl = document.getElementById('mapCanvas');
+        if (!mapEl || mapEl.contains(ev.target)) return;
+        // Canvas never saw this mouseup — no phantom MoveToken to suppress; clear skip so the next canvas mouseup isn't eaten
+        pendingSkipTokenMoveOnNextMouseUp = false;
+        if (playerViewportDrag && isDM) {
+            playerViewportDrag = null;
+            sendPlayerMapViewportToServer();
+            renderCanvas();
+        }
+        if (isDragging) {
+            isDragging = false;
+        }
+    });
     
     // Right-click context menu - MUST be added for all users
     canvas.addEventListener('contextmenu', onCanvasRightClick);
@@ -2896,6 +3320,37 @@ function calculateReachableSquares(startX, startY, maxSquares) {
     return reachable;
 }
 
+function normalizePortraitUrl(src) {
+    if (src == null || typeof src !== 'string') return null;
+    const s = src.trim();
+    if (!s) return null;
+    if (/^(https?:|data:|blob:)/i.test(s)) return s;
+    if (s.startsWith('//')) return window.location.protocol + s;
+    if (s.startsWith('/')) return window.location.origin + s;
+    return s;
+}
+
+/** Resolve portrait for enemy/NPC tokens: server image_url, then template/instance from enemies list. */
+function resolveEnemyNpcPortraitSrc(token) {
+    if (!token) return null;
+    const fromToken = normalizePortraitUrl(token.image_url);
+    if (fromToken) return fromToken;
+    const row = enemies.find(e => e.id === token.entity_id);
+    if (!row) return null;
+    let source = row;
+    if (row.isCustomInstance && row.enemy_id) {
+        const tpl = enemies.find(e => e.id === row.enemy_id);
+        if (tpl) source = tpl;
+    }
+    const p = source.portrait_url || source.local_portrait;
+    if (p) return normalizePortraitUrl(p);
+    if (source.npcData && Array.isArray(npcs)) {
+        const npcIndex = npcs.findIndex(n => n && n.name === source.npcData.name);
+        if (npcIndex >= 0) return window.location.origin + '/static/enemy_portraits/' + npcIndex + '.png';
+    }
+    return null;
+}
+
 function drawToken(token) {
     // Calculate token dimensions based on size - always use circles
     // size = 1.0: Medium (1x1 square, circle radius = gridSize/2)
@@ -2955,22 +3410,11 @@ function drawToken(token) {
             }
             portraitImg = tokenImages[char.id];
         }
-    } else if (token.entity_type === 'Enemy') {
-        // Portrait: prefer server-provided token.image_url so players see it without needing enemy list
-        const portraitSrc = token.image_url || (() => {
-            const enemyByTemplate = enemies.find(e => e.id === token.entity_id);
-            if (enemyByTemplate && (enemyByTemplate.portrait_url || enemyByTemplate.local_portrait))
-                return enemyByTemplate.portrait_url || enemyByTemplate.local_portrait;
-            // NPC from npc.json: use portrait by index in file order (static/enemy_portraits/0.png, 1.png, ...)
-            if (enemyByTemplate && enemyByTemplate.npcData && Array.isArray(npcs)) {
-                const npcIndex = npcs.findIndex(n => n && n.name === enemyByTemplate.npcData.name);
-                if (npcIndex >= 0) return '/static/enemy_portraits/' + npcIndex + '.png';
-            }
-            return null;
-        })();
+    } else if (token.entity_type === 'Enemy' || token.entity_type === 'NPC') {
+        const portraitSrc = resolveEnemyNpcPortraitSrc(token);
         if (portraitSrc) {
             hasPortrait = true;
-            borderColor = '#ff4444'; // Red for enemies
+            borderColor = token.entity_type === 'Enemy' ? '#ff4444' : '#ffaa44';
             const cacheKey = 'enemy-' + (token.id || token.entity_id);
             if (!tokenImages[cacheKey]) {
                 tokenImages[cacheKey] = new Image();
@@ -3017,12 +3461,12 @@ function drawToken(token) {
                 ctx.fillStyle = 'rgba(255, 170, 68, 0.7)';
                 break;
             case 'Object':
-                ctx.fillStyle = 'rgba(170, 170, 170, 0.7)';
+                ctx.fillStyle = 'rgba(140, 140, 150, 0.88)';
                 break;
         }
         
         ctx.fill();
-        ctx.strokeStyle = '#fff';
+        ctx.strokeStyle = token.entity_type === 'Object' ? '#555' : '#fff';
         ctx.lineWidth = 2;
         ctx.stroke();
     }
@@ -3109,8 +3553,11 @@ function drawToken(token) {
         } else {
             displayName = 'Enemy';
         }
+    } else if (token.entity_type === 'Object') {
+        const dn = coalesceTokenDisplayName(token);
+        displayName = (dn !== undefined && dn !== '') ? dn : 'Object';
     } else {
-        displayName = token.entity_type;
+        displayName = token.display_name && String(token.display_name).trim() ? String(token.display_name).trim() : token.entity_type;
     }
     
     ctx.fillText(displayName, x, y + radius + 18);
@@ -3163,6 +3610,11 @@ function onCanvasMouseDown(e) {
     const rect = canvas.getBoundingClientRect();
     const mouseX = (e.clientX - rect.left - panX) / zoom;
     const mouseY = (e.clientY - rect.top - panY) / zoom;
+    
+    // Mouseup was missed (e.g. off-canvas); don't leave skip stuck forever
+    if (pendingSkipTokenMoveOnNextMouseUp && !pendingTargetAttack && !pendingTargetPower) {
+        pendingSkipTokenMoveOnNextMouseUp = false;
+    }
     
     // Targeting mode: next click chooses attack or power target (takes priority over measurement)
     if (pendingTargetAttack || pendingTargetPower) {
@@ -3279,25 +3731,7 @@ function onCanvasMouseDown(e) {
         return; // Stop here - don't process token clicks
     }
     
-    if (isDM && dmPlayerViewportToolActive && playerMapViewport.enabled && currentMap && currentMap.id) {
-        const hit = hitTestPlayerViewport(mouseX, mouseY);
-        if (hit) {
-            e.preventDefault();
-            playerViewportDrag = {
-                mode: hit,
-                startMx: mouseX,
-                startMy: mouseY,
-                ox: playerMapViewport.x,
-                oy: playerMapViewport.y,
-                ow: playerMapViewport.width,
-                oh: playerMapViewport.height
-            };
-            isDragging = false;
-            return;
-        }
-    }
-    
-    // Check if clicking on a token - always use circular bounds
+    // Token hit first: viewport tool used to steal every click inside the box (including on tokens).
     let clickedToken = null;
     for (let token of tokens) {
         const tokenSize = token.size || 1.0;
@@ -3340,6 +3774,27 @@ function onCanvasMouseDown(e) {
                 const dir = Math.atan2(dy, dx);
                 const tokensInArea = getTokensInCone(p.aoeOrigin.gx, p.aoeOrigin.gy, dir, p.coneAngle || 60, p.aoeSize);
                 resolvePowerOnArea(tokensInArea);
+                return;
+            }
+        }
+    }
+
+    // DM viewport resize: only when not clicking a token and not placing attack/power targets (AOE uses empty cells inside the box).
+    if (isDM && dmPlayerViewportToolActive && playerMapViewport.enabled && currentMap && currentMap.id) {
+        if (!pendingTargetAttack && !pendingTargetPower) {
+            const hit = hitTestPlayerViewport(mouseX, mouseY);
+            if (hit && !clickedToken) {
+                e.preventDefault();
+                playerViewportDrag = {
+                    mode: hit,
+                    startMx: mouseX,
+                    startMy: mouseY,
+                    ox: playerMapViewport.x,
+                    oy: playerMapViewport.y,
+                    ow: playerMapViewport.width,
+                    oh: playerMapViewport.height
+                };
+                isDragging = false;
                 return;
             }
         }
@@ -3427,6 +3882,10 @@ function onCanvasMouseUp(e) {
     if (isDragging) {
         isDragging = false;
     } else if (selectedToken && e.button === 0) {
+        if (pendingSkipTokenMoveOnNextMouseUp) {
+            pendingSkipTokenMoveOnNextMouseUp = false;
+            return;
+        }
         // FIX: DM can move any token, players restricted
         if (!isDM) {
             // Players can only move their own character token (don't alert when they clicked an enemy, e.g. after targeting)
@@ -3628,10 +4087,8 @@ function updateTokenInfo() {
     let info = '';
     let entityData = null;
     
-    // PERMISSION CHECK: Players can only see full details of their own token
-    // DM can see everything
     const isOwnToken = selectedToken.entity_type === 'Player' && selectedToken.entity_id === myCharacterId;
-    const canViewFullDetails = isDM || isOwnToken || selectedToken.entity_type === 'Enemy';
+    const canEditSelectedPlayerHp = isDM || isOwnToken;
     
     // FIX: Find character or enemy data and get current HP from combat if active
     if (selectedToken.entity_type === 'Player') {
@@ -3649,79 +4106,70 @@ function updateTokenInfo() {
                          entityData.max_hp : 
                          (participant ? participant.max_hp : entityData.max_hp);
             
-            if (canViewFullDetails) {
-                // DM or own token: Show full details with editable HP (persists even outside combat)
-                const escapedEntityId = escapeJs(selectedToken.entity_id);
-                info += `<h4>⚔️ ${entityData.name}</h4>`;
-                info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
-                info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
-                info += `<div class="token-stat"><span>HP:</span><input type="number" min="0" max="${maxHp}" value="${currentHp}" style="width: 50px; padding: 2px 6px; background: #2a2a2a; color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#44ff44'}; border: 1px solid #444; border-radius: 3px; font-weight: bold;" onchange="persistTokenCharacterHP('${escapedEntityId}', this.value)" onblur="persistTokenCharacterHP('${escapedEntityId}', this.value)"/> / <span>${maxHp}</span></div>`;
-                const hpPercent = (currentHp / maxHp) * 100;
-                const hpBarId = `hp-bar-${selectedToken.entity_id}`;
-                const previousHp = previousHpValues.get(selectedToken.entity_id);
-                const startPercent = previousHp ? (previousHp.hp / previousHp.maxHp) * 100 : hpPercent;
-                
-                // CRITICAL: If startPercent equals hpPercent, there's no animation!
-                // This means previousHpValues wasn't set correctly
-                if (startPercent === hpPercent && previousHp) {
-                    console.warn(`⚠️ startPercent equals hpPercent! Previous HP: ${previousHp.hp}, Current HP: ${currentHp}, Max HP: ${maxHp}`);
-                } else if (!previousHp) {
-                    console.warn(`⚠️ No previousHp found for entity_id ${selectedToken.entity_id}! Available keys:`, Array.from(previousHpValues.keys()));
-                }
-                
-                console.log(`🎬 Health bar: ${previousHp ? `${previousHp.hp}/${previousHp.maxHp}` : 'no previous'} -> ${currentHp}/${maxHp} (${startPercent.toFixed(1)}% -> ${hpPercent.toFixed(1)}%)`);
-                
-                // CRITICAL: Only animate if startPercent is different from hpPercent
-                if (Math.abs(startPercent - hpPercent) > 0.1) {
-                    // CRITICAL: Ensure transition is applied by setting it explicitly in the style
-                    info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%; transition: width 1.5s ease-out !important;"></div></div>`;
-                    // Animate to new value after a tiny delay to ensure DOM is ready
-                    setTimeout(() => {
-                        const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
-                        if (fillElement) {
-                            // Force reflow to ensure initial width is applied before animating
-                            void fillElement.offsetHeight;
-                            // Explicitly set transition again to ensure it's applied
-                            fillElement.style.transition = 'width 1.5s ease-out';
-                            // Now set the new width - CSS transition will animate it smoothly
-                            fillElement.style.width = `${hpPercent}%`;
-                            console.log(`✅ Started health bar animation from ${startPercent.toFixed(1)}% to ${hpPercent.toFixed(1)}% (1.5s transition)`);
-                        } else {
-                            console.warn(`⚠️ Health bar fill element not found: #${hpBarId} .hp-fill`);
-                        }
-                    }, 10);
-                } else {
-                    // No animation needed - values are the same (or very close)
-                    console.log(`⚠️ Skipping animation - startPercent (${startPercent.toFixed(1)}%) equals hpPercent (${hpPercent.toFixed(1)}%)`);
-                    info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${hpPercent}%;"></div></div>`;
-                }
-                // Store current HP for next update (delay to ensure animation uses old value)
-                // CRITICAL: Delay this to AFTER the animation completes (1.5s + buffer)
-                setTimeout(() => {
-                    previousHpValues.set(selectedToken.entity_id, { hp: currentHp, maxHp: maxHp });
-                }, 1600);
-                info += `<div class="token-stat"><span>AC:</span><span>${entityData.armor_class}</span></div>`;
-                info += `<div class="token-stat"><span>Initiative:</span><span>+${entityData.initiative_bonus}</span></div>`;
-                info += `<div class="token-stat"><span>Speed:</span><span>${entityData.speed} ft</span></div>`;
+            const escapedEntityId = escapeJs(selectedToken.entity_id);
+            info += `<h4>⚔️ ${entityData.name}</h4>`;
+            info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
+            info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
+            const hpColor = currentHp < maxHp * 0.3 ? '#ff4444' : '#44ff44';
+            if (canEditSelectedPlayerHp) {
+                info += `<div class="token-stat"><span>HP:</span><input type="number" min="0" max="${maxHp}" value="${currentHp}" style="width: 50px; padding: 2px 6px; background: #2a2a2a; color: ${hpColor}; border: 1px solid #444; border-radius: 3px; font-weight: bold;" onchange="persistTokenCharacterHP('${escapedEntityId}', this.value)" onblur="persistTokenCharacterHP('${escapedEntityId}', this.value)"/> / <span>${maxHp}</span></div>`;
             } else {
-                // Another player's token: Show minimal info only (no HP, AC, stats)
-                info += `<h4>⚔️ ${entityData.name}</h4>`;
-                info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
-                info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
-                info += `<p style="font-size: 11px; color: #888; margin-top: 12px; font-style: italic;">(You can only view full details of your own character)</p>`;
-                // Don't show ability scores or other stats for other players' tokens
+                info += `<div class="token-stat"><span>HP:</span><span style="color: ${hpColor}; font-weight: bold;">${currentHp}</span> / <span>${maxHp}</span></div>`;
+            }
+            const hpPercent = (currentHp / maxHp) * 100;
+            const hpBarId = `hp-bar-${selectedToken.entity_id}`;
+            const previousHp = previousHpValues.get(selectedToken.entity_id);
+            const startPercent = previousHp ? (previousHp.hp / previousHp.maxHp) * 100 : hpPercent;
+            
+            // CRITICAL: If startPercent equals hpPercent, there's no animation!
+            // This means previousHpValues wasn't set correctly
+            if (startPercent === hpPercent && previousHp) {
+                console.warn(`⚠️ startPercent equals hpPercent! Previous HP: ${previousHp.hp}, Current HP: ${currentHp}, Max HP: ${maxHp}`);
+            } else if (!previousHp) {
+                console.warn(`⚠️ No previousHp found for entity_id ${selectedToken.entity_id}! Available keys:`, Array.from(previousHpValues.keys()));
             }
             
-            // Only show ability scores for own token or DM
-            if (canViewFullDetails) {
-                info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                info += `<div class="token-stat"><span>STR:</span><span>${entityData.strength}</span></div>`;
-                info += `<div class="token-stat"><span>DEX:</span><span>${entityData.dexterity}</span></div>`;
-                info += `<div class="token-stat"><span>CON:</span><span>${entityData.constitution}</span></div>`;
-                info += `<div class="token-stat"><span>INT:</span><span>${entityData.intelligence}</span></div>`;
-                info += `<div class="token-stat"><span>WIS:</span><span>${entityData.wisdom}</span></div>`;
-                info += `<div class="token-stat"><span>CHA:</span><span>${entityData.charisma}</span></div>`;
+            console.log(`🎬 Health bar: ${previousHp ? `${previousHp.hp}/${previousHp.maxHp}` : 'no previous'} -> ${currentHp}/${maxHp} (${startPercent.toFixed(1)}% -> ${hpPercent.toFixed(1)}%)`);
+            
+            // CRITICAL: Only animate if startPercent is different from hpPercent
+            if (Math.abs(startPercent - hpPercent) > 0.1) {
+                // CRITICAL: Ensure transition is applied by setting it explicitly in the style
+                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%; transition: width 1.5s ease-out !important;"></div></div>`;
+                // Animate to new value after a tiny delay to ensure DOM is ready
+                setTimeout(() => {
+                    const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
+                    if (fillElement) {
+                        // Force reflow to ensure initial width is applied before animating
+                        void fillElement.offsetHeight;
+                        // Explicitly set transition again to ensure it's applied
+                        fillElement.style.transition = 'width 1.5s ease-out';
+                        // Now set the new width - CSS transition will animate it smoothly
+                        fillElement.style.width = `${hpPercent}%`;
+                        console.log(`✅ Started health bar animation from ${startPercent.toFixed(1)}% to ${hpPercent.toFixed(1)}% (1.5s transition)`);
+                    } else {
+                        console.warn(`⚠️ Health bar fill element not found: #${hpBarId} .hp-fill`);
+                    }
+                }, 10);
+            } else {
+                // No animation needed - values are the same (or very close)
+                console.log(`⚠️ Skipping animation - startPercent (${startPercent.toFixed(1)}%) equals hpPercent (${hpPercent.toFixed(1)}%)`);
+                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${hpPercent}%;"></div></div>`;
             }
+            // Store current HP for next update (delay to ensure animation uses old value)
+            // CRITICAL: Delay this to AFTER the animation completes (1.5s + buffer)
+            setTimeout(() => {
+                previousHpValues.set(selectedToken.entity_id, { hp: currentHp, maxHp: maxHp });
+            }, 1600);
+            info += `<div class="token-stat"><span>AC:</span><span>${entityData.armor_class}</span></div>`;
+            info += `<div class="token-stat"><span>Initiative:</span><span>+${entityData.initiative_bonus}</span></div>`;
+            info += `<div class="token-stat"><span>Speed:</span><span>${entityData.speed} ft</span></div>`;
+            info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+            info += `<div class="token-stat"><span>STR:</span><span>${entityData.strength}</span></div>`;
+            info += `<div class="token-stat"><span>DEX:</span><span>${entityData.dexterity}</span></div>`;
+            info += `<div class="token-stat"><span>CON:</span><span>${entityData.constitution}</span></div>`;
+            info += `<div class="token-stat"><span>INT:</span><span>${entityData.intelligence}</span></div>`;
+            info += `<div class="token-stat"><span>WIS:</span><span>${entityData.wisdom}</span></div>`;
+            info += `<div class="token-stat"><span>CHA:</span><span>${entityData.charisma}</span></div>`;
         }
     } else if (selectedToken.entity_type === 'Enemy') {
         const enemy = enemies.find(e => e.id === selectedToken.entity_id);
@@ -3781,26 +4229,17 @@ function updateTokenInfo() {
                 info += `<div class="token-stat"><span>Initiative:</span><span>+${enemy.initiative_bonus}</span></div>`;
                 info += `<div class="token-stat"><span>Speed:</span><span>${enemy.speed} ft</span></div>`;
                 
-                // Only show detailed ability scores for DM
-                // Players can see basic enemy info (HP, AC, Initiative, Speed) but not full stats
-                if (isDM) {
-                    info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                    info += `<div class="token-stat"><span>STR:</span><span>${enemy.strength}</span></div>`;
-                    info += `<div class="token-stat"><span>DEX:</span><span>${enemy.dexterity}</span></div>`;
-                    info += `<div class="token-stat"><span>CON:</span><span>${enemy.constitution}</span></div>`;
-                    info += `<div class="token-stat"><span>INT:</span><span>${enemy.intelligence}</span></div>`;
-                    info += `<div class="token-stat"><span>WIS:</span><span>${enemy.wisdom}</span></div>`;
-                    info += `<div class="token-stat"><span>CHA:</span><span>${enemy.charisma}</span></div>`;
-                }
+                info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                info += `<div class="token-stat"><span>STR:</span><span>${enemy.strength}</span></div>`;
+                info += `<div class="token-stat"><span>DEX:</span><span>${enemy.dexterity}</span></div>`;
+                info += `<div class="token-stat"><span>CON:</span><span>${enemy.constitution}</span></div>`;
+                info += `<div class="token-stat"><span>INT:</span><span>${enemy.intelligence}</span></div>`;
+                info += `<div class="token-stat"><span>WIS:</span><span>${enemy.wisdom}</span></div>`;
+                info += `<div class="token-stat"><span>CHA:</span><span>${enemy.charisma}</span></div>`;
                 
                 if (enemy.description) {
                     info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                    // Show full description for DM, truncated for players
-                    if (isDM) {
-                        info += `<p style="font-size: 11px; margin-top: 8px;">${enemy.description.substring(0, 200)}${enemy.description.length > 200 ? '...' : ''}</p>`;
-                    } else {
-                        info += `<p style="font-size: 11px; margin-top: 8px; color: #888;">${enemy.description.substring(0, 100)}${enemy.description.length > 100 ? '...' : ''}</p>`;
-                    }
+                    info += `<p style="font-size: 11px; margin-top: 8px; white-space: pre-wrap;">${escapeHtml(enemy.description)}</p>`;
                 }
                 
                 // Add button to view full character sheet (NPC or custom enemy, DM only)
@@ -3810,6 +4249,26 @@ function updateTokenInfo() {
                 }
             }
         }
+    } else if (selectedToken.entity_type === 'Object') {
+        const rawLabel = coalesceTokenDisplayName(selectedToken);
+        const label = (rawLabel !== undefined && rawLabel !== '')
+            ? escapeHtml(rawLabel)
+            : 'Object';
+        const hid = selectedToken.hidden_from_players === true;
+        info += `<h4>📦 ${label}</h4>`;
+        info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">Map object (not a creature).</p>`;
+        if (isDM) {
+            if (hid) {
+                info += `<div style="display:inline-block;margin:0 0 10px 0;padding:6px 12px;border-radius:6px;background:rgba(170,68,255,0.28);border:1px solid #aa44ff;color:#e8ccff;font-size:12px;font-weight:bold;letter-spacing:0.02em;">🔒 Hidden from players</div>`;
+            } else {
+                info += `<div style="display:inline-block;margin:0 0 10px 0;padding:6px 12px;border-radius:6px;background:rgba(68,170,136,0.15);border:1px solid #44aa88;color:#aaeedd;font-size:12px;">Visible to players on map</div>`;
+            }
+            info += `<label style="display:flex;align-items:center;gap:8px;margin-top:4px;font-size:12px;cursor:pointer;color:#ddd;">`;
+            info += `<input type="checkbox" ${hid ? 'checked' : ''} onchange="sendObjectHiddenFromPlayers('${selectedToken.id}', this.checked)"/>`;
+            info += `<span>Hidden from players</span></label>`;
+            info += `<p style="font-size:10px;opacity:0.75;margin-top:8px;line-height:1.4;">Players will not see this token on the map until you turn this off.</p>`;
+        }
+        info += `<div class="token-stat"><span>Position:</span><span>(${selectedToken.x}, ${selectedToken.y})</span></div>`;
     } else {
         info += `<h4>${selectedToken.entity_type}</h4>`;
         info += `<div class="token-stat"><span>Type:</span><span>${selectedToken.entity_type}</span></div>`;
@@ -3849,8 +4308,9 @@ function updateTokenInfo() {
     
     infoDiv.innerHTML = info;
     
-    // Show damage/heal buttons for DM (any token) or players (own token only)
-    const canModifyToken = isDM || (selectedToken && selectedToken.entity_type === 'Player' && selectedToken.entity_id === myCharacterId);
+    // Show damage/heal buttons for DM (any token) or players (own token only); objects have no HP
+    const canModifyToken = (isDM || (selectedToken && selectedToken.entity_type === 'Player' && selectedToken.entity_id === myCharacterId))
+        && selectedToken.entity_type !== 'Object';
     if (canModifyToken && selectedToken) {
         actionsDiv.classList.remove('hidden');
     } else {
@@ -3882,7 +4342,10 @@ function toggleCombat() {
         }
         // Combat v2: one participant per token. Use unique id per token so multiple enemies get separate turns.
         // Prefer t.id (server UUID); never use entity_id for multiple tokens or we get duplicate ids and one turn.
-        const tokenIds = tokenList.map((t, i) => (t && t.id) ? t.id : ('token-' + i));
+        // Map objects are never combatants.
+        const tokenIds = tokenList
+            .filter(t => t && t.entity_type !== 'Object')
+            .map((t, i) => (t && t.id) ? t.id : ('token-' + i));
         console.log('[Combat v2] Starting combat with', tokenIds.length, 'tokens. IDs:', tokenIds.slice(0, 20).join(', ') + (tokenIds.length > 20 ? '...' : ''));
         tokenList.forEach((t, i) => {
             if (t) console.log(`  Token ${i + 1}: id=${t.id} entity_id=${t.entity_id} type=${t.entity_type}`);
@@ -4538,33 +5001,215 @@ function switchPlayerActionBarTab(tabId) {
 
 const CAMPAIGN_NOTES_KEY_PREFIX = 'campaignNotesData_';
 function notesUid() { return Math.random().toString(36).slice(2, 10); }
-function getCampaignNotesStorageKey(characterId) {
-    return characterId ? CAMPAIGN_NOTES_KEY_PREFIX + String(characterId) : null;
-}
-function getCampaignNotes(characterId) {
-    var key = getCampaignNotesStorageKey(characterId);
-    if (!key) return { sessions: [], npcs: [], planets: [], locations: [], quests: [] };
-    try {
-        var raw = localStorage.getItem(key);
-        if (raw) {
-            var d = JSON.parse(raw);
-            return {
-                sessions: Array.isArray(d.sessions) ? d.sessions.slice() : [],
-                npcs: Array.isArray(d.npcs) ? d.npcs.slice() : [],
-                planets: Array.isArray(d.planets) ? d.planets.slice() : [],
-                locations: Array.isArray(d.locations) ? d.locations.slice() : [],
-                quests: Array.isArray(d.quests) ? d.quests.slice() : []
-            };
-        }
-    } catch (e) {}
+function emptyCampaignNotesData() {
     return { sessions: [], npcs: [], planets: [], locations: [], quests: [] };
 }
-function saveCampaignNotes(characterId, data) {
-    var key = getCampaignNotesStorageKey(characterId);
-    if (!key) return;
+function normalizeCampaignNotesRaw(d) {
+    if (!d || typeof d !== 'object') return emptyCampaignNotesData();
+    return {
+        sessions: Array.isArray(d.sessions) ? d.sessions.slice() : [],
+        npcs: Array.isArray(d.npcs) ? d.npcs.slice() : [],
+        planets: Array.isArray(d.planets) ? d.planets.slice() : [],
+        locations: Array.isArray(d.locations) ? d.locations.slice() : [],
+        quests: Array.isArray(d.quests) ? d.quests.slice() : []
+    };
+}
+function isCampaignNotesDataEmpty(d) {
+    if (!d) return true;
+    return (!d.sessions || !d.sessions.length) && (!d.npcs || !d.npcs.length) && (!d.planets || !d.planets.length) &&
+        (!d.locations || !d.locations.length) && (!d.quests || !d.quests.length);
+}
+/** SW5e / builder JSON often has character.id — stable across re-imports; server row id can change. */
+function getCharacterSheetStableIdFromCharacterId(characterId) {
+    if (!characterId || typeof characters === 'undefined' || !Array.isArray(characters)) return null;
+    var row = characters.find(function(c) { return c.id === characterId; });
+    if (!row || !row.character_data) return null;
     try {
-        localStorage.setItem(key, JSON.stringify(data));
+        var p = JSON.parse(row.character_data);
+        var ch = p.character || p;
+        if (ch && ch.id != null && String(ch.id).length > 0) return String(ch.id);
     } catch (e) {}
+    return null;
+}
+function getCampaignNotesLegacyStorageKey(characterId) {
+    return characterId ? CAMPAIGN_NOTES_KEY_PREFIX + String(characterId) : null;
+}
+function getCampaignNotesCanonicalStorageKey(characterId) {
+    if (!characterId) return null;
+    var sheetId = getCharacterSheetStableIdFromCharacterId(characterId);
+    if (sheetId) return CAMPAIGN_NOTES_KEY_PREFIX + 'sheet_' + sheetId;
+    return getCampaignNotesLegacyStorageKey(characterId);
+}
+/** URL / filename segment for `campaign_notes/<id>.json` (must match server sanitize). */
+function getCampaignNotesFileId(characterId) {
+    var key = getCampaignNotesCanonicalStorageKey(characterId);
+    if (!key || key.indexOf(CAMPAIGN_NOTES_KEY_PREFIX) !== 0) return null;
+    var raw = key.slice(CAMPAIGN_NOTES_KEY_PREFIX.length);
+    var safe = String(raw).replace(/[^A-Za-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (!safe) return null;
+    if (safe.length > 200) safe = safe.slice(0, 200);
+    return safe;
+}
+var campaignNotesMem = {};
+var campaignNotesHydratedFids = {};
+var campaignNotesLoadPromises = {};
+var campaignNotesServerSaveTimer = null;
+function readLocalStorageCampaignNotesMigration(characterId) {
+    var canonicalKey = getCampaignNotesCanonicalStorageKey(characterId);
+    var legacyKey = getCampaignNotesLegacyStorageKey(characterId);
+    if (!canonicalKey) return emptyCampaignNotesData();
+    try {
+        var raw = localStorage.getItem(canonicalKey);
+        if (raw !== null && raw !== '') {
+            return normalizeCampaignNotesRaw(JSON.parse(raw));
+        }
+    } catch (e) {}
+    if (legacyKey && legacyKey !== canonicalKey) {
+        try {
+            var rawL = localStorage.getItem(legacyKey);
+            if (rawL) {
+                var migrated = normalizeCampaignNotesRaw(JSON.parse(rawL));
+                if (!isCampaignNotesDataEmpty(migrated)) return migrated;
+            }
+        } catch (e2) {}
+    }
+    return emptyCampaignNotesData();
+}
+function campaignNotesPutToServer(fid, data) {
+    return fetch('/api/campaign-notes/' + encodeURIComponent(fid), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(normalizeCampaignNotesRaw(data))
+    }).then(function(r) {
+        if (!r.ok) throw new Error('notes save HTTP ' + r.status);
+    });
+}
+function scheduleCampaignNotesServerSave(fid) {
+    if (!fid) return;
+    if (campaignNotesServerSaveTimer) clearTimeout(campaignNotesServerSaveTimer);
+    campaignNotesServerSaveTimer = setTimeout(function() {
+        campaignNotesServerSaveTimer = null;
+        var d = campaignNotesMem[fid];
+        if (!d) return;
+        campaignNotesPutToServer(fid, d).catch(function(e) { console.warn('[Campaign notes] server save', e); });
+    }, 450);
+}
+function campaignNotesFlushPendingServerSave() {
+    if (campaignNotesServerSaveTimer) {
+        clearTimeout(campaignNotesServerSaveTimer);
+        campaignNotesServerSaveTimer = null;
+    }
+    if (!myCharacterId || isDM) return;
+    var fid = getCampaignNotesFileId(myCharacterId);
+    if (!fid) return;
+    var d = campaignNotesMem[fid];
+    if (d == null) return;
+    try {
+        fetch('/api/campaign-notes/' + encodeURIComponent(fid), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(normalizeCampaignNotesRaw(d)),
+            keepalive: true
+        }).catch(function() {});
+    } catch (e) {}
+}
+function ensureCampaignNotesLoaded(characterId) {
+    var fid = getCampaignNotesFileId(characterId);
+    if (!fid) return Promise.resolve();
+    if (campaignNotesHydratedFids[fid]) return Promise.resolve();
+    if (campaignNotesLoadPromises[fid]) return campaignNotesLoadPromises[fid];
+    campaignNotesLoadPromises[fid] = fetch('/api/campaign-notes/' + encodeURIComponent(fid))
+        .then(function(r) {
+            if (r.status === 404) {
+                var fromLs = readLocalStorageCampaignNotesMigration(characterId);
+                campaignNotesMem[fid] = fromLs;
+                if (!isCampaignNotesDataEmpty(fromLs)) {
+                    return campaignNotesPutToServer(fid, fromLs);
+                }
+                return undefined;
+            }
+            if (!r.ok) throw new Error('notes load HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function(json) {
+            if (json !== undefined && json !== null && typeof json === 'object') {
+                campaignNotesMem[fid] = normalizeCampaignNotesRaw(json);
+            }
+        })
+        .catch(function(e) {
+            console.warn('[Campaign notes] load', e);
+            if (!Object.prototype.hasOwnProperty.call(campaignNotesMem, fid)) {
+                campaignNotesMem[fid] = readLocalStorageCampaignNotesMigration(characterId);
+            }
+        })
+        .finally(function() {
+            campaignNotesHydratedFids[fid] = true;
+            delete campaignNotesLoadPromises[fid];
+        });
+    return campaignNotesLoadPromises[fid];
+}
+function getCampaignNotes(characterId) {
+    var fid = getCampaignNotesFileId(characterId);
+    if (!fid) return emptyCampaignNotesData();
+    if (Object.prototype.hasOwnProperty.call(campaignNotesMem, fid)) {
+        return normalizeCampaignNotesRaw(campaignNotesMem[fid]);
+    }
+    return emptyCampaignNotesData();
+}
+function saveCampaignNotes(characterId, data) {
+    var fid = getCampaignNotesFileId(characterId);
+    if (!fid) return;
+    campaignNotesMem[fid] = normalizeCampaignNotesRaw(data);
+    scheduleCampaignNotesServerSave(fid);
+}
+
+var campaignNotesAutosaveTimer = null;
+function campaignNotesFlushActiveSilent() {
+    if (!myCharacterId || isDM) return;
+    var sub = localStorage.getItem('campaignNotesSubTab') || 'sessions';
+    if (sub === 'sessions') campaignNotesSaveSession(true);
+    else if (sub === 'npcs') campaignNotesSaveNpc(true);
+    else if (sub === 'planets') campaignNotesSavePlanet(true);
+    else if (sub === 'locations') campaignNotesSaveLocation(true);
+    else if (sub === 'quests') campaignNotesSaveQuest(true);
+}
+function campaignNotesFlushPendingAutosave() {
+    if (campaignNotesAutosaveTimer) {
+        clearTimeout(campaignNotesAutosaveTimer);
+        campaignNotesAutosaveTimer = null;
+    }
+    campaignNotesFlushActiveSilent();
+}
+function scheduleCampaignNotesAutosave() {
+    if (!myCharacterId || isDM) return;
+    if (campaignNotesAutosaveTimer) clearTimeout(campaignNotesAutosaveTimer);
+    campaignNotesAutosaveTimer = setTimeout(function() {
+        campaignNotesAutosaveTimer = null;
+        campaignNotesFlushActiveSilent();
+    }, 450);
+}
+function campaignNotesAutosaveDelegate(e) {
+    var t = e.target;
+    if (!t || typeof t.id !== 'string' || !t.id) return;
+    var id = t.id;
+    if (id === 'notesSessionTitle' || id === 'notesSessionDate' || id === 'notesSessionContent') {
+        scheduleCampaignNotesAutosave();
+        return;
+    }
+    if (id.indexOf('notesNpc') === 0 || id.indexOf('notesPlanet') === 0 || id.indexOf('notesLoc') === 0 || id.indexOf('notesQuest') === 0) {
+        scheduleCampaignNotesAutosave();
+    }
+}
+function initCampaignNotesPersistence() {
+    if (window._campaignNotesPersistenceInit) return;
+    window._campaignNotesPersistenceInit = true;
+    document.addEventListener('input', campaignNotesAutosaveDelegate, true);
+    document.addEventListener('change', campaignNotesAutosaveDelegate, true);
+    window.addEventListener('pagehide', function() { campaignNotesFlushPendingAutosave(); });
+    window.addEventListener('beforeunload', function() { campaignNotesFlushPendingAutosave(); });
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'hidden') campaignNotesFlushPendingAutosave();
+    });
 }
 
 function renderNotesTabContent() {
@@ -4575,7 +5220,6 @@ function renderNotesTabContent() {
         container.innerHTML = '<div class="player-bar-notes-wrap"><p class="notes-detail-empty" style="padding:12px;">Select a character to view and edit your notes. Your notes are private to that character.</p></div>';
         return;
     }
-    var data = getCampaignNotes(characterId);
     var subTab = localStorage.getItem('campaignNotesSubTab') || 'sessions';
     var sections = [
         { id: 'sessions', label: 'Session Notes', icon: '📜' },
@@ -4590,7 +5234,7 @@ function renderNotesTabContent() {
         html += '<button type="button" class="player-bar-notes-subtab' + (subTab === s.id ? ' active' : '') + '" data-notes-section="' + s.id + '">' + s.icon + ' ' + s.label + '</button>';
     });
     html += '</div>';
-    html += '<div class="player-bar-notes-body" id="playerBarNotesBody"></div></div>';
+    html += '<div class="player-bar-notes-body" id="playerBarNotesBody"><p class="notes-detail-empty" style="padding:12px;">Loading notes from server…</p></div></div>';
     container.innerHTML = html;
     container.querySelectorAll('.player-bar-notes-subtab').forEach(function(btn) {
         btn.onclick = function() {
@@ -4598,7 +5242,21 @@ function renderNotesTabContent() {
             renderNotesTabContent();
         };
     });
-    renderNotesSection(characterId, subTab, data, document.getElementById('playerBarNotesBody'));
+    var loadFor = characterId;
+    ensureCampaignNotesLoaded(characterId).then(function() {
+        if (loadFor !== myCharacterId) return;
+        var data = getCampaignNotes(characterId);
+        var bodyEl = document.getElementById('playerBarNotesBody');
+        if (!bodyEl) return;
+        renderNotesSection(characterId, subTab, data, bodyEl);
+    }).catch(function(err) {
+        console.warn('[Campaign notes] render', err);
+        if (loadFor !== myCharacterId) return;
+        var data = getCampaignNotes(characterId);
+        var bodyEl = document.getElementById('playerBarNotesBody');
+        if (!bodyEl) return;
+        renderNotesSection(characterId, subTab, data, bodyEl);
+    });
 }
 
 function renderNotesSection(characterId, sectionId, data, container) {
@@ -4795,7 +5453,7 @@ function campaignNotesDelete(sectionId, id) {
     try { localStorage.removeItem('campaignNotesActive_' + characterId + '_' + sectionId); } catch (e) {}
     renderNotesTabContent();
 }
-function campaignNotesSaveSession() {
+function campaignNotesSaveSession(silent) {
     var characterId = myCharacterId;
     if (!characterId) return;
     var data = getCampaignNotes(characterId);
@@ -4805,9 +5463,9 @@ function campaignNotesSaveSession() {
     cur.date = (document.getElementById('notesSessionDate') && document.getElementById('notesSessionDate').value) || cur.date;
     cur.content = (document.getElementById('notesSessionContent') && document.getElementById('notesSessionContent').value) || cur.content;
     saveCampaignNotes(characterId, data);
-    renderNotesTabContent();
+    if (!silent) renderNotesTabContent();
 }
-function campaignNotesSaveNpc() {
+function campaignNotesSaveNpc(silent) {
     var characterId = myCharacterId;
     if (!characterId) return;
     var data = getCampaignNotes(characterId);
@@ -4818,9 +5476,9 @@ function campaignNotesSaveNpc() {
     if (nameEl) cur.name = nameEl.value; if (raceEl) cur.race = raceEl.value; if (roleEl) cur.role = roleEl.value; if (locEl) cur.location = locEl.value;
     if (dispEl) cur.disposition = dispEl.value; if (aliveEl) cur.alive = aliveEl.checked; if (persEl) cur.personality = persEl.value; if (notesEl) cur.notes = notesEl.value;
     saveCampaignNotes(characterId, data);
-    renderNotesTabContent();
+    if (!silent) renderNotesTabContent();
 }
-function campaignNotesSavePlanet() {
+function campaignNotesSavePlanet(silent) {
     var characterId = myCharacterId;
     if (!characterId) return;
     var data = getCampaignNotes(characterId);
@@ -4829,9 +5487,9 @@ function campaignNotesSavePlanet() {
     var nameEl = document.getElementById('notesPlanetName'); var typeEl = document.getElementById('notesPlanetType'); var descEl = document.getElementById('notesPlanetDescription'); var notesEl = document.getElementById('notesPlanetNotes');
     if (nameEl) cur.name = nameEl.value; if (typeEl) cur.type = typeEl.value; if (descEl) cur.description = descEl.value; if (notesEl) cur.notes = notesEl.value;
     saveCampaignNotes(characterId, data);
-    renderNotesTabContent();
+    if (!silent) renderNotesTabContent();
 }
-function campaignNotesSaveLocation() {
+function campaignNotesSaveLocation(silent) {
     var characterId = myCharacterId;
     if (!characterId) return;
     var data = getCampaignNotes(characterId);
@@ -4840,9 +5498,9 @@ function campaignNotesSaveLocation() {
     var nameEl = document.getElementById('notesLocName'); var typeEl = document.getElementById('notesLocType'); var descEl = document.getElementById('notesLocDescription'); var notesEl = document.getElementById('notesLocNotes');
     if (nameEl) cur.name = nameEl.value; if (typeEl) cur.type = typeEl.value; if (descEl) cur.description = descEl.value; if (notesEl) cur.notes = notesEl.value;
     saveCampaignNotes(characterId, data);
-    renderNotesTabContent();
+    if (!silent) renderNotesTabContent();
 }
-function campaignNotesSaveQuest() {
+function campaignNotesSaveQuest(silent) {
     var characterId = myCharacterId;
     if (!characterId) return;
     var data = getCampaignNotes(characterId);
@@ -4853,7 +5511,7 @@ function campaignNotesSaveQuest() {
     if (titleEl) cur.title = titleEl.value; if (statusEl) cur.status = statusEl.value; if (giverEl) cur.giver = giverEl.value;
     if (descEl) cur.description = descEl.value; if (threadsEl) cur.threads = threadsEl.value;
     saveCampaignNotes(characterId, data);
-    renderNotesTabContent();
+    if (!silent) renderNotesTabContent();
 }
 
 // Toggle the action bar on/off (called by the gold Action Bar button)
@@ -4887,6 +5545,7 @@ function updatePlayerActionBarVisibility() {
         document.body.classList.remove('player-action-bar-visible');
     }
     updateActionBarButtonLabel();
+    updateArmstechPlayerButtonVisibility();
 }
 
 // Populate the fixed bottom player action bar (stats, HP, abilities, saves, skills, actions, attacks, dice)
@@ -5228,7 +5887,10 @@ function populatePlayerActionBar() {
                 const toHit = atk.to_hit !== undefined ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : 0);
                 const dmg = atk.damage || atk.damage_dice || '1d4';
                 const dmgType = atk.type || atk.damage_type || 'damage';
-                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '">' + escapeHtml(name) + '</button>';
+                const rangeAttr = escapeHtml(attackRangeToDataAttr(atk.range));
+                const rangeTitle = attackRangeToDataAttr(atk.range);
+                const titleAttr = rangeTitle ? escapeHtml('Range: ' + rangeTitle + ' ft') : '';
+                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '" data-range="' + rangeAttr + '"' + (titleAttr ? ' title="' + titleAttr + '"' : '') + '>' + escapeHtml(name) + '</button>';
             });
         }
         html += '</div>';
@@ -5590,6 +6252,7 @@ function populateAttacks(charData, charForEquip) {
         const toHit = formatMod(thVal);
         const damage = (attack.damage && String(attack.damage).trim() !== '—') ? attack.damage : (attack.damage_dice || '1d4');
         const damageType = attack.type || 'bludgeoning';
+        const rangeLabel = attackRangeToDataAttr(attack.range);
         
         btn.innerHTML = `
             <div style="font-weight: bold; font-size: 14px;">${attack.name}</div>
@@ -5597,6 +6260,7 @@ function populateAttacks(charData, charForEquip) {
                 <span>To Hit: ${toHit}</span>
                 <span>Damage: ${damage} ${damageType}</span>
             </div>
+            ${rangeLabel ? `<div style="font-size: 10px; opacity: 0.65; margin-top: 4px;">📏 ${rangeLabel} ft</div>` : ''}
         `;
         
         btn.onmouseenter = function() {
@@ -5609,8 +6273,8 @@ function populateAttacks(charData, charForEquip) {
         };
         
         btn.onclick = function() {
-            const toHitMod = attack.to_hit || 0;
-            rollAttack(attack.name, toHitMod, damage, damageType, myPlayerName);
+            const toHitMod = thVal;
+            requestAttackTarget(attack.name, toHitMod, damage, damageType, myPlayerName, attackRangeForRequest(attack.range));
         };
         
         attacksList.appendChild(btn);
@@ -5781,6 +6445,358 @@ function changeTokenSize(tokenId, newSize) {
         updateTokenInfo();
     }
 }
+
+function sendObjectHiddenFromPlayers(tokenId, hidden) {
+    if (!isDM) return;
+    sendMessage({
+        type: 'UpdateTokenHiddenFromPlayers',
+        token_id: tokenId,
+        hidden_from_players: !!hidden
+    });
+    const tok = tokens.find(t => t.id === tokenId);
+    if (tok) {
+        tok.hidden_from_players = !!hidden;
+        if (selectedToken && selectedToken.id === tokenId) selectedToken = tok;
+        renderCanvas();
+        updateTokenInfo();
+    }
+}
+
+// --- Armstech Engineering tracker (Jaster / Engineer characters; localStorage per character id) ---
+var armstechModalCharacter = null;
+
+function characterQualifiesForArmstech(char) {
+    if (!char) return false;
+    var name = String(char.name || '').trim().toLowerCase();
+    var cls = String(char.class || '').toLowerCase();
+    if (name === 'jaster') return true;
+    if (cls.indexOf('engineer') !== -1) return true;
+    return false;
+}
+
+function armstechStorageKey(characterId) {
+    return 'gorgox_armstech_v1_' + String(characterId || '');
+}
+
+function defaultArmstechState() {
+    return { weaponType: 'blaster', blasterStr: false, vibroDex: false, equippedIds: [] };
+}
+
+function loadArmstechState(characterId) {
+    var base = defaultArmstechState();
+    try {
+        var raw = localStorage.getItem(armstechStorageKey(characterId));
+        if (!raw) return base;
+        var o = JSON.parse(raw);
+        if (o && typeof o === 'object') {
+            base.weaponType = o.weaponType === 'vibro' ? 'vibro' : 'blaster';
+            base.blasterStr = !!o.blasterStr;
+            base.vibroDex = !!o.vibroDex;
+            base.equippedIds = Array.isArray(o.equippedIds) ? o.equippedIds.filter(function (id) { return typeof id === 'string'; }) : [];
+        }
+    } catch (e) { /* ignore */ }
+    return base;
+}
+
+function saveArmstechState(characterId, state) {
+    try {
+        localStorage.setItem(armstechStorageKey(characterId), JSON.stringify(state));
+    } catch (e) { /* ignore */ }
+}
+
+function getArmstechEffectiveLevel(char) {
+    if (!char) return 1;
+    var lv = Math.max(1, Math.min(20, Number(char.level) || 1));
+    if (char.character_data) {
+        try {
+            var parsed = JSON.parse(char.character_data);
+            var data = parsed && parsed.character ? parsed.character : parsed;
+            if (data && typeof getLevelFromCharacterData === 'function') {
+                lv = getLevelFromCharacterData(data, char);
+            }
+        } catch (e) { /* ignore */ }
+    }
+    return Math.max(1, Math.min(20, lv));
+}
+
+function armstechModWeaponOk(mod, state) {
+    var w = mod.weapon || 'any';
+    if (w === 'any') return true;
+    if (w === 'blaster') return state.weaponType === 'blaster';
+    if (w === 'vibro') return state.weaponType === 'vibro';
+    if (w === 'blaster_str') return state.weaponType === 'blaster' && state.blasterStr;
+    if (w === 'vibro_dex') return state.weaponType === 'vibro' && state.vibroDex;
+    return true;
+}
+
+function armstechModMeetsPrereqs(mod, char, state) {
+    var ar = typeof ARMSTECH_ENGINEERING !== 'undefined' ? ARMSTECH_ENGINEERING : null;
+    if (!ar) return { ok: false, reason: 'Armstech data not loaded. Refresh the page.' };
+    var level = getArmstechEffectiveLevel(char);
+    if ((mod.minLevel || 3) > level) {
+        return { ok: false, reason: 'Requires character level ' + mod.minLevel + ' (you are level ' + level + ').' };
+    }
+    if (!armstechModWeaponOk(mod, state)) {
+        if (mod.weapon === 'blaster_str') return { ok: false, reason: 'Requires a blaster with the Strength property (check the box above).' };
+        if (mod.weapon === 'vibro_dex') return { ok: false, reason: 'Requires a vibroweapon with the Dexterity property (check the box above).' };
+        return { ok: false, reason: 'Wrong modified weapon type for this mod.' };
+    }
+    var req = mod.requires || [];
+    for (var i = 0; i < req.length; i++) {
+        if (state.equippedIds.indexOf(req[i]) === -1) {
+            var other = ar.modifications.find(function (m) { return m.id === req[i]; });
+            var nm = other ? other.name : req[i];
+            return { ok: false, reason: 'Requires modification: ' + nm };
+        }
+    }
+    return { ok: true, reason: '' };
+}
+
+function armstechPruneEquipped(char, state) {
+    var ar = typeof ARMSTECH_ENGINEERING !== 'undefined' ? ARMSTECH_ENGINEERING : null;
+    if (!ar) return state;
+    var prevLen = -1;
+    while (state.equippedIds.length !== prevLen) {
+        prevLen = state.equippedIds.length;
+        state.equippedIds = state.equippedIds.filter(function (id) {
+            var mod = ar.modifications.find(function (m) { return m.id === id; });
+            if (!mod) return false;
+            return armstechModMeetsPrereqs(mod, char, state).ok;
+        });
+    }
+    return state;
+}
+
+function armstechCascadeAfterRemove(state, removedId) {
+    var ar = typeof ARMSTECH_ENGINEERING !== 'undefined' ? ARMSTECH_ENGINEERING : null;
+    if (!ar) return;
+    state.equippedIds = state.equippedIds.filter(function (id) { return id !== removedId; });
+    var changed = true;
+    while (changed) {
+        changed = false;
+        var ids = state.equippedIds.slice();
+        var next = [];
+        for (var i = 0; i < ids.length; i++) {
+            var id = ids[i];
+            var m = ar.modifications.find(function (x) { return x.id === id; });
+            if (!m) continue;
+            var reqs = m.requires || [];
+            var ok = true;
+            for (var r = 0; r < reqs.length; r++) {
+                if (ids.indexOf(reqs[r]) === -1) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) next.push(id);
+            else changed = true;
+        }
+        state.equippedIds = next;
+    }
+}
+
+function updateArmstechPlayerButtonVisibility() {
+    var btn = document.getElementById('armstechPlayerBtn');
+    if (!btn) return;
+    if (isDM) {
+        btn.style.display = 'none';
+        return;
+    }
+    var char = myCharacterId ? characters.find(function (c) { return c.id === myCharacterId; }) : null;
+    btn.style.display = char && characterQualifiesForArmstech(char) ? 'inline-block' : 'none';
+}
+
+function openArmstechTracker() {
+    var char = myCharacterId ? characters.find(function (c) { return c.id === myCharacterId; }) : null;
+    if (!char) {
+        alert('Select a character first.');
+        return;
+    }
+    openArmstechTrackerForCharacter(char);
+}
+
+function openArmstechTrackerForCharacter(char) {
+    if (typeof ARMSTECH_ENGINEERING === 'undefined') {
+        alert('Armstech data failed to load. Hard-refresh the page (Ctrl+F5).');
+        return;
+    }
+    if (!characterQualifiesForArmstech(char)) {
+        alert('Armstech tracker is for Engineer characters (Armstech discipline), e.g. Jaster.');
+        return;
+    }
+    armstechModalCharacter = char;
+    var modal = document.getElementById('armstechModal');
+    var body = document.getElementById('armstechModalBody');
+    if (!modal || !body) {
+        console.error('Armstech modal missing from page (#armstechModal / #armstechModalBody).');
+        alert('Armstech UI is missing from this page. Refresh with Ctrl+F5, or re-deploy static/index.html.');
+        return;
+    }
+    modal.classList.add('active');
+    try {
+        renderArmstechModal();
+    } catch (e) {
+        console.error('renderArmstechModal failed:', e);
+        body.innerHTML = '<p style="color:#f88;padding:12px;">Could not build Armstech panel. Check the browser console (F12).</p>';
+    }
+}
+
+function closeArmstechModal() {
+    armstechModalCharacter = null;
+    var modal = document.getElementById('armstechModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function renderArmstechModal() {
+    var char = armstechModalCharacter;
+    var body = document.getElementById('armstechModalBody');
+    var title = document.getElementById('armstechModalTitle');
+    if (!char || !body || typeof ARMSTECH_ENGINEERING === 'undefined') return;
+
+    var ar = ARMSTECH_ENGINEERING;
+    var state = loadArmstechState(char.id);
+    state = armstechPruneEquipped(char, state);
+    saveArmstechState(char.id, state);
+
+    var level = getArmstechEffectiveLevel(char);
+    var intScore = Number(char.intelligence) || 10;
+    var pb = Number(char.proficiency_bonus);
+    if (isNaN(pb) || pb < 0) {
+        pb = level <= 4 ? 2 : level <= 8 ? 3 : level <= 12 ? 4 : level <= 16 ? 5 : 6;
+    }
+    var maxSlots = ar.modificationSlotsForLevel(level);
+    var techDc = ar.techSaveDc(pb, intScore);
+    var intMod = ar.intMod(intScore);
+    var installs = ar.installsPerLongRest(intScore);
+    var equipped = state.equippedIds.length;
+    var overPb = Math.max(0, equipped - pb);
+    var techPenalty = overPb;
+
+    if (title) title.textContent = 'Armstech — ' + (char.name || 'Engineer');
+
+    var modsSorted = ar.modifications.slice().sort(function (a, b) {
+        return String(a.name).localeCompare(String(b.name));
+    });
+
+    var html = '';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;font-size:12px;">';
+    html += '<div style="background:rgba(74,158,255,0.12);border:1px solid #4a9eff;border-radius:8px;padding:10px;">';
+    html += '<div><strong>Level</strong> ' + level + '</div>';
+    html += '<div><strong>INT</strong> ' + intScore + ' (mod ' + (intMod >= 0 ? '+' : '') + intMod + ')</div>';
+    html += '<div><strong>Proficiency bonus</strong> +' + pb + '</div>';
+    html += '<div><strong>Tech save DC</strong> ' + techDc + '</div>';
+    html += '</div>';
+    html += '<div style="background:rgba(201,162,39,0.12);border:1px solid #c9a227;border-radius:8px;padding:10px;">';
+    html += '<div><strong>Modification slots</strong> ' + equipped + ' / ' + maxSlots + '</div>';
+    html += '<div style="color:' + (techPenalty > 0 ? '#ff8888' : '#aaa') + ';"><strong>Tech point max</strong> −' + techPenalty + ' (mods past PB: ' + overPb + ')</div>';
+    html += '<div><strong>Install / swap per long rest</strong> up to ' + installs + ' (INT mod, min 1)</div>';
+    html += '</div></div>';
+
+    html += '<div style="margin-bottom:12px;padding:10px;background:#1a1a2e;border-radius:8px;border:1px solid #444;">';
+    html += '<div style="font-weight:bold;margin-bottom:8px;color:#c9a227;">Modified weapon</div>';
+    html += '<label style="margin-right:14px;cursor:pointer;"><input type="radio" name="armstechWeapon" value="blaster"' + (state.weaponType === 'blaster' ? ' checked' : '') + ' onchange="armstechOnWeaponTypeChange(\'blaster\')"/> Blaster</label>';
+    html += '<label style="cursor:pointer;"><input type="radio" name="armstechWeapon" value="vibro"' + (state.weaponType === 'vibro' ? ' checked' : '') + ' onchange="armstechOnWeaponTypeChange(\'vibro\')"/> Vibroweapon</label>';
+    html += '<div style="margin-top:10px;font-size:11px;opacity:0.9;">';
+    html += '<label style="display:block;margin:4px 0;cursor:pointer;"><input type="checkbox"' + (state.blasterStr ? ' checked' : '') + ' onchange="armstechOnFlagChange(\'blasterStr\',this.checked)"/> My blaster has the <strong>Strength</strong> property (for Recoil Dampener)</label>';
+    html += '<label style="display:block;margin:4px 0;cursor:pointer;"><input type="checkbox"' + (state.vibroDex ? ' checked' : '') + ' onchange="armstechOnFlagChange(\'vibroDex\',this.checked)"/> My vibroweapon has the <strong>Dexterity</strong> property (for Compensation Oscillator)</label>';
+    html += '</div></div>';
+
+    html += '<details style="margin-bottom:14px;font-size:12px;opacity:0.9;"><summary style="cursor:pointer;color:#4a9eff;">Class reminders (3rd level)</summary>';
+    html += '<ul style="margin:8px 0 0 18px;line-height:1.45;">';
+    html += '<li><strong>Modified weaponry:</strong> One enhanced weapon, attunement, 4 slots at low levels (see table for more at higher levels). Slots fill with mods below.</li>';
+    html += '<li><strong>Over PB:</strong> Each mod beyond your proficiency bonus reduces tech point maximum by 1.</li>';
+    html += '<li><strong>Long rest:</strong> Install, replace, or remove up to INT mod (min 1) modifications.</li>';
+    html += '<li><strong>Close Call:</strong> On a miss with the modified weapon, spend Potent Aptitude to roll and add to the attack.</li>';
+    html += '</ul></details>';
+
+    html += '<div style="max-height:42vh;overflow-y:auto;border:1px solid #333;border-radius:8px;">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<thead><tr style="background:#252538;"><th style="text-align:left;padding:8px;width:36px;">Eq</th><th style="text-align:left;padding:8px;">Modification</th><th style="text-align:left;padding:8px;">Notes</th></tr></thead><tbody>';
+
+    for (var j = 0; j < modsSorted.length; j++) {
+        var mod = modsSorted[j];
+        var check = armstechModMeetsPrereqs(mod, char, state);
+        var isOn = state.equippedIds.indexOf(mod.id) !== -1;
+        var canEquip = check.ok || isOn;
+        var disabled = (!canEquip && !isOn) || (!isOn && equipped >= maxSlots && check.ok);
+        if (!isOn && check.ok && equipped >= maxSlots) disabled = true;
+
+        var rowStyle = isOn ? 'background:rgba(74,158,255,0.08);' : '';
+        html += '<tr style="border-top:1px solid #333;' + rowStyle + '">';
+        html += '<td style="padding:8px;vertical-align:top;">';
+        html += '<input type="checkbox"' + (isOn ? ' checked' : '') + (disabled && !isOn ? ' disabled' : '') + ' onchange="armstechToggleMod(\'' + mod.id.replace(/\\/g, '\\\\').replace(/'/g, '\\\'') + '\', this.checked)"/>';
+        html += '</td>';
+        html += '<td style="padding:8px;vertical-align:top;"><strong>' + escapeHtml(mod.name) + '</strong>';
+        html += '<div style="font-size:10px;opacity:0.75;">Lv ' + mod.minLevel + '+ · ' + escapeHtml(String(mod.weapon).replace('_', ' ')) + '</div></td>';
+        html += '<td style="padding:8px;vertical-align:top;opacity:0.92;">' + escapeHtml(mod.summary) + '';
+        if (!check.ok && !isOn) {
+            html += '<div style="color:#f88;font-size:11px;margin-top:4px;">' + escapeHtml(check.reason) + '</div>';
+        }
+        html += '</td></tr>';
+    }
+    html += '</tbody></table></div>';
+    html += '<p style="font-size:11px;opacity:0.65;margin-top:10px;">Stored only in this browser for this character ID. Not synced to the server.</p>';
+
+    body.innerHTML = html;
+}
+
+function armstechOnWeaponTypeChange(wt) {
+    if (!armstechModalCharacter) return;
+    var state = loadArmstechState(armstechModalCharacter.id);
+    state.weaponType = wt === 'vibro' ? 'vibro' : 'blaster';
+    state = armstechPruneEquipped(armstechModalCharacter, state);
+    saveArmstechState(armstechModalCharacter.id, state);
+    renderArmstechModal();
+}
+
+function armstechOnFlagChange(flag, val) {
+    if (!armstechModalCharacter) return;
+    var state = loadArmstechState(armstechModalCharacter.id);
+    if (flag === 'blasterStr') state.blasterStr = !!val;
+    if (flag === 'vibroDex') state.vibroDex = !!val;
+    state = armstechPruneEquipped(armstechModalCharacter, state);
+    saveArmstechState(armstechModalCharacter.id, state);
+    renderArmstechModal();
+}
+
+function armstechToggleMod(modId, checked) {
+    if (!armstechModalCharacter || typeof ARMSTECH_ENGINEERING === 'undefined') return;
+    var char = armstechModalCharacter;
+    var ar = ARMSTECH_ENGINEERING;
+    var mod = ar.modifications.find(function (m) { return m.id === modId; });
+    if (!mod) return;
+
+    var state = loadArmstechState(char.id);
+    var level = getArmstechEffectiveLevel(char);
+    var maxSlots = ar.modificationSlotsForLevel(level);
+
+    if (checked) {
+        var chk = armstechModMeetsPrereqs(mod, char, state);
+        if (!chk.ok) {
+            alert(chk.reason);
+            renderArmstechModal();
+            return;
+        }
+        if (state.equippedIds.length >= maxSlots) {
+            alert('All modification slots are full (' + maxSlots + '). Remove a mod or level up.');
+            renderArmstechModal();
+            return;
+        }
+        if (state.equippedIds.indexOf(modId) === -1) state.equippedIds.push(modId);
+    } else {
+        state.equippedIds = state.equippedIds.filter(function (id) { return id !== modId; });
+        armstechCascadeAfterRemove(state, modId);
+    }
+    saveArmstechState(char.id, state);
+    renderArmstechModal();
+}
+
+window.openArmstechTracker = openArmstechTracker;
+window.openArmstechTrackerForCharacter = openArmstechTrackerForCharacter;
+window.closeArmstechModal = closeArmstechModal;
+window.armstechOnWeaponTypeChange = armstechOnWeaponTypeChange;
+window.armstechOnFlagChange = armstechOnFlagChange;
+window.armstechToggleMod = armstechToggleMod;
 
 function healTarget() {
     if (!selectedToken) {
@@ -6954,7 +7970,8 @@ function showEditEnemy(enemy) {
     document.getElementById('enemyWis').value = enemy.wisdom ?? 10;
     document.getElementById('enemyCha').value = enemy.charisma ?? 10;
     document.getElementById('enemySpeed').value = enemy.speed ?? 30;
-    document.getElementById('enemyActions').value = enemy.actions || '{}';
+    const actSplit = parseEnemyActionsSplit(enemy);
+    document.getElementById('enemyActions').value = actSplit.mode === 'empty' ? '{}' : actSplit.coreString;
     document.getElementById('enemyDescription').value = enemy.description || '';
     document.getElementById('enemyPortrait').value = '';
     const preview = document.getElementById('enemyPortraitPreview');
@@ -6998,7 +8015,7 @@ async function createEnemy() {
         wisdom: parseInt(document.getElementById('enemyWis').value),
         charisma: parseInt(document.getElementById('enemyCha').value),
         speed: parseInt(document.getElementById('enemySpeed').value),
-        actions: document.getElementById('enemyActions').value || '{}',
+        actions: mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', null),
         description: document.getElementById('enemyDescription').value || '',
         style: selectedStyle
     };
@@ -7061,7 +8078,7 @@ async function updateEnemy() {
         wisdom: parseInt(document.getElementById('enemyWis').value),
         charisma: parseInt(document.getElementById('enemyCha').value),
         speed: parseInt(document.getElementById('enemySpeed').value),
-        actions: document.getElementById('enemyActions').value || '{}',
+        actions: mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', existing),
         description: document.getElementById('enemyDescription').value || '',
         style: existing.style || selectedStyle
     };
@@ -7075,6 +8092,7 @@ async function updateEnemy() {
     sendMessage({ type: 'CreateEnemy', enemy: serverPayload });
     const idx = enemies.findIndex(e => e.id === editId);
     if (idx !== -1) enemies[idx] = updated;
+    syncCustomEnemyInstanceActionsFromTemplate(updated.id, updated.actions);
     renderEnemyList();
     closeModal('createEnemyModal');
     document.getElementById('enemyForm').reset();
@@ -7409,7 +8427,8 @@ function spawnNPC(npc) {
         x: 5,
         y: 5,
         size: tokenSize,
-        display_name: instanceName
+        display_name: instanceName,
+        image_url: npcEnemy.local_portrait || undefined
     });
     
     closeModal('enemyManagerModal');
@@ -7775,7 +8794,7 @@ function showNPCCharacterSheet(entityId) {
         loadForcePowers();
     }
     
-    const enemy = enemies.find(e => e.id === entityId);
+    const enemy = enemies.find(e => String(e.id) === String(entityId));
     console.log('🔍 Found enemy:', enemy ? { id: enemy.id, name: enemy.name, isNPC: enemy.isNPC, hasNpcData: !!enemy.npcData } : 'NOT FOUND');
     if (!enemy) {
         alert('Enemy not found.');
@@ -7858,7 +8877,7 @@ function showNPCCharacterSheet(entityId) {
         }
         // Fallback: if enemy.actions is an object (e.g. from server as parsed JSON), build actionsData directly
         if (actionsData.length === 0 && enemy.actions && typeof enemy.actions === 'object' && !Array.isArray(enemy.actions)) {
-            actionsData = Object.entries(enemy.actions).filter(([k]) => k && typeof k === 'string').map(([name, val]) => ({
+            actionsData = Object.entries(enemy.actions).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform').map(([name, val]) => ({
                 name: name,
                 description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
             }));
@@ -7872,6 +8891,39 @@ function showNPCCharacterSheet(entityId) {
                 customAttacks = customAttacks.concat(parsed);
             });
         }
+        getEnemySheetAttacksList(enemy).forEach((sa) => {
+            customAttacks.push({
+                type: 'weapon',
+                name: sa.name,
+                toHit: sa.to_hit,
+                damage: sa.damage,
+                damageType: sa.type || 'kinetic',
+                description: '',
+                range: sa.range || '',
+                _dmSheet: true,
+                _userAttackId: sa.userAttackId || null
+            });
+        });
+        const escapedEnemyIdForSheet = escapeJs(enemy.id);
+        if (isDM) {
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+                <h4 style="color: #ff8844;">➕ Add attack (DM)</h4>
+                <p style="font-size: 11px; opacity: 0.75; margin: 0 0 8px 0;">Saved on the <strong>creature template</strong> (all spawned tokens of this type share it). Shows here as a rollable attack (same targeting as PC weapons).</p>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
+                    <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Name</span>
+                        <input id="enemySheetAddAttackName" type="text" placeholder="e.g. Blaster" style="padding:6px;min-width:140px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                    <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">To hit</span>
+                        <input id="enemySheetAddAttackHit" type="text" placeholder="+5" style="padding:6px;width:56px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                    <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Damage</span>
+                        <input id="enemySheetAddAttackDmg" type="text" placeholder="1d6" style="padding:6px;width:72px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                    <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Type</span>
+                        <input id="enemySheetAddAttackType" type="text" placeholder="Energy" style="padding:6px;width:88px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                    <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Range (ft)</span>
+                        <input id="enemySheetAddAttackRange" type="text" placeholder="5 or 90/360" style="padding:6px;width:92px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                    <button type="button" onclick="addEnemySheetAttackFromSheet('${escapedEnemyIdForSheet}')" style="padding: 8px 14px; background: #ff8844; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">Add</button>
+                </div>
+            </div>`;
+        }
         // Show Attacks section (clickable) when we parsed any
         if (customAttacks.length > 0) {
             html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #ff4444;">⚔️ Attacks <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>`;
@@ -7882,8 +8934,20 @@ function showNPCCharacterSheet(entityId) {
                 const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
                 const escapedDescription = attack.description ? escapeJs(attack.description) : '';
                 const escapedRange = escapeJs(String(attack.range || ''));
+                const dmRemoveBtn = (isDM && attack._dmSheet && attack._userAttackId)
+                    ? `<button type="button" onclick="event.stopPropagation();removeEnemySheetAttackFromSheet('${escapedEnemyIdForSheet}','${escapeJs(String(attack._userAttackId))}')" style="flex-shrink:0;white-space:nowrap;align-self:center;padding:5px 9px;font-size:10px;border-radius:4px;border:1px solid #c44;background:rgba(200,68,68,0.35);color:#fff;cursor:pointer;">Remove</button>`
+                    : '';
                 if (attack.type === 'weapon' && attack.toHit !== null) {
-                    html += `<div onclick='requestAttackTarget("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}", "${escapedRange}")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div><div style="font-size: 13px; margin-top: 5px;"><span style="color: #44ff44;">⚔️ To Hit: ${formatMod(attack.toHit)}</span> | <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage || '')}</span> ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div></div>`;
+                    const weaponBoxStyle = dmRemoveBtn
+                        ? 'box-sizing:border-box;width:100%;min-width:0;padding:10px;background:rgba(255,68,68,0.1);border-left:3px solid #ff4444;border-radius:3px;cursor:pointer;transition:all 0.2s;'
+                        : 'padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;';
+                    const weaponStatsRow = `<div style="display:flex;flex-wrap:wrap;align-items:center;column-gap:10px;row-gap:4px;margin-top:6px;font-size:13px;line-height:1.35;"><span style="color:#44ff44;white-space:nowrap;">⚔️ To Hit: ${formatMod(attack.toHit)}</span><span style="color:rgba(255,255,255,0.35);user-select:none;">|</span><span style="color:#ffaa44;white-space:nowrap;">💥 Damage: ${escapeHtml(attack.damage || '')}</span>${attack.damageType ? `<span style="opacity:0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div>`;
+                    const weaponInner = `<div onclick='requestAttackTarget("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}", "${escapedRange}")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="${weaponBoxStyle}" onmouseenter="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div>${weaponStatsRow}</div>`;
+                    if (dmRemoveBtn) {
+                        html += `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;box-sizing:border-box;margin:6px 0;">${weaponInner}${dmRemoveBtn}</div>`;
+                    } else {
+                        html += weaponInner;
+                    }
                 } else if (attack.type === 'saving_throw' && attack.saveDC) {
                     const damageRollCode = attack.damage ? `const dmgResult = rollDice("${escapedDamage}"); addLogEntry("${escapedWeapon} damage: " + dmgResult.breakdown + " ${escapedType} = " + dmgResult.total, "damage");` : '';
                     html += `<div onclick='${damageRollCode}addLogEntry("${escapedWeapon}: DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save - ${escapedDamage ? escapedDamage + ' ' + escapedType : 'No damage'} damage", "info")' onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" onmouseout="hideSpellTooltip()" style="padding: 10px; margin: 5px 0; background: rgba(255,170,68,0.1); border-left: 3px solid #ffaa44; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,170,68,0.25)'; this.style.transform='translateX(5px)'" onmouseleave="this.style.background='rgba(255,170,68,0.1)'; this.style.transform='translateX(0)'"><div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div><div style="font-size: 13px; margin-top: 5px;"><span style="color: #ffaa44;">🛡️ DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save</span> ${attack.damage ? `| <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage)}</span>` : ''} ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div></div>`;
@@ -7907,7 +8971,11 @@ function showNPCCharacterSheet(entityId) {
             });
             html += `</div>`;
         } else if (enemy.actions && (typeof enemy.actions === 'string' ? enemy.actions.trim() : true)) {
-            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #ff4444;">⚔️ Actions</h4><div style="white-space: pre-wrap; font-size: 12px; line-height: 1.5;">${escapeHtml(typeof enemy.actions === 'string' ? enemy.actions : JSON.stringify(enemy.actions, null, 2))}</div></div>`;
+            const actSplitFallback = parseEnemyActionsSplit(enemy);
+            const rawDisplay = (actSplitFallback.coreString && actSplitFallback.coreString.trim())
+                ? actSplitFallback.coreString
+                : (typeof enemy.actions === 'string' ? enemy.actions : JSON.stringify(enemy.actions, null, 2));
+            html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #ff4444;">⚔️ Actions</h4><div style="white-space: pre-wrap; font-size: 12px; line-height: 1.5;">${escapeHtml(rawDisplay)}</div></div>`;
         }
         if (enemy.description) {
             html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;"><h4 style="color: #4a9eff;">📄 Description</h4><div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6;">${escapeHtml(enemy.description)}</div></div>`;
@@ -8100,17 +9168,49 @@ function showNPCCharacterSheet(entityId) {
         html += `</div></div>`;
     }
     
-    // Actions - Parse and make clickable like player sheets
-    if (npc.actions) {
-        // Parse Multiattack first
-        const multiattack = parseMultiattack(npc.actions);
-        const attacks = parseAttacksFromActions(npc.actions);
-        
-        if (multiattack || attacks.length > 0) {
+    // Actions - Parse stat block + DM-added sheet_attacks (stored on enemy.actions)
+    const hasNpcActionsText = npc.actions && String(npc.actions).trim().length > 0;
+    const escapedEnemyIdForNpcSheet = escapeJs(enemy.id);
+    const multiattack = hasNpcActionsText ? parseMultiattack(npc.actions) : null;
+    const parsedFromNpcStatblock = hasNpcActionsText ? parseAttacksFromActions(npc.actions) : [];
+    const npcAttackRows = parsedFromNpcStatblock.slice();
+    getEnemySheetAttacksList(enemy).forEach((sa) => {
+        npcAttackRows.push({
+            type: 'weapon',
+            name: sa.name,
+            toHit: sa.to_hit,
+            damage: sa.damage,
+            damageType: sa.type || 'kinetic',
+            description: '',
+            range: sa.range || '',
+            _dmSheet: true,
+            _userAttackId: sa.userAttackId || null
+        });
+    });
+
+    if (hasNpcActionsText || npcAttackRows.length > 0 || isDM) {
+        if (multiattack || npcAttackRows.length > 0 || isDM) {
             html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
                 <h4 style="color: #ff4444;">⚔️ Attacks <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>`;
-            
-            // Display Multiattack first if it exists
+            if (isDM) {
+                html += `<div style="padding: 12px; margin-bottom: 12px; background: rgba(255,136,68,0.08); border-radius: 6px; border: 1px solid rgba(255,136,68,0.35);">
+                    <h4 style="color: #ff8844; margin: 0 0 6px 0; font-size: 14px;">➕ Add attack (DM)</h4>
+                    <p style="font-size: 11px; opacity: 0.75; margin: 0 0 8px 0;">Saved on the <strong>creature template</strong> when this token is linked to a database enemy (all spawned tokens of that type share it). Rollable here with map targeting (same as PC weapons).</p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
+                        <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Name</span>
+                            <input id="enemySheetAddAttackName" type="text" placeholder="e.g. Blaster" style="padding:6px;min-width:140px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                        <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">To hit</span>
+                            <input id="enemySheetAddAttackHit" type="text" placeholder="+5" style="padding:6px;width:56px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                        <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Damage</span>
+                            <input id="enemySheetAddAttackDmg" type="text" placeholder="1d6" style="padding:6px;width:72px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                        <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Type</span>
+                            <input id="enemySheetAddAttackType" type="text" placeholder="Energy" style="padding:6px;width:88px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                        <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Range (ft)</span>
+                            <input id="enemySheetAddAttackRange" type="text" placeholder="5 or 90/360" style="padding:6px;width:92px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                        <button type="button" onclick="addEnemySheetAttackFromSheet('${escapedEnemyIdForNpcSheet}')" style="padding: 8px 14px; background: #ff8844; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">Add</button>
+                    </div>
+                </div>`;
+            }
             if (multiattack) {
                 const escapedMultiDesc = escapeJs(multiattack.description);
                 html += `<div 
@@ -8118,7 +9218,6 @@ function showNPCCharacterSheet(entityId) {
                     onmouseout="hideSpellTooltip()" 
                     style="padding: 10px; margin: 5px 0; background: rgba(255,215,0,0.15); border-left: 3px solid #ffd700; border-radius: 3px; cursor: help;">
                     <div style="font-weight: bold; font-size: 15px; color: #ffd700;">⚡ Multiattack</div>`;
-                
                 if (multiattack.attackNames.length > 0) {
                     html += `<div style="font-size: 12px; margin-top: 8px; padding: 8px; background: rgba(255,215,0,0.1); border-radius: 3px;">
                         <div style="font-weight: bold; margin-bottom: 5px; opacity: 0.9;">Includes:</div>`;
@@ -8127,38 +9226,39 @@ function showNPCCharacterSheet(entityId) {
                     });
                     html += `</div>`;
                 }
-                
                 html += `<div style="font-size: 12px; opacity: 0.7; margin-top: 5px;">${escapeHtml(multiattack.description.substring(0, 150))}${multiattack.description.length > 150 ? '...' : ''}</div>`;
                 html += `</div>`;
             }
-            
-            attacks.forEach((attack, attackIndex) => {
+            npcAttackRows.forEach((attack) => {
                 const escapedWeapon = escapeJs(attack.name);
                 const escapedDamage = escapeJs(attack.damage || '');
                 const escapedType = escapeJs(attack.damageType || '');
                 const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
-                
-                // Escape description for tooltip
                 const escapedDescription = attack.description ? escapeJs(attack.description) : '';
                 const escapedRange = escapeJs(String(attack.range || ''));
+                const dmRemoveBtnNpc = (isDM && attack._dmSheet && attack._userAttackId)
+                    ? `<button type="button" onclick="event.stopPropagation();removeEnemySheetAttackFromSheet('${escapedEnemyIdForNpcSheet}','${escapeJs(String(attack._userAttackId))}')" style="flex-shrink:0;white-space:nowrap;align-self:center;padding:5px 9px;font-size:10px;border-radius:4px;border:1px solid #c44;background:rgba(200,68,68,0.35);color:#fff;cursor:pointer;">Remove</button>`
+                    : '';
                 if (attack.type === 'weapon' && attack.toHit !== null) {
-                    // Standard weapon attack
-                    html += `<div onclick='requestAttackTarget("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}", "${escapedRange}")' 
+                    const weaponBoxStyleNpc = dmRemoveBtnNpc
+                        ? 'box-sizing:border-box;width:100%;min-width:0;padding:10px;background:rgba(255,68,68,0.1);border-left:3px solid #ff4444;border-radius:3px;cursor:pointer;transition:all 0.2s;'
+                        : 'padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;';
+                    const weaponStatsRowNpc = `<div style="display:flex;flex-wrap:wrap;align-items:center;column-gap:10px;row-gap:4px;margin-top:6px;font-size:13px;line-height:1.35;"><span style="color:#44ff44;white-space:nowrap;">⚔️ To Hit: ${formatMod(attack.toHit)}</span><span style="color:rgba(255,255,255,0.35);user-select:none;">|</span><span style="color:#ffaa44;white-space:nowrap;">💥 Damage: ${escapeHtml(attack.damage || '')}</span>${attack.damageType ? `<span style="opacity:0.7;">${escapeHtml(attack.damageType)}</span>` : ''}</div>`;
+                    const weaponInnerNpc = `<div onclick='requestAttackTarget("${escapedWeapon}", ${attack.toHit}, "${escapedDamage}", "${escapedType}", "${escapedEnemyName}", "${escapedRange}")' 
                         onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
                         onmouseout="hideSpellTooltip()" 
-                        style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" 
+                        style="${weaponBoxStyleNpc}" 
                         onmouseenter="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" 
                         onmouseleave="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'">
                         <div style="font-weight: bold; font-size: 15px;">${escapeHtml(attack.name)}</div>
-                        <div style="font-size: 13px; margin-top: 5px;">
-                            <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(attack.toHit)}</span> | 
-                            <span style="color: #ffaa44;">💥 Damage: ${escapeHtml(attack.damage || '')}</span> 
-                            ${attack.damageType ? `<span style="opacity: 0.7;">${escapeHtml(attack.damageType)}</span>` : ''}
-                        </div>
+                        ${weaponStatsRowNpc}
                     </div>`;
+                    if (dmRemoveBtnNpc) {
+                        html += `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;box-sizing:border-box;margin:6px 0;">${weaponInnerNpc}${dmRemoveBtnNpc}</div>`;
+                    } else {
+                        html += weaponInnerNpc;
+                    }
                 } else if (attack.type === 'saving_throw' && attack.saveDC) {
-                    // Saving throw attack - click should roll damage, not saving throw
-                    // The saving throw is for players to make, but clicking rolls the damage
                     const damageRollCode = attack.damage ? `const dmgResult = rollDice("${escapedDamage}"); addLogEntry("${escapedWeapon} damage: " + dmgResult.breakdown + " ${escapedType} = " + dmgResult.total, "damage");` : '';
                     html += `<div onclick='${damageRollCode}addLogEntry("${escapedWeapon}: DC ${attack.saveDC} ${attack.saveType.charAt(0).toUpperCase() + attack.saveType.slice(1)} Save - ${escapedDamage ? escapedDamage + ' ' + escapedType : 'No damage'} damage", "info")' 
                         onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
@@ -8174,7 +9274,6 @@ function showNPCCharacterSheet(entityId) {
                         </div>
                     </div>`;
                 } else {
-                    // Special action (no direct roll, but still clickable for info)
                     html += `<div 
                         onmouseover="${attack.description ? `showAttackTooltip('${escapedDescription}', event)` : ''}" 
                         onmouseout="hideSpellTooltip()" 
@@ -8185,8 +9284,8 @@ function showNPCCharacterSheet(entityId) {
                 }
             });
             html += `</div>`;
-        } else {
-            // Fallback: show raw text if parsing fails
+        }
+        if (hasNpcActionsText && !multiattack && parsedFromNpcStatblock.length === 0 && getEnemySheetAttacksList(enemy).length === 0) {
             html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
                 <h4 style="color: #ff4444;">⚔️ Actions</h4>
                 <div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6;">${escapeHtml(npc.actions)}</div>
@@ -8979,11 +10078,17 @@ function spawnEnemy(enemyId, enemyName) {
     const enemy = template || enemies.find(e => e.id === enemyId);
     if (enemy) {
         const templateId = enemy.isCustomInstance ? (enemy.enemy_id || enemyId) : enemyId;
-        console.log('📤 Sending SpawnEnemy (template id only, no DB write):', templateId);
-        sendMessage({ type: 'SpawnEnemy', enemy_id: templateId, instance_id: instanceId, name: instanceName });
-        const tempEnemy = {...enemy, id: instanceId, name: instanceName, isCustomInstance: true};
+        const tempEnemy = {
+            ...enemy,
+            id: instanceId,
+            name: instanceName,
+            isCustomInstance: true,
+            enemy_id: templateId
+        };
         enemies.push(tempEnemy);
         console.log('✅ Added enemy instance locally:', tempEnemy);
+        console.log('📤 Sending SpawnEnemy (template id only, no DB write):', templateId);
+        sendMessage({ type: 'SpawnEnemy', enemy_id: templateId, instance_id: instanceId, name: instanceName });
         
         // Place token with the SAME instance ID
         console.log('📤 Sending PlaceToken message with instance ID:', instanceId);
@@ -8994,6 +10099,7 @@ function spawnEnemy(enemyId, enemyName) {
             tokenSize = getTokenSize(enemyId, 'Enemy');
         }
         console.log(`🎯 Placing enemy token ${instanceName} (${instanceId}) with size: ${tokenSize} squares`);
+        const enemyPortrait = enemy.portrait_url || enemy.local_portrait || null;
         sendMessage({
             type: 'PlaceToken',
             entity_id: instanceId,
@@ -9001,7 +10107,8 @@ function spawnEnemy(enemyId, enemyName) {
             x: 5,
             y: 5,
             size: tokenSize,
-            display_name: instanceName
+            display_name: instanceName,
+            image_url: enemyPortrait || undefined
         });
     } else {
         console.error('❌ Base enemy not found:', enemyId);
@@ -9344,11 +10451,16 @@ function handleCustomSpellsList(message) {
 }
 
 function showCharacterManager() {
+    const mgrModal = document.getElementById('characterManagerModal');
+    if (!mgrModal) {
+        console.error('characterManagerModal not found');
+        return;
+    }
     const titleEl = document.getElementById('characterManagerModalTitle');
     const dmButtonsEl = document.getElementById('characterManagerModalDmButtons');
     if (titleEl) titleEl.textContent = isDM ? 'Character Manager' : 'Choose who you\'re playing as';
     if (dmButtonsEl) dmButtonsEl.style.display = isDM ? 'flex' : 'none';
-    document.getElementById('characterManagerModal').classList.add('active');
+    mgrModal.classList.add('active');
     sendMessage({ type: 'ListCharacters' });
     renderCharacterList();
 }
@@ -9522,6 +10634,7 @@ function selectCharacterForPlay(charId) {
     alert(`✅ Character Selected!\n\nYou're playing as: ${char.name}\n${char.class} Level ${char.level}\n\nYou're ready to play!`);
 
     updatePlayerActionBarVisibility();
+    updateArmstechPlayerButtonVisibility();
 }
 
 function showCharacterSelect() {
@@ -10137,52 +11250,13 @@ async function importCharacter() {
             storedCharData = conversion.characterData;
         } else if (isStarWarsFoundry) {
             console.log('🌌 Detected Star Wars character format');
-            const charData = rawCharData;
-            
-            const maxHP = charData.tweaks?.hitPoints?.maximum?.override || 
-                         (charData.classes && charData.classes[0]?.hitPoints?.length > 0 ? 
-                          charData.classes[0].hitPoints.reduce((sum, hp) => sum + hp, 0) : 7) || 7;
-            const hitPointsLost = charData.currentStats?.hitPointsLost || 0;
-            const currentHP = Math.max(1, maxHP - hitPointsLost);
-            
-            const level = charData.classes && charData.classes.length > 0 ? 
-                         charData.classes.reduce((sum, cls) => sum + (cls.levels || 1), 0) : 1;
-            
-            const className = charData.classes && charData.classes.length > 0 ?
-                            charData.classes.map(c => `${c.name} ${c.levels || 1}`).join(' / ') : 'Unknown';
-            
-            const baseScores = charData.baseAbilityScores || {};
-            
-            // Use AC from converted Roll20/SW5e data directly (already includes armor, shields, mods)
-            const ac = (charData.ac && (typeof charData.ac.base === 'number' ? charData.ac.base : parseInt(String(charData.ac.base || '').replace(/\D+/g, '') || '0', 10)))
-                || charData.armor_class
-                || 10;
-            
-            const dexMod = Math.floor(((baseScores.Dexterity || 10) - 10) / 2);
-            const speed = charData.speed?.walk ? parseInt(String(charData.speed.walk).replace(/\D+/g, '') || '30', 10) : 30;
-            const profBonus = level <= 4 ? 2 : level <= 8 ? 3 : level <= 12 ? 4 : level <= 16 ? 5 : 6;
-            
-            character = {
-                id: charData.id || generateUUID(),
-                name: charData.name || 'Unknown',
-                player_name: charData.player_name || 'Unknown',
-                class: className,
-                level: level,
-                max_hp: maxHP,
-                current_hp: currentHP,
-                armor_class: ac,
-                initiative_bonus: dexMod,
-                strength: baseScores.Strength || 10,
-                dexterity: baseScores.Dexterity || 10,
-                constitution: baseScores.Constitution || 10,
-                intelligence: baseScores.Intelligence || 10,
-                wisdom: baseScores.Wisdom || 10,
-                charisma: baseScores.Charisma || 10,
-                speed: speed,
-                proficiency_bonus: profBonus,
-                character_data: JSON.stringify(charData)
-            };
-            storedCharData = charData;
+            await loadAllEquipment();
+            const conv = convertStarWarsBuilderJsonToGameCharacter(JSON.parse(JSON.stringify(rawCharData)), null);
+            if (!conv || !conv.character) {
+                throw new Error('Unable to map Star Wars builder JSON to character');
+            }
+            character = conv.character;
+            storedCharData = conv.storedCharData;
         } else {
             console.log('🎲 Detected D&D character format');
             const charData = rawCharData;
@@ -10306,7 +11380,7 @@ function handleUpdateCharacterJsonFile(inputEl) {
         return;
     }
     const reader = new FileReader();
-    reader.onload = function() {
+    reader.onload = async function() {
         try {
             const imported = JSON.parse(reader.result);
             const rawCharData = imported.character || imported;
@@ -10325,51 +11399,27 @@ function handleUpdateCharacterJsonFile(inputEl) {
                 newChar = conversion.character;
                 storedCharData = conversion.characterData;
             } else if (isStarWarsFoundry) {
-                const charData = rawCharData;
-                const maxHP = charData.tweaks?.hitPoints?.maximum?.override ||
-                    (charData.classes && charData.classes[0]?.hitPoints?.length > 0 ?
-                        charData.classes[0].hitPoints.reduce((sum, hp) => sum + hp, 0) : 7) || 7;
-                const hitPointsLost = charData.currentStats?.hitPointsLost || 0;
-                const currentHP = Math.max(1, maxHP - hitPointsLost);
-                const level = charData.classes && charData.classes.length > 0 ?
-                    charData.classes.reduce((sum, cls) => sum + (cls.levels || 1), 0) : 1;
-                const className = charData.classes && charData.classes.length > 0 ?
-                    charData.classes.map(c => `${c.name} ${c.levels || 1}`).join(' / ') : 'Unknown';
-                const baseScores = charData.baseAbilityScores || {};
-                let ac = 10;
-                if (charData.equipment) {
-                    const armor = charData.equipment.find(eq => eq.equipped && eq.category === 'Equipment');
-                    if (armor) {
-                        if (armor.name.includes('Fiber')) ac = 11;
-                        else if (armor.name.includes('Lightweight')) ac = 12;
-                        else if (armor.name.includes('Medium')) ac = 13;
-                        else if (armor.name.includes('Heavy')) ac = 15;
+                await loadAllEquipment();
+                const clone = JSON.parse(JSON.stringify(rawCharData));
+                try {
+                    const { data: oldData } = parseCharacterDataWrapper(existing);
+                    if (oldData && Array.isArray(oldData.attacks)) {
+                        const preserved = oldData.attacks.filter(a => a && a.userAdded && a.userAttackId);
+                        if (preserved.length) {
+                            const fromFile = Array.isArray(clone.attacks) ? clone.attacks : [];
+                            const fileNonUser = fromFile.filter(a => !a || !a.userAdded);
+                            clone.attacks = preserved.concat(fileNonUser);
+                        }
                     }
+                } catch (eM) {
+                    console.warn('Level-up: could not merge user-added attacks', eM);
                 }
-                const dexMod = Math.floor(((baseScores.Dexterity || 10) - 10) / 2);
-                const speed = charData.speed?.walk ? parseInt(String(charData.speed.walk).replace(/\D+/g, '') || '30', 10) : 30;
-                const profBonus = level <= 4 ? 2 : level <= 8 ? 3 : level <= 12 ? 4 : level <= 16 ? 5 : 6;
-                newChar = {
-                    id: existing.id,
-                    name: charData.name || existing.name,
-                    player_name: existing.player_name,
-                    class: className,
-                    level: level,
-                    max_hp: maxHP,
-                    current_hp: currentHP,
-                    armor_class: ac,
-                    initiative_bonus: dexMod,
-                    strength: baseScores.Strength || 10,
-                    dexterity: baseScores.Dexterity || 10,
-                    constitution: baseScores.Constitution || 10,
-                    intelligence: baseScores.Intelligence || 10,
-                    wisdom: baseScores.Wisdom || 10,
-                    charisma: baseScores.Charisma || 10,
-                    speed: speed,
-                    proficiency_bonus: profBonus,
-                    character_data: JSON.stringify(charData)
-                };
-                storedCharData = charData;
+                const conv = convertStarWarsBuilderJsonToGameCharacter(clone, { existing });
+                if (!conv || !conv.character) {
+                    throw new Error('Unable to map Star Wars builder JSON');
+                }
+                newChar = conv.character;
+                storedCharData = conv.storedCharData;
             } else {
                 const charData = rawCharData;
                 const rawSpeed = charData.speed?.walk || charData.speed || 30;
@@ -10422,8 +11472,17 @@ function handleUpdateCharacterJsonFile(inputEl) {
             const playerInfoEl = document.getElementById('playerInfo');
             if (playerInfoEl) playerInfoEl.textContent = 'Playing as: ' + existing.name;
             if (currentViewingCharacter && currentViewingCharacter.id === existing.id) {
-                currentViewingCharacterFullData = storedCharData ? (storedCharData.character ? storedCharData : { character: storedCharData }) : null;
-                currentViewingCharacterData = storedCharData && storedCharData.character ? storedCharData.character : storedCharData;
+                try {
+                    const parsed = JSON.parse(existing.character_data);
+                    currentViewingCharacterFullData = parsed;
+                    currentViewingCharacterData = parsed && parsed.character ? parsed.character : parsed;
+                    if (currentViewingCharacterData && typeof currentViewingCharacterData === 'object') {
+                        const resolvedLevel = getLevelFromCharacterData(currentViewingCharacterData, existing);
+                        currentViewingCharacterData.level = Math.max(1, resolvedLevel);
+                    }
+                } catch (e2) {
+                    console.warn('Could not refresh sheet state after level-up:', e2);
+                }
                 renderCharacterSheetContent();
             }
             addLogEntry('Character updated from JSON (level up): ' + existing.name, 'info');
@@ -10448,6 +11507,10 @@ function fileToBase64(file) {
 
 // Utility
 function closeModal(modalId) {
+    if (modalId === 'characterSheetModal' && characterSheetListRefreshDebounceId) {
+        clearTimeout(characterSheetListRefreshDebounceId);
+        characterSheetListRefreshDebounceId = null;
+    }
     document.getElementById(modalId).classList.remove('active');
 }
 
@@ -10864,7 +11927,7 @@ function showSpellTooltip(spellName, event) {
         // Show loading state IMMEDIATELY
         content.innerHTML = `<div style="text-align: center; opacity: 0.7; padding: 20px;">⏳ Loading ${spellName}...</div>`;
         tooltip.style.display = 'block';
-        tooltip.style.zIndex = '99999';
+        tooltip.style.zIndex = String(SPELL_POWER_TOOLTIP_Z_INDEX);
         tooltip.style.left = (event.clientX + 15) + 'px';
         tooltip.style.top = (event.clientY + 15) + 'px';
         
@@ -11092,7 +12155,7 @@ function showAttackTooltip(description, event) {
     </div>`;
     
     tooltip.style.display = 'block';
-    tooltip.style.zIndex = '99999';
+    tooltip.style.zIndex = String(SPELL_POWER_TOOLTIP_Z_INDEX);
     tooltip.style.left = (event.clientX + 15) + 'px';
     tooltip.style.top = (event.clientY + 15) + 'px';
     
@@ -11556,10 +12619,17 @@ function rollSavingThrow(ability, modifier, characterName) {
 }
 
 // Setup event delegation for character sheet roll buttons (ability, skill, save, attack) so they work and show in rolls log
+let characterSheetRollAbortController = null;
+
 function setupCharacterSheetRollHandlers(container) {
     if (!container) return;
-    if (container._sheetRollHandlerAttached) return;
-    container._sheetRollHandlerAttached = true;
+    if (characterSheetRollAbortController) {
+        try {
+            characterSheetRollAbortController.abort();
+        } catch (e) { /* ignore */ }
+    }
+    characterSheetRollAbortController = new AbortController();
+    const signal = characterSheetRollAbortController.signal;
     container.addEventListener('click', function(e) {
         const rem = e.target.closest('.sheet-remove-attack-btn');
         if (rem) {
@@ -11601,7 +12671,7 @@ function setupCharacterSheetRollHandlers(container) {
             const rangeAttr = el.getAttribute('data-range') || '';
             requestAttackTarget(weapon, isNaN(toHit) ? 0 : toHit, damage, dmgType, charName, rangeAttr.trim() ? rangeAttr : null);
         }
-    }, true);
+    }, { capture: true, signal });
 }
 
 // Setup event delegation for dice roll buttons
@@ -11610,6 +12680,11 @@ function setupDiceRollButtons(container) {
     const diceContainer = container.querySelector('.dice-roll-container');
     if (!diceContainer) {
         console.warn('⚠️ Dice roll container not found!');
+        return;
+    }
+    const diceParent = diceContainer.parentNode;
+    if (!diceParent) {
+        console.warn('⚠️ Dice roll container has no parent; skipping dice setup');
         return;
     }
     
@@ -11622,7 +12697,7 @@ function setupDiceRollButtons(container) {
     
     // Remove any existing listeners to prevent duplicates
     const newContainer = diceContainer.cloneNode(true);
-    diceContainer.parentNode.replaceChild(newContainer, diceContainer);
+    diceParent.replaceChild(newContainer, diceContainer);
     
     // Use event delegation - listen for clicks on dice buttons
     newContainer.addEventListener('click', (e) => {
@@ -11777,6 +12852,24 @@ function rollDice(notation) {
 }
 
 // --- Targeting system for attacks ---
+/** Serialize attack.range for HTML data attributes and labels. */
+function attackRangeToDataAttr(range) {
+    if (range == null || range === '') return '';
+    if (typeof range === 'number' && !isNaN(range)) return String(range);
+    if (typeof range === 'object' && range !== null && typeof range.min === 'number' && typeof range.max === 'number')
+        return range.min + '/' + range.max;
+    return String(range).trim();
+}
+
+/** Value for requestAttackTarget(..., rangeInput) from stored attack.range. */
+function attackRangeForRequest(range) {
+    if (range == null || range === '') return null;
+    if (typeof range === 'number' && !isNaN(range)) return range;
+    if (typeof range === 'object' && range !== null && typeof range.min === 'number' && typeof range.max === 'number') return range;
+    const s = String(range).trim();
+    return s || null;
+}
+
 /** Parse range string to a number (feet) or { min, max } for "x/y" (e.g. "50/200" = 50 normal, 200 long). */
 function parseRangeFeet(str) {
     if (str == null || str === '') return null;
@@ -11898,9 +12991,41 @@ function rollDamageForAttack(damageNotation, isCrit) {
     return { total, breakdown };
 }
 
+function gridDistanceFeetBetweenTokens(t1, t2) {
+    if (!t1 || !t2) return Infinity;
+    const gx = (t2.x - t1.x);
+    const gy = (t2.y - t1.y);
+    return Math.sqrt(gx * gx + gy * gy) * 5;
+}
+
+function findPlayerTokenByAttackerName(characterName) {
+    return tokens.find(function(t) {
+        if (t.entity_type !== 'Player') return false;
+        if (myCharacterId && t.entity_id === myCharacterId) return true;
+        const c = characters.find(function(ch) { return ch.id === t.entity_id; });
+        return c && (c.name || '').trim() === (characterName || '').trim();
+    });
+}
+
 function resolveTargetedAttack(targetToken) {
     const p = pendingTargetAttack;
     if (!p || !targetToken) return;
+    let maxRangeFt = null;
+    if (p.range != null) {
+        if (typeof p.range === 'number' && p.range > 0) maxRangeFt = p.range;
+        else if (typeof p.range === 'object' && p.range !== null && typeof p.range.max === 'number' && p.range.max > 0)
+            maxRangeFt = p.range.max;
+    }
+    if (maxRangeFt != null) {
+        const attackerTok = findPlayerTokenByAttackerName(p.characterName);
+        if (attackerTok) {
+            const dFt = gridDistanceFeetBetweenTokens(attackerTok, targetToken);
+            if (dFt > maxRangeFt + 0.5) {
+                addLogEntry(`Out of range: ~${Math.round(dFt)} ft to target (max ${maxRangeFt} ft). Pick a closer target or move.`, 'warning');
+                return;
+            }
+        }
+    }
     const targetAC = getTokenAC(targetToken);
     const targetName = getTokenDisplayName(targetToken);
     const toHitRoll = Math.floor(Math.random() * 20) + 1;
@@ -11909,20 +13034,27 @@ function resolveTargetedAttack(targetToken) {
     const isFumble = toHitRoll === 1;
     const hit = isCrit || (!isFumble && toHitTotal >= targetAC);
     pendingTargetAttack = null;
+    // mousedown resolved target; paired mouseup must not run MoveToken to the enemy cell — but keep selectedToken so you can move next.
+    pendingSkipTokenMoveOnNextMouseUp = true;
     if (canvas) canvas.style.cursor = '';
+    const modStr = (p.toHitMod >= 0 ? '+' : '') + p.toHitMod;
+    const attackLead = '⚔️ ' + p.characterName + ' attacks ' + targetName + ' with ' + p.weaponName + ': ';
+    const hitTotals = toHitRoll + modStr + ' = ' + toHitTotal;
+    const acFrag = ' vs AC ' + targetAC;
     if (hit) {
         const damageResult = rollDamageForAttack(p.damageNotation, isCrit);
         const dmg = damageResult.total;
-        addRollEntry('⚔️ ' + p.characterName + ' attacks ' + targetName + ' with ' + p.weaponName + ': ' + toHitRoll + (p.toHitMod >= 0 ? '+' : '') + p.toHitMod + ' = ' + toHitTotal + ' vs AC ' + targetAC + ' — HIT! Damage: ' + damageResult.breakdown + ' ' + p.damageType + (isCrit ? ' 🎉 CRITICAL HIT!' : ''), isCrit, false);
+        addRollEntry(attackLead + hitTotals + acFrag + ' — HIT! Damage: ' + damageResult.breakdown + ' ' + p.damageType + (isCrit ? ' 🎉 CRITICAL HIT!' : ''), isCrit, false);
         applyDamageToToken(targetToken, dmg);
     } else {
-        addRollEntry('⚔️ ' + p.characterName + ' attacks ' + targetName + ' with ' + p.weaponName + ': ' + toHitRoll + (p.toHitMod >= 0 ? '+' : '') + p.toHitMod + ' = ' + toHitTotal + ' vs AC ' + targetAC + ' — MISS!', false, isFumble);
+        addRollEntry(attackLead + hitTotals + acFrag + ' — MISS!', false, isFumble);
     }
     updateTokenInfo();
     renderCanvas();
 }
 
 function requestAttackTarget(weaponName, toHitMod, damageNotation, damageType, characterName, rangeInput) {
+    pendingSkipTokenMoveOnNextMouseUp = false;
     var range = null;
     if (rangeInput != null) {
         if (typeof rangeInput === 'string') range = parseRangeFeet(rangeInput);
@@ -11945,12 +13077,14 @@ function requestAttackTarget(weaponName, toHitMod, damageNotation, damageType, c
 function cancelTargeting() {
     if (pendingTargetAttack) {
         pendingTargetAttack = null;
+        pendingSkipTokenMoveOnNextMouseUp = false;
         addLogEntry('Targeting cancelled.', 'info');
         if (canvas) canvas.style.cursor = '';
         renderCanvas();
     }
     if (pendingTargetPower) {
         pendingTargetPower = null;
+        pendingSkipTokenMoveOnNextMouseUp = false;
         addLogEntry('Power targeting cancelled.', 'info');
         if (canvas) canvas.style.cursor = '';
         renderCanvas();
@@ -12033,6 +13167,7 @@ function resolvePowerOnToken(token) {
     if (p.powerType === 'tech') useTechPoint(); else useForcePoint();
     populatePlayerActionBar();
     pendingTargetPower = null;
+    pendingSkipTokenMoveOnNextMouseUp = true;
     if (canvas) canvas.style.cursor = '';
     updateTokenInfo();
     renderCanvas();
@@ -12050,12 +13185,14 @@ function resolvePowerOnArea(tokensInArea) {
     if (p.powerType === 'tech') useTechPoint(); else useForcePoint();
     populatePlayerActionBar();
     pendingTargetPower = null;
+    pendingSkipTokenMoveOnNextMouseUp = true;
     if (canvas) canvas.style.cursor = '';
     updateTokenInfo();
     renderCanvas();
 }
 
 function requestPowerTarget(powerType, powerName, characterName) {
+    pendingSkipTokenMoveOnNextMouseUp = false;
     var myChar = characters.find(function(c) { return c.id === myCharacterId; });
     if (!myChar) return;
     var charData = myChar;
@@ -12293,10 +13430,9 @@ function buildSavingThrowsSection(char, charData) {
     
     // Get saving throw proficiencies
     const savingThrowProficiencies = {};
-    if (charData.saving_throw_proficiencies) {
-        // If explicitly defined
+    if (Array.isArray(charData.saving_throw_proficiencies)) {
         charData.saving_throw_proficiencies.forEach(ab => {
-            savingThrowProficiencies[ab.toLowerCase()] = true;
+            savingThrowProficiencies[String(ab).toLowerCase()] = true;
         });
     } else if (charData.abilities) {
         // D&D format - check each ability
@@ -12697,6 +13833,46 @@ function placeCharacterToken(charId, charName) {
     addLogEntry(`Placed ${charName} on the map`, 'info');
 }
 
+function showPlaceObjectModal() {
+    if (!isDM) {
+        alert('Only the DM can place objects.');
+        return;
+    }
+    const input = document.getElementById('placeObjectNameInput');
+    if (input) {
+        input.value = '';
+        input.placeholder = 'e.g. Chest, Lever, Portal';
+    }
+    document.getElementById('placeObjectModal').classList.add('active');
+    const hid = document.getElementById('placeObjectHiddenFromPlayers');
+    if (hid) hid.checked = false;
+    if (input) setTimeout(() => input.focus(), 100);
+}
+
+function confirmPlaceObjectToken() {
+    if (!isDM) return;
+    const input = document.getElementById('placeObjectNameInput');
+    const raw = (input && input.value) ? String(input.value) : '';
+    const label = raw.trim() || 'Object';
+    const hidEl = document.getElementById('placeObjectHiddenFromPlayers');
+    const hiddenFromPlayers = !!(hidEl && hidEl.checked);
+    const entityId = generateUUID();
+    const x = 5;
+    const y = 5;
+    sendMessage({
+        type: 'PlaceToken',
+        entity_id: entityId,
+        entity_type: 'Object',
+        x,
+        y,
+        size: 1.0,
+        display_name: label,
+        hidden_from_players: hiddenFromPlayers
+    });
+    closeModal('placeObjectModal');
+    addLogEntry(`Placed object: ${label}`, 'info');
+}
+
 // Character Sheet Viewer
 function showMyCharacterSheet() {
     if (!myCharacterId) {
@@ -12720,10 +13896,15 @@ let currentSheetSelectionMode = false;
 let characterEditMode = false;
 
 function showCharacterSheet(char, isSelectionMode = false) {
+    if (!char) {
+        console.error('showCharacterSheet: missing character');
+        alert('Character data is missing.');
+        return;
+    }
     // DM can always view. Players can view any character sheet so they can choose/change
     // who to play as (open list, view a character, click "Select This Character").
     if (isDM) { /* always allow */ }
-    else if (char.id === myCharacterId) { /* own character, allow */ }
+    else if (char.id != null && char.id === myCharacterId) { /* own character, allow */ }
     else {
         // Player viewing another character: allow so they can select them to play as
         isSelectionMode = true;
@@ -12750,10 +13931,26 @@ function showCharacterSheet(char, isSelectionMode = false) {
         }
     }
     
-    renderCharacterSheetContent();
+    try {
+        renderCharacterSheetContent();
+    } catch (e) {
+        console.error('renderCharacterSheetContent failed:', e);
+        const contentEl = document.getElementById('characterSheetContent');
+        const sheetTitleEl = document.getElementById('sheetCharacterName');
+        if (sheetTitleEl) {
+            try {
+                sheetTitleEl.textContent = getCharacterSheetTitle(char, currentViewingCharacterData);
+            } catch (e2) {
+                sheetTitleEl.textContent = char.name || 'Character';
+            }
+        }
+        if (contentEl) {
+            contentEl.innerHTML = '<p class="sheet-error" style="padding:1rem;color:#f88;">Could not load this character sheet. Open the browser console (F12) for details, or try re-importing the character.</p>';
+        }
+    }
     
     // Show/hide the "Open in New Window" and "Level Up (Update from JSON)" buttons (only for players viewing their own sheet)
-    const shouldShowOwnSheetButtons = !isSelectionMode && char && char.id === myCharacterId;
+    const shouldShowOwnSheetButtons = !isSelectionMode && char && char.id != null && char.id === myCharacterId;
     const openBtn = document.getElementById('openSheetInNewWindowBtn');
     if (openBtn) {
         openBtn.style.display = shouldShowOwnSheetButtons ? 'block' : 'none';
@@ -12767,12 +13964,26 @@ function showCharacterSheet(char, isSelectionMode = false) {
     const linkDiscordBtn = document.getElementById('linkDiscordBtn');
     if (linkDiscordBtn) {
         // Show button for players viewing their own sheet OR for DM viewing any character
-        const shouldShow = (!isSelectionMode && char && char.id === myCharacterId) || (isDM && !isSelectionMode);
+        const shouldShow = (!isSelectionMode && char && char.id != null && char.id === myCharacterId) || (isDM && !isSelectionMode);
         linkDiscordBtn.style.display = shouldShow ? 'block' : 'none';
         console.log('🔗 Link Discord button visibility:', shouldShow, 'isDM:', isDM, 'char.id:', char?.id, 'myCharacterId:', myCharacterId);
     }
+
+    const armstechSheetBtn = document.getElementById('armstechTrackerBtn');
+    if (armstechSheetBtn) {
+        const showArm = char && characterQualifiesForArmstech(char);
+        armstechSheetBtn.style.display = showArm ? 'inline-block' : 'none';
+        armstechSheetBtn.onclick = function () {
+            if (char) openArmstechTrackerForCharacter(char);
+        };
+    }
     
-    document.getElementById('characterSheetModal').classList.add('active');
+    const sheetModal = document.getElementById('characterSheetModal');
+    if (sheetModal) {
+        sheetModal.classList.add('active');
+    } else {
+        console.error('characterSheetModal element not found');
+    }
 }
 
 // Reference to the standalone character sheet window
@@ -12829,11 +14040,15 @@ function openCharacterSheetInNewWindow() {
     const char = currentViewingCharacter;
     const charData = currentViewingCharacterData;
     let html;
-    
-    if (charData) {
-        html = buildDetailedCharacterSheet(char, charData);
-    } else {
-        html = buildSimpleCharacterSheet(char);
+    try {
+        if (charData) {
+            html = buildDetailedCharacterSheet(char, charData);
+        } else {
+            html = buildSimpleCharacterSheet(char);
+        }
+    } catch (e) {
+        console.error('openCharacterSheetInNewWindow build failed:', e);
+        html = '<p style="padding:1rem;color:#f88;">Could not build character sheet HTML. See console.</p>';
     }
     
     // Store character data and HTML in sessionStorage (accessible across windows)
@@ -12861,6 +14076,35 @@ function openCharacterSheetInNewWindow() {
     console.log('✅ Opened character sheet in new window');
 }
 
+/** Debounced refresh when CharacterList floods (avoids full sheet re-render every broadcast). */
+function scheduleDebouncedCharacterSheetRefresh(delayMs = 350) {
+    if (characterSheetListRefreshDebounceId) clearTimeout(characterSheetListRefreshDebounceId);
+    characterSheetListRefreshDebounceId = setTimeout(() => {
+        characterSheetListRefreshDebounceId = null;
+        const modal = document.getElementById('characterSheetModal');
+        if (modal && modal.classList.contains('active') && currentViewingCharacter) {
+            renderCharacterSheetContent();
+        }
+    }, delayMs);
+}
+
+/** After innerHTML replace, DOM resets scrollTop — restore so the sheet does not jump to top. */
+function restoreCharacterSheetScrollPosition(contentEl, scrollTop) {
+    if (!contentEl || scrollTop == null || scrollTop <= 0) return;
+    const apply = () => {
+        try {
+            contentEl.scrollTop = scrollTop;
+        } catch (e) { /* ignore */ }
+    };
+    apply();
+    requestAnimationFrame(() => {
+        apply();
+        requestAnimationFrame(apply);
+    });
+    setTimeout(apply, 0);
+    setTimeout(apply, 120);
+}
+
 function renderCharacterSheetContent() {
     const char = currentViewingCharacter;
     if (!char) {
@@ -12878,13 +14122,13 @@ function renderCharacterSheetContent() {
     if (selectBtn) {
         if (currentSheetSelectionMode && !isDM && !characterEditMode) {
             selectBtn.classList.remove('hidden');
-    } else {
+        } else {
             selectBtn.classList.add('hidden');
         }
     }
     
     if (editBtn) {
-        if (isDM) {
+        if (canManuallyEditCharacterSheet(char)) {
             editBtn.classList.remove('hidden');
             editBtn.textContent = characterEditMode ? '💾 Save Changes' : '✏️ Edit';
         } else {
@@ -12893,7 +14137,7 @@ function renderCharacterSheetContent() {
     }
     
     if (cancelBtn) {
-        if (isDM && characterEditMode) {
+        if (characterEditMode && canManuallyEditCharacterSheet(char)) {
             cancelBtn.classList.remove('hidden');
         } else {
             cancelBtn.classList.add('hidden');
@@ -12904,6 +14148,10 @@ function renderCharacterSheetContent() {
         console.error('Character sheet elements missing');
         return;
     }
+
+    const sheetModal = document.getElementById('characterSheetModal');
+    const sheetIsOpen = !!(sheetModal && sheetModal.classList.contains('active'));
+    const savedScrollTop = sheetIsOpen ? contentEl.scrollTop : 0;
     
     if (!characterEditMode && charData) {
         const data = charData;
@@ -12924,25 +14172,52 @@ function renderCharacterSheetContent() {
     
     if (characterEditMode) {
         sheetTitleEl.textContent = `Editing: ${char.name}`;
-        contentEl.innerHTML = buildCharacterEditForm(char, charData);
+        let editHtml;
+        try {
+            editHtml = buildCharacterEditForm(char, charData);
+        } catch (e) {
+            console.error('buildCharacterEditForm failed:', e);
+            editHtml = '<p class="sheet-error" style="padding:1rem;color:#f88;">Could not build edit form. See console for details.</p>';
+        }
+        contentEl.innerHTML = editHtml;
+        restoreCharacterSheetScrollPosition(contentEl, savedScrollTop);
     } else {
-        sheetTitleEl.textContent = getCharacterSheetTitle(char, charData);
-    if (charData) {
-            const html = buildDetailedCharacterSheet(char, charData);
+        try {
+            sheetTitleEl.textContent = getCharacterSheetTitle(char, charData);
+        } catch (e) {
+            console.error('getCharacterSheetTitle failed:', e);
+            sheetTitleEl.textContent = (char && char.name) ? String(char.name) : 'Character Sheet';
+        }
+        if (charData) {
+            let html;
+            try {
+                html = buildDetailedCharacterSheet(char, charData);
+            } catch (e) {
+                console.error('buildDetailedCharacterSheet failed:', e);
+                html = '<p class="sheet-error" style="padding:1rem;color:#f88;">Could not render this character sheet (data may be incomplete). See console for details.</p>';
+            }
             contentEl.innerHTML = html;
-            
             setupCharacterSheetRollHandlers(contentEl);
+            restoreCharacterSheetScrollPosition(contentEl, savedScrollTop);
             setTimeout(() => {
-                setupDiceRollButtons(contentEl);
+                try {
+                    setupDiceRollButtons(contentEl);
+                } catch (e2) {
+                    console.error('setupDiceRollButtons failed:', e2);
+                }
+                restoreCharacterSheetScrollPosition(contentEl, savedScrollTop);
             }, 100);
-            
-            // Update sessionStorage for standalone window (if it exists)
             updateStandaloneCharacterSheet(char, charData, html);
-    } else {
-            const html = buildSimpleCharacterSheet(char);
+        } else {
+            let html;
+            try {
+                html = buildSimpleCharacterSheet(char);
+            } catch (e) {
+                console.error('buildSimpleCharacterSheet failed:', e);
+                html = '<p class="sheet-error" style="padding:1rem;color:#f88;">Could not render character summary. See console for details.</p>';
+            }
             contentEl.innerHTML = html;
-            
-            // Update sessionStorage for standalone window (if it exists)
+            restoreCharacterSheetScrollPosition(contentEl, savedScrollTop);
             updateStandaloneCharacterSheet(char, null, html);
         }
     }
@@ -13043,7 +14318,10 @@ function getEngineerLevelFromCharData(charData, charFallback) {
         var lv = c.levels != null ? (typeof c.levels === 'number' ? c.levels : parseInt(c.levels, 10)) : (c.level != null ? (typeof c.level === 'number' ? c.level : parseInt(c.level, 10)) : 0);
         if (!isNaN(lv) && lv > 0) sum += lv;
     }
-    var firstClassBase = (String(charData.classes[0].name || '').trim().toLowerCase().split(/\s+/)[0] || '').trim();
+    const firstCls = charData.classes[0];
+    var firstClassBase = firstCls
+        ? (String(firstCls.name || '').trim().toLowerCase().split(/\s+/)[0] || '').trim()
+        : '';
     if (charData.classes.length === 1 && firstClassBase === 'engineer') {
         var candidate = sum;
         if (Array.isArray(charData.attribs)) {
@@ -13365,9 +14643,18 @@ function getCharacterSheetTitle(char, charData) {
     return `${name} — ${char.class || ''} Level ${level}`;
 }
 
+/** DM may edit any sheet; players may edit only their own (not while browsing another sheet to select). */
+function canManuallyEditCharacterSheet(char) {
+    if (!char) return false;
+    if (isDM) return true;
+    if (!myCharacterId) return false;
+    if (currentSheetSelectionMode) return false;
+    return String(char.id) === String(myCharacterId);
+}
+
 function handleEditCharacterBtnClick() {
-    if (!isDM) {
-        alert('Only the DM can edit characters.');
+    if (!canManuallyEditCharacterSheet(currentViewingCharacter)) {
+        alert('You can only edit your own character sheet (open your character, not another player’s).');
         return;
     }
     
@@ -13385,13 +14672,13 @@ function handleEditCharacterBtnClick() {
 }
 
 function cancelCharacterEditMode() {
-    if (!isDM) return;
+    if (!canManuallyEditCharacterSheet(currentViewingCharacter)) return;
     characterEditMode = false;
     renderCharacterSheetContent();
 }
 
 function saveCharacterEdits() {
-    if (!isDM || !currentViewingCharacter) return;
+    if (!canManuallyEditCharacterSheet(currentViewingCharacter) || !currentViewingCharacter) return;
     
     const form = document.getElementById('characterEditForm');
     if (!form) {
@@ -13411,6 +14698,11 @@ function saveCharacterEdits() {
         const value = parseInt(input.value, 10);
         return isNaN(value) ? fallback : value;
     };
+
+    const saveProfsFromForm = ['str', 'dex', 'con', 'int', 'wis', 'cha'].filter((key) => {
+        const el = form.querySelector(`input[name="save_prof_${key}"]`);
+        return el && el.checked;
+    });
     
     const updated = {
         name: getText('name', currentViewingCharacter.name),
@@ -13511,6 +14803,9 @@ function saveCharacterEdits() {
         if (data.proficiency_bonus !== undefined) {
             data.proficiency_bonus = updated.proficiency_bonus;
         }
+
+        // Saving throw proficiencies (sheet reads this first; required for SW / baseAbilityScores-only JSON)
+        data.saving_throw_proficiencies = saveProfsFromForm;
         
         if (data.baseAbilityScores) {
             Object.keys(updated.abilities).forEach(key => {
@@ -13525,13 +14820,14 @@ function saveCharacterEdits() {
             Object.keys(updated.abilities).forEach(key => {
                 const score = updated.abilities[key];
                 const mod = Math.floor((score - 10) / 2);
-                if (data.abilities[key]) {
+                const prof = saveProfsFromForm.includes(key);
+                if (!data.abilities[key]) {
+                    data.abilities[key] = { score, mod, save_proficient: prof, save: mod + (prof ? updated.proficiency_bonus : 0) };
+                } else {
                     data.abilities[key].score = score;
                     data.abilities[key].mod = mod;
-                    if (typeof data.abilities[key].save === 'number') {
-                        const proficient = data.abilities[key].save_proficient;
-                        data.abilities[key].save = mod + (proficient ? updated.proficiency_bonus : 0);
-                    }
+                    data.abilities[key].save_proficient = prof;
+                    data.abilities[key].save = mod + (prof ? updated.proficiency_bonus : 0);
                 }
             });
         }
@@ -13666,12 +14962,47 @@ function buildCharacterEditForm(char, charData) {
             </div>
             
             <div class="panel" style="padding: 15px;">
+                <h4 style="color: #ffaa44;">🛡️ Saving throws</h4>
+                <p style="font-size: 11px; opacity: 0.65; margin: 0 0 10px 0;">Check saves that add proficiency bonus (+${char.proficiency_bonus != null ? char.proficiency_bonus : (charData?.proficiency_bonus ?? 2)}). Totals update from ability scores above.</p>
+                <div style="display: flex; flex-direction: column; gap: 2px;">
+                    ${['str', 'dex', 'con', 'int', 'wis', 'cha'].map((key) => {
+                        const pb = char.proficiency_bonus != null ? char.proficiency_bonus : (charData?.proficiency_bonus ?? 2);
+                        const prof = getSavingThrowProficientState(charData, key);
+                        const mod = Math.floor((abilityScores[key] - 10) / 2);
+                        const total = prof ? mod + pb : mod;
+                        const modStr = (mod >= 0 ? '+' : '') + mod;
+                        const totStr = (total >= 0 ? '+' : '') + total;
+                        const labels = { str: 'Strength', dex: 'Dexterity', con: 'Constitution', int: 'Intelligence', wis: 'Wisdom', cha: 'Charisma' };
+                        return `
+                        <label style="display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 8px 6px; border-radius: 4px; background: rgba(255,170,68,0.06); cursor: pointer;">
+                            <input type="checkbox" name="save_prof_${key}" ${prof ? 'checked' : ''} style="width: 18px; height: 18px; flex-shrink: 0;">
+                            <span style="flex: 1; min-width: 0; font-weight: 600; color: #ffcc88;">${labels[key]}</span>
+                            <span style="font-size: 11px; opacity: 0.75; white-space: nowrap;">mod ${modStr}${prof ? ` + PB ${pb >= 0 ? '+' : ''}${pb}` : ''} → <strong style="color:#ffaa44">${totStr}</strong></span>
+                        </label>`;
+                    }).join('')}
+                </div>
+            </div>
+            
+            <div class="panel" style="padding: 15px;">
                 <h4 style="color: #ffaa44;">Bio / Notes</h4>
                 <textarea name="bio" rows="4" style="${inputStyle}; resize: vertical;">${escapeHtml(bioValue)}</textarea>
                 <p style="font-size: 11px; opacity: 0.6; margin-top: 8px;">💾 Changes are saved for everyone when you click "Save Changes".</p>
             </div>
         </form>
     `;
+}
+
+/** Whether this ability is proficient in saving throws (matches buildSavingThrowsSection sources). */
+function getSavingThrowProficientState(charData, abilityKey) {
+    const k = String(abilityKey || '').toLowerCase();
+    if (!charData || !k) return false;
+    if (Array.isArray(charData.saving_throw_proficiencies)) {
+        return charData.saving_throw_proficiencies.some((x) => String(x).toLowerCase() === k);
+    }
+    if (charData.abilities && charData.abilities[k] && charData.abilities[k].save_proficient) {
+        return true;
+    }
+    return false;
 }
 
 function getAbilityScoreValue(char, charData, abilityKey) {
@@ -13839,7 +15170,7 @@ function escapeJs(str) {
 }
 
 function buildDetailedCharacterSheet(char, charData) {
-    const formatMod = (mod) => mod >= 0 ? `+${mod}` : `${mod}`;
+    const formatMod = (mod) => (typeof mod === 'number' && !isNaN(mod) ? (mod >= 0 ? `+${mod}` : `${mod}`) : '+0');
     
     // Detect if this is a Star Wars character
     const isStarWars = charData.species || (Array.isArray(charData.classes) && charData.baseAbilityScores);
@@ -13850,22 +15181,36 @@ function buildDetailedCharacterSheet(char, charData) {
     let className, level, maxHP;
     level = getResolvedLevelForSheet(char, charData);
     if (isStarWars) {
-        const classDisplay = (charData.class || char.class || '').trim();
-        const multiClass = charData.classes && charData.classes.length > 1;
-        className = multiClass && charData.classes
-            ? charData.classes.map(c => `${(c.name || '').trim()} ${c.levels || 1}`).join(' / ')
-            : (classDisplay || (charData.classes && charData.classes[0] ? (charData.classes[0].name || '').trim() : ''));
-        maxHP = charData.tweaks?.hitPoints?.maximum?.override ||
-               (charData.classes && charData.classes[0]?.hitPoints?.length > 0 ?
-                charData.classes[0].hitPoints.reduce((sum, hp) => sum + hp, 0) : null) || char.max_hp;
+        const classDisplay = String(charData.class != null ? charData.class : (char.class != null ? char.class : '')).trim();
+        const classesArr = Array.isArray(charData.classes) ? charData.classes : [];
+        const multiClass = classesArr.length > 1;
+        className = multiClass
+            ? classesArr.map(c => `${(c && c.name != null ? String(c.name) : '').trim()} ${c && c.levels != null ? c.levels : 1}`).join(' / ')
+            : (classDisplay || (classesArr[0] ? String(classesArr[0].name || '').trim() : ''));
+        const hpOverride = charData.tweaks?.hitPoints?.maximum?.override;
+        const firstHitPoints = classesArr[0] && classesArr[0].hitPoints;
+        let hpFromLevels = null;
+        if (Array.isArray(firstHitPoints) && firstHitPoints.length > 0) {
+            hpFromLevels = firstHitPoints.reduce((sum, hp) => sum + (Number(hp) || 0), 0);
+        }
+        if (hpOverride != null && hpOverride !== '') {
+            const on = Number(hpOverride);
+            maxHP = !isNaN(on) ? on : char.max_hp;
+        } else if (hpFromLevels != null && hpFromLevels > 0) {
+            maxHP = hpFromLevels;
+        } else {
+            maxHP = char.max_hp;
+        }
     } else {
-        className = charData.class + (charData.subclass ? ` (${charData.subclass})` : '');
+        className = (charData.class != null ? String(charData.class) : '') + (charData.subclass ? ` (${charData.subclass})` : '');
         maxHP = charData.hp?.max || char.max_hp;
     }
+    maxHP = Math.max(1, Number(maxHP) || 1);
     
     // Get inspiration value (default to false if not set)
     const hasInspiration = charData.inspiration === true;
-    const escapedCharId = escapeJs(char.id);
+    const charIdStr = char.id != null ? String(char.id) : '';
+    const escapedCharId = escapeJs(charIdStr);
     const sheetCombat = recomputeEquipmentBonuses(charData, char);
     const showEquipControls = canEditCharacterEquipment(char);
     const sheetRollCharNameAttr = escapeHtml(getCharacterDisplayName(charData?.name, char.name));
@@ -13881,7 +15226,7 @@ function buildDetailedCharacterSheet(char, charData) {
             ${charData.background ? `<div class="token-stat"><span>Background:</span><span>${charData.background.name || charData.background}</span></div>` : ''}
             <div class="token-stat" style="margin-top: 10px;">
                 <span>Inspiration:</span>
-                <button id="inspirationToggle-${char.id.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                <button id="inspirationToggle-${charIdStr.replace(/[^a-zA-Z0-9]/g, '_')}" 
                         data-character-id="${escapedCharId}"
                         onclick="toggleInspiration(this.dataset.characterId)" 
                         style="padding: 5px 15px; border: 2px solid ${hasInspiration ? '#44ff44' : '#888'}; border-radius: 5px; background: ${hasInspiration ? 'rgba(68, 255, 68, 0.2)' : 'rgba(136, 136, 136, 0.2)'}; color: ${hasInspiration ? '#44ff44' : '#888'}; cursor: pointer; font-weight: bold; transition: all 0.2s;"
@@ -13977,7 +15322,7 @@ function buildDetailedCharacterSheet(char, charData) {
     if (showEquipControls) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ff8844;">➕ Add attack (action bar)</h4>
-            <p style="font-size: 11px; opacity: 0.75; margin: 0 0 8px 0;">Adds a roll button on your action bar and here. <strong>Remove</strong> appears on attacks that are <em>not</em> from equipped gear (including ones you add here). Equipped-weapon rows cannot be removed here.</p>
+            <p style="font-size: 11px; opacity: 0.75; margin: 0 0 8px 0;">Adds a roll button on your action bar and here. <strong>Range</strong> drives the map targeting ring (feet, or normal/long like <code>90/360</code>). Leave blank for default reach. <strong>Remove</strong> appears on attacks that are <em>not</em> from equipped gear (including ones you add here). Equipped-weapon rows cannot be removed here.</p>
             <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
                 <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Name</span>
                     <input id="sheetAddAttackName" type="text" placeholder="e.g. Vibroknife" style="padding:6px;min-width:140px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
@@ -13987,32 +15332,58 @@ function buildDetailedCharacterSheet(char, charData) {
                     <input id="sheetAddAttackDmg" type="text" placeholder="1d6" style="padding:6px;width:72px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
                 <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Type</span>
                     <input id="sheetAddAttackType" type="text" placeholder="Energy" style="padding:6px;width:88px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
+                <label style="display: flex; flex-direction: column; font-size: 11px;"><span style="opacity:0.7">Range (ft)</span>
+                    <input id="sheetAddAttackRange" type="text" placeholder="5 or 90/360" style="padding:6px;width:92px;background:#2a2a2a;border:1px solid #444;color:#fff;border-radius:4px;"></label>
                 <button type="button" class="sheet-add-attack-btn" onclick="addCustomAttackFromSheet('${escapedCharId}')" style="padding: 8px 14px; background: #ff8844; color: #000; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">Add</button>
             </div>
         </div>`;
     }
     
-    // Attacks (imported + equipped weapons from item DB)
-    if (sheetCombat.attacks && sheetCombat.attacks.length > 0) {
+    // Attacks (imported + equipped weapons from item DB) — iterate sheetCombat.attacks (merged list).
+    // charData.attacks may be undefined when only equipment-generated attacks exist; forEach on it threw and broke the whole sheet.
+    const attacksToRender = Array.isArray(sheetCombat.attacks) ? sheetCombat.attacks : [];
+    if (attacksToRender.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ff4444;">⚔️ Attacks <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>`;
-        charData.attacks.forEach((atk, atkIndex) => {
+        const rollNameForAttr = escapeJs(getCharacterDisplayName(charData?.name, char.name));
+        attacksToRender.forEach((atk, atkIndex) => {
             if (atk.name && atk.to_hit !== null && atk.damage) {
                 const weaponName = `${atk.name}${atk.magic_bonus ? ' +' + atk.magic_bonus : ''}`;
                 const escapedWeapon = escapeJs(weaponName);
-                const escapedName = escapeJs(charData.name);
+                const escapedName = rollNameForAttr;
                 const escapedDamage = escapeJs(atk.damage);
                 const escapedType = escapeJs(atk.type || 'damage');
-                const escapedRange = escapeHtml(String(atk.range || ''));
-                html += `<div data-sheet-roll="attack" data-weapon="${escapedWeapon}" data-to-hit="${atk.to_hit}" data-damage="${escapedDamage}" data-damage-type="${escapedType}" data-char-name="${escapedName}" data-range="${escapedRange}" style="padding: 10px; margin: 5px 0; background: rgba(255,68,68,0.1); border-left: 3px solid #ff4444; border-radius: 3px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,68,68,0.25)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background='rgba(255,68,68,0.1)'; this.style.transform='translateX(0)'">
-                    <div style="font-weight: bold; font-size: 15px;">${weaponName}</div>
-                    <div style="font-size: 13px; margin-top: 5px;">
-                        <span style="color: #44ff44;">⚔️ To Hit: ${formatMod(atk.to_hit)}</span> | 
-                        <span style="color: #ffaa44;">💥 Damage: ${atk.damage}</span> 
-                        <span style="opacity: 0.7;">${atk.type || ''}</span>
+                const rangeData = attackRangeToDataAttr(atk.range);
+                const escapedRange = escapeHtml(rangeData);
+                const rangeLine = rangeData ? `<div style="font-size: 11px; opacity: 0.65; margin-top: 4px;">📏 Range: ${escapeHtml(rangeData)} ft</div>` : '';
+                const removable = showEquipControls && !atk.from_equipment;
+                const thVal = atk.to_hit !== undefined && atk.to_hit !== null ? atk.to_hit : atk.toHit;
+                let removeBtn = '';
+                if (removable) {
+                    const cidAttr = escapeHtml(String(char.id));
+                    if (atk.userAttackId) {
+                        const aidAttr = escapeHtml(String(atk.userAttackId));
+                        removeBtn = `<button type="button" class="sheet-remove-attack-btn" data-char-id="${cidAttr}" data-attack-id="${aidAttr}" title="Remove from sheet and action bar" style="flex-shrink:0;white-space:nowrap;align-self:center;padding:5px 9px;font-size:10px;border-radius:4px;border:1px solid #c44;background:rgba(200,68,68,0.35);color:#fff;cursor:pointer;">Remove</button>`;
+                    } else {
+                        const sigObj = { n: atk.name, h: Number(thVal), d: String(atk.damage || atk.damage_dice || '').trim() };
+                        const sigAttr = escapeHtml(JSON.stringify(sigObj));
+                        removeBtn = `<button type="button" class="sheet-remove-attack-btn" data-char-id="${cidAttr}" data-attack-sig="${sigAttr}" title="Remove from sheet and action bar" style="flex-shrink:0;white-space:nowrap;align-self:center;padding:5px 9px;font-size:10px;border-radius:4px;border:1px solid #c44;background:rgba(200,68,68,0.35);color:#fff;cursor:pointer;">Remove</button>`;
+                    }
+                }
+                html += `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;box-sizing:border-box;padding:10px;margin:6px 0;background:rgba(255,68,68,0.1);border-left:3px solid #ff4444;border-radius:3px;">
+                    <div data-sheet-roll="attack" data-weapon="${escapedWeapon}" data-to-hit="${thVal}" data-damage="${escapedDamage}" data-damage-type="${escapedType}" data-char-name="${escapedName}" data-range="${escapedRange}" style="min-width:0;width:100%;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,68,68,0.18)'; this.style.transform='translateX(5px)'" onmouseout="this.style.background=''; this.style.transform='translateX(0)'">
+                    <div style="font-weight: bold; font-size: 15px;">${escapeHtml(weaponName)}</div>
+                    <div style="display:flex;flex-wrap:wrap;align-items:center;column-gap:10px;row-gap:4px;margin-top:6px;font-size:13px;line-height:1.35;">
+                        <span style="color: #44ff44; white-space: nowrap;">⚔️ To Hit: ${formatMod(thVal)}</span>
+                        <span style="color: rgba(255,255,255,0.35); user-select: none;">|</span>
+                        <span style="color: #ffaa44; white-space: nowrap;">💥 Damage: ${escapeHtml(String(atk.damage))}</span>
+                        <span style="opacity: 0.7;">${escapeHtml(atk.type || '')}</span>
                     </div>
+                    ${rangeLine}
                     ${atk.mastery ? `<div style="font-size: 11px; color: #4a9eff; margin-top: 3px;">Mastery: ${atk.mastery}</div>` : ''}
-                    ${atk.properties ? `<div style="font-size: 11px; opacity: 0.6; margin-top: 3px;">${atk.properties.join(', ')}</div>` : ''}
+                    ${atk.properties ? `<div style="font-size: 11px; opacity: 0.6; margin-top: 3px;">${Array.isArray(atk.properties) ? atk.properties.join(', ') : escapeHtml(String(atk.properties))}</div>` : ''}
+                    </div>
+                    ${removeBtn}
                 </div>`;
             }
         });
@@ -14023,7 +15394,7 @@ function buildDetailedCharacterSheet(char, charData) {
     if (Array.isArray(charData.equipment) && charData.equipment.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ffaa44;">🎒 Equipment <span style="font-size: 10px; opacity: 0.6;">(Hover for details${showEquipControls ? '; Equip updates AC & attacks' : ''})</span></h4>
-            ${!showEquipControls && charData.equipment.length ? '<p style="font-size:11px;opacity:0.75;margin:0 0 8px 0;">Equip / Unequip: open this sheet as the <strong>DM</strong>, or select this character as <strong>your</strong> character first, then open the sheet again.</p>' : ''}
+            ${!showEquipControls && charData.equipment.length ? '<p style="font-size:11px;opacity:0.75;margin:0 0 8px 0;">Equip / Unequip: select this character as <strong>yours</strong> (character list) and open the sheet again, or ask the <strong>DM</strong> to adjust.</p>' : ''}
             <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;">`;
         charData.equipment.forEach((item, eqIdx) => {
             const itemName = item.name || item;
@@ -14348,14 +15719,17 @@ function buildDetailedCharacterSheet(char, charData) {
     if (charData.features) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #aa88ff;">✨ Features</h4>`;
-        if (charData.features.class_features) {
-            html += `<div style="margin-bottom: 8px;"><strong style="color: #4a9eff;">Class:</strong> ${charData.features.class_features.join(', ')}</div>`;
+        const cf = charData.features.class_features;
+        if (cf) {
+            html += `<div style="margin-bottom: 8px;"><strong style="color: #4a9eff;">Class:</strong> ${Array.isArray(cf) ? cf.join(', ') : escapeHtml(String(cf))}</div>`;
         }
-        if (charData.features.species_traits) {
-            html += `<div style="margin-bottom: 8px;"><strong style="color: #44ff44;">Species:</strong> ${charData.features.species_traits.join(', ')}</div>`;
+        const st = charData.features.species_traits;
+        if (st) {
+            html += `<div style="margin-bottom: 8px;"><strong style="color: #44ff44;">Species:</strong> ${Array.isArray(st) ? st.join(', ') : escapeHtml(String(st))}</div>`;
         }
-        if (charData.features.feats) {
-            html += `<div><strong style="color: #ffaa44;">Feats:</strong> ${charData.features.feats.join(', ')}</div>`;
+        const ft = charData.features.feats;
+        if (ft) {
+            html += `<div><strong style="color: #ffaa44;">Feats:</strong> ${Array.isArray(ft) ? ft.join(', ') : escapeHtml(String(ft))}</div>`;
         }
         html += `</div>`;
     }
@@ -14364,11 +15738,13 @@ function buildDetailedCharacterSheet(char, charData) {
     if (charData.actions) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ffaa44;">🎬 Actions</h4>`;
-        if (charData.actions.bonus_actions) {
-            html += `<div><strong style="color: #44ff44;">Bonus Actions:</strong><br>${charData.actions.bonus_actions.join(', ')}</div>`;
+        const ba = charData.actions.bonus_actions;
+        if (ba) {
+            html += `<div><strong style="color: #44ff44;">Bonus Actions:</strong><br>${Array.isArray(ba) ? ba.join(', ') : escapeHtml(String(ba))}</div>`;
         }
-        if (charData.actions.reactions) {
-            html += `<div style="margin-top: 5px;"><strong style="color: #ff4444;">Reactions:</strong><br>${charData.actions.reactions.join(', ')}</div>`;
+        const rx = charData.actions.reactions;
+        if (rx) {
+            html += `<div style="margin-top: 5px;"><strong style="color: #ff4444;">Reactions:</strong><br>${Array.isArray(rx) ? rx.join(', ') : escapeHtml(String(rx))}</div>`;
         }
         html += `</div>`;
     }
@@ -14395,11 +15771,13 @@ function buildDetailedCharacterSheet(char, charData) {
     
     // Proficiencies
     if (charData.proficiencies) {
+        const pj = (v) => (Array.isArray(v) ? v.join(', ') : (v != null && v !== '' ? escapeHtml(String(v)) : ''));
+        const p = charData.proficiencies;
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #4a9eff;">📜 Proficiencies</h4>
-            ${charData.proficiencies.armor ? `<div><strong>Armor:</strong> ${charData.proficiencies.armor.join(', ')}</div>` : ''}
-            ${charData.proficiencies.weapons ? `<div><strong>Weapons:</strong> ${charData.proficiencies.weapons.join(', ')}</div>` : ''}
-            ${charData.proficiencies.languages ? `<div><strong>Languages:</strong> ${charData.proficiencies.languages.join(', ')}</div>` : ''}
+            ${p.armor ? `<div><strong>Armor:</strong> ${pj(p.armor)}</div>` : ''}
+            ${p.weapons ? `<div><strong>Weapons:</strong> ${pj(p.weapons)}</div>` : ''}
+            ${p.languages ? `<div><strong>Languages:</strong> ${pj(p.languages)}</div>` : ''}
         </div>`;
     }
     
@@ -15445,10 +16823,12 @@ function addCustomAttackFromSheet(characterId) {
     const hitEl = document.getElementById('sheetAddAttackHit');
     const dmgEl = document.getElementById('sheetAddAttackDmg');
     const typeEl = document.getElementById('sheetAddAttackType');
+    const rangeEl = document.getElementById('sheetAddAttackRange');
     const name = (nameEl && nameEl.value || '').trim();
     const toHit = hitEl ? parseInt(String(hitEl.value).replace(/[^0-9\-+]/g, '') || '0', 10) : 0;
     const damage = (dmgEl && dmgEl.value || '').trim() || '1d4';
     const dmgType = (typeEl && typeEl.value || '').trim() || 'kinetic';
+    const rangeStr = (rangeEl && rangeEl.value || '').trim();
     if (!name) {
         alert('Enter a weapon or attack name.');
         return;
@@ -15456,14 +16836,16 @@ function addCustomAttackFromSheet(characterId) {
     const { full, data } = parseCharacterDataWrapper(char);
     if (!data) return;
     if (!Array.isArray(data.attacks)) data.attacks = [];
-    data.attacks.push({
+    const atkRow = {
         name,
         to_hit: toHit,
         damage,
         type: dmgType,
         userAdded: true,
         userAttackId: generateUUID()
-    });
+    };
+    if (rangeStr) atkRow.range = rangeStr;
+    data.attacks.push(atkRow);
     applyEquipmentDerivedStats(char, data);
     char.character_data = serializeCharacterDataWrapper(char, full, data);
     sendMessage({ type: 'UpdateCharacter', character: buildCharacterUpdatePayload(char) });
@@ -15471,6 +16853,7 @@ function addCustomAttackFromSheet(characterId) {
     if (hitEl) hitEl.value = '';
     if (dmgEl) dmgEl.value = '';
     if (typeEl) typeEl.value = '';
+    if (rangeEl) rangeEl.value = '';
     if (currentViewingCharacter && String(currentViewingCharacter.id) === String(char.id)) {
         currentViewingCharacterData = data;
         currentViewingCharacterFullData = full;
@@ -15491,6 +16874,7 @@ function removeUserAttackFromSheet(characterId, userAttackId, attackSigJson) {
     if (!data || !Array.isArray(data.attacks)) return;
 
     if (userAttackId) {
+        if (!confirm('Remove this attack from the character sheet and action bar?')) return;
         const before = data.attacks.length;
         data.attacks = data.attacks.filter(a => a && String(a.userAttackId || '') !== String(userAttackId));
         if (data.attacks.length === before) {
@@ -15536,13 +16920,104 @@ function removeUserAttackFromSheet(characterId, userAttackId, attackSigJson) {
     addLogEntry(`${char.name} removed an attack from the sheet`, 'info');
 }
 
+function persistEnemyTemplateAfterActionsEdit(enemy) {
+    if (!enemy || enemy.isCustomInstance) return;
+    const serverPayload = buildEnemyServerPayload(enemy);
+    if (!serverPayload) return;
+    sendMessage({ type: 'CreateEnemy', enemy: serverPayload });
+    const idx = enemies.findIndex(e => e.id === enemy.id);
+    if (idx !== -1) enemies[idx] = { ...enemies[idx], actions: enemy.actions };
+    const actStr = typeof enemy.actions === 'string' ? enemy.actions : JSON.stringify(enemy.actions || {});
+    syncCustomEnemyInstanceActionsFromTemplate(enemy.id, actStr);
+    renderEnemyList();
+}
+
+function addEnemySheetAttackFromSheet(enemyId) {
+    if (!isDM) return;
+    const enemy = resolveEnemyTemplateForSheetEdits(enemyId);
+    if (!enemy) {
+        alert('Enemy not found. Placed tokens need a link to the database enemy (re-place from the Enemy list if this is an old session).');
+        return;
+    }
+    const split = parseEnemyActionsSplit(enemy);
+    if (split.mode === 'json_array') {
+        alert('This enemy\'s Actions field is a JSON array. In Edit Enemy, wrap it in a JSON object { … } (or use freeform text) before adding attacks here.');
+        return;
+    }
+    const nameEl = document.getElementById('enemySheetAddAttackName');
+    const hitEl = document.getElementById('enemySheetAddAttackHit');
+    const dmgEl = document.getElementById('enemySheetAddAttackDmg');
+    const typeEl = document.getElementById('enemySheetAddAttackType');
+    const rangeEl = document.getElementById('enemySheetAddAttackRange');
+    const name = (nameEl && nameEl.value || '').trim();
+    const toHit = hitEl ? parseInt(String(hitEl.value).replace(/[^0-9\-+]/g, '') || '0', 10) : 0;
+    const damage = (dmgEl && dmgEl.value || '').trim() || '1d4';
+    const dmgType = (typeEl && typeEl.value || '').trim() || 'kinetic';
+    const rangeStr = (rangeEl && rangeEl.value || '').trim();
+    if (!name) {
+        alert('Enter an attack name.');
+        return;
+    }
+    const row = {
+        name,
+        to_hit: toHit,
+        damage,
+        type: dmgType,
+        userAdded: true,
+        userAttackId: generateUUID()
+    };
+    if (rangeStr) row.range = rangeStr;
+    split.sheetAttacks.push(normalizeEnemySheetAttackRow(row));
+    enemy.actions = stringifyEnemyActionsFromSplit(split);
+    persistEnemyTemplateAfterActionsEdit(enemy);
+    if (nameEl) nameEl.value = '';
+    if (hitEl) hitEl.value = '';
+    if (dmgEl) dmgEl.value = '';
+    if (typeEl) typeEl.value = '';
+    if (rangeEl) rangeEl.value = '';
+    addLogEntry(`${enemy.name}: added attack ${name}`, 'info');
+    showNPCCharacterSheet(enemyId);
+}
+
+function removeEnemySheetAttackFromSheet(enemyId, userAttackId) {
+    if (!isDM || !userAttackId) return;
+    if (!confirm('Remove this attack from the enemy?')) return;
+    const enemy = resolveEnemyTemplateForSheetEdits(enemyId);
+    if (!enemy) {
+        alert('Enemy not found. Placed tokens need a link to the database enemy (re-place from the Enemy list if this is an old session).');
+        return;
+    }
+    const split = parseEnemyActionsSplit(enemy);
+    const before = split.sheetAttacks.length;
+    split.sheetAttacks = split.sheetAttacks.filter(a => a && String(a.userAttackId || '') !== String(userAttackId));
+    if (split.sheetAttacks.length === before) {
+        alert('Could not find that attack.');
+        return;
+    }
+    enemy.actions = stringifyEnemyActionsFromSplit(split);
+    persistEnemyTemplateAfterActionsEdit(enemy);
+    addLogEntry(`${enemy.name}: removed a DM-added attack`, 'info');
+    showNPCCharacterSheet(enemyId);
+}
+
 function adjustTooltipPosition(tooltip, event) {
-    const rect = tooltip.getBoundingClientRect();
+    if (!tooltip || !event) return;
+    tooltip.style.zIndex = String(SPELL_POWER_TOOLTIP_Z_INDEX);
+    let rect = tooltip.getBoundingClientRect();
     if (rect.right > window.innerWidth) {
         tooltip.style.left = (event.clientX - rect.width - 15) + 'px';
     }
     if (rect.bottom > window.innerHeight) {
         tooltip.style.top = (event.clientY - rect.height - 15) + 'px';
+    }
+    rect = tooltip.getBoundingClientRect();
+    const bar = document.getElementById('playerActionBar');
+    if (bar && !bar.classList.contains('hidden')) {
+        const barRect = bar.getBoundingClientRect();
+        if (rect.bottom > barRect.top) {
+            const delta = rect.bottom - barRect.top + 8;
+            tooltip.style.top = (rect.top - delta) + 'px';
+        }
     }
 }
 
@@ -15772,8 +17247,12 @@ async function saveGameState() {
                 x: token.x,
                 y: token.y,
                 size: token.size,
-                image_url: token.image_url
+                image_url: token.image_url,
+                display_name: token.display_name
             };
+            if (token.entity_type === 'Object') {
+                tokenData.hidden_from_players = token.hidden_from_players === true;
+            }
             
             // Include HP values from the entity (character or enemy)
             if (token.entity_type === 'Player') {
@@ -16238,15 +17717,20 @@ async function loadGameStateFromData(gameState, sourceName) {
                 const tokenSize = getTokenSize(token.entity_id, token.entity_type);
                 console.log(`📐 Restoring token ${token.entity_id} with calculated size: ${tokenSize}`);
                 const displayName = token.display_name || (token.entity_type === 'Enemy' || token.entity_type === 'NPC' ? (enemies.find(e => e.id === token.entity_id)?.name) : undefined);
-                sendMessage({
+                const placeMsg = {
                     type: 'PlaceToken',
                     entity_id: token.entity_id,
                     entity_type: token.entity_type,
                     x: token.x,
                     y: token.y,
                     size: tokenSize,
-                    display_name: displayName || undefined
-                });
+                    display_name: displayName || undefined,
+                    image_url: token.image_url || undefined
+                };
+                if (token.entity_type === 'Object') {
+                    placeMsg.hidden_from_players = token.hidden_from_players === true;
+                }
+                sendMessage(placeMsg);
                 
                 // Small delay between tokens to avoid race conditions
                 if (i < savedTokens.length - 1) {

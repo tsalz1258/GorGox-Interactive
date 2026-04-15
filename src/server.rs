@@ -143,6 +143,9 @@ pub async fn start_server(
     if let Err(e) = tokio::fs::create_dir_all("saves").await {
         warn!("⚠️ Could not create saves directory: {}", e);
     }
+    if let Err(e) = tokio::fs::create_dir_all("campaign_notes").await {
+        warn!("⚠️ Could not create campaign_notes directory: {}", e);
+    }
 
     let app = Router::new()
         .route("/ws", get(websocket_handler))
@@ -160,6 +163,10 @@ pub async fn start_server(
         .route("/api/saves/:filename", get(get_saved_state))
         .route("/api/saves/:filename", post(save_game_state_handler))
         .route("/api/saves/:filename", delete(delete_saved_state))
+        .route(
+            "/api/campaign-notes/:id",
+            get(get_campaign_notes).put(put_campaign_notes),
+        )
         .route("/api/sounds", get(list_sounds))
         .route("/api/sounds", post(upload_sound))
         .route("/api/sounds/:filename", delete(delete_sound))
@@ -285,15 +292,28 @@ async fn handle_socket(
     let shutdown_tx_clone = shutdown_tx.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
-            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
-                handle_client_message(
-                    client_msg,
-                    &session_id,
-                    &game_state,
-                    &clients,
-                    &dnd_db_clone,
-                    &starwars_db_clone,
-                ).await;
+            match serde_json::from_str::<ClientMessage>(&text) {
+                Ok(client_msg) => {
+                    handle_client_message(
+                        client_msg,
+                        &session_id,
+                        &game_state,
+                        &clients,
+                        &dnd_db_clone,
+                        &starwars_db_clone,
+                        &shutdown_tx_clone,
+                    ).await;
+                }
+                Err(e) => {
+                    error!("❌ Failed to deserialize client message: {}", e);
+                    error!("   Message text: {}", text);
+                    // Try to log what type of message it was supposed to be
+                    if let Ok(partial) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if let Some(msg_type) = partial.get("type") {
+                            error!("   Message type: {}", msg_type);
+                        }
+                    }
+                }
             }
         }
     });
@@ -311,6 +331,31 @@ async fn handle_socket(
     info!("Client {} disconnected", session_id_clone);
 }
 
+async fn enemy_template_portrait_url(dnd_db: &Database, template_id: &str) -> Option<String> {
+    let Ok(Some(row)) = sqlx::query("SELECT portrait_url FROM enemies WHERE id = ?")
+        .bind(template_id)
+        .fetch_optional(dnd_db)
+        .await
+    else {
+        return None;
+    };
+    row.try_get::<Option<String>, _>("portrait_url")
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+}
+
+async fn enemy_template_actions_json(dnd_db: &Database, template_id: &str) -> Option<String> {
+    let Ok(Some(row)) = sqlx::query("SELECT actions FROM enemies WHERE id = ?")
+        .bind(template_id)
+        .fetch_optional(dnd_db)
+        .await
+    else {
+        return None;
+    };
+    row.try_get::<String, _>("actions").ok()
+}
+
 /// Fill in token.display_name and token.image_url (portrait) from enemy_instances or DB so players see names and pictures.
 async fn enrich_tokens_with_display_names(
     mut tokens: Vec<crate::models::Token>,
@@ -324,26 +369,29 @@ async fn enrich_tokens_with_display_names(
         if !matches!(t.entity_type, TokenType::Enemy | TokenType::NPC) {
             continue;
         }
+        if let Some(ref u) = t.image_url {
+            if u.trim().is_empty() {
+                t.image_url = None;
+            }
+        }
         if t.display_name.is_none() {
             if let Some(name) = gs.enemy_instances.get(&t.entity_id).map(|e| e.name.clone()) {
                 t.display_name = Some(name);
             }
         }
         if t.image_url.is_none() {
-            let template_id = gs.enemy_instances.get(&t.entity_id).map(|e| e.enemy_id.clone()).unwrap_or_else(|| t.entity_id.clone());
+            let template_id = gs
+                .enemy_instances
+                .get(&t.entity_id)
+                .map(|e| e.enemy_id.clone())
+                .unwrap_or_else(|| t.entity_id.clone());
             need_portrait.push((i, template_id));
         }
     }
     drop(gs);
     for (i, template_id) in need_portrait {
-        if let Ok(Some(row)) = sqlx::query("SELECT portrait_url FROM enemies WHERE id = ?")
-            .bind(&template_id)
-            .fetch_optional(dnd_db)
-            .await
-        {
-            if let Ok(Some(url)) = row.try_get::<Option<String>, _>("portrait_url") {
-                tokens[i].image_url = Some(url);
-            }
+        if let Some(url) = enemy_template_portrait_url(dnd_db, &template_id).await {
+            tokens[i].image_url = Some(url);
         }
     }
     for t in tokens.iter_mut() {
@@ -361,7 +409,9 @@ async fn enrich_tokens_with_display_names(
                 }
                 if t.image_url.is_none() {
                     if let Ok(Some(url)) = row.try_get::<Option<String>, _>("portrait_url") {
-                        t.image_url = Some(url);
+                        if !url.trim().is_empty() {
+                            t.image_url = Some(url);
+                        }
                     }
                 }
             }
@@ -417,6 +467,8 @@ async fn handle_client_message(
             send_to_client(clients, session_id, &vp_msg).await;
             
             let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
+            let enemy_instances_join: Vec<crate::models::EnemyInstance> =
+                gs.enemy_instances.values().cloned().collect();
             
             // Send current characters list
             let characters: Vec<Character> = gs.characters.values().cloned().collect();
@@ -446,6 +498,19 @@ async fn handle_client_message(
                 info!("📤 Sent {} tokens to new player", tokens.len());
             }
             
+            for inst in enemy_instances_join {
+                let portrait_url = enemy_template_portrait_url(dnd_db, &inst.enemy_id).await;
+                let actions = enemy_template_actions_json(dnd_db, &inst.enemy_id).await;
+                let msg = ServerMessage::EnemyInstanceSpawned {
+                    instance_id: inst.id.clone(),
+                    enemy_id: inst.enemy_id.clone(),
+                    name: inst.name.clone(),
+                    portrait_url,
+                    actions,
+                };
+                send_to_client(clients, session_id, &msg).await;
+            }
+            
             // Broadcast player joined to all other clients
             let player_joined = ServerMessage::PlayerJoined {
                 player_name: player_name_clone,
@@ -470,22 +535,52 @@ async fn handle_client_message(
         }
         
         // Essential token management handlers
-        ClientMessage::PlaceToken { entity_id, entity_type, x, y } => {
+        ClientMessage::PlaceToken {
+            entity_id,
+            entity_type,
+            x,
+            y,
+            size,
+            display_name,
+            image_url,
+            hidden_from_players,
+        } => {
             use crate::models::Token;
+            
+            let map_id = {
+                let gs = game_state.read().await;
+                gs.current_map.as_ref().map(|m| m.id.clone()).unwrap_or_default()
+            };
+            
+            let image_url = image_url.filter(|s| !s.trim().is_empty());
+            let display_name = display_name
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let hidden_from_players =
+                matches!(&entity_type, crate::models::TokenType::Object) && hidden_from_players;
             
             let token = Token {
                 id: uuid::Uuid::new_v4().to_string(),
-                map_id: game_state.read().await.current_map.as_ref().map(|m| m.id.clone()).unwrap_or_default(),
-                entity_id,
-                entity_type,
+                map_id: map_id.clone(),
+                entity_id: entity_id.clone(),
+                entity_type: entity_type.clone(),
                 x,
                 y,
                 size: size.unwrap_or(1.0),
                 image_url,
-                display_name,
+                display_name: display_name.clone(),
+                hidden_from_players,
             };
             
-            game_state.write().await.add_token(token.clone());
+            info!("📍 Placing token: entity_id={}, type={:?}, pos=({}, {}), map_id='{}', display_name={:?}", 
+                entity_id, entity_type, x, y, map_id, display_name);
+            
+            let mut gs = game_state.write().await;
+            gs.add_token(token.clone());
+            let token_count = gs.tokens.len();
+            drop(gs);
+            
+            info!("✅ Token placed. Total tokens in game state: {}", token_count);
             
             // Broadcast token update to all clients
             let tokens = game_state.read().await.tokens.clone();
@@ -539,6 +634,37 @@ async fn handle_client_message(
                 drop(gs); // Release the lock
                 
                 // Broadcast updated tokens to all clients
+                let tokens = game_state.read().await.tokens.clone();
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let token_update = ServerMessage::TokenUpdate { tokens };
+                broadcast_message(clients, &token_update).await;
+            }
+        }
+
+        ClientMessage::UpdateTokenHiddenFromPlayers {
+            token_id,
+            hidden_from_players,
+        } => {
+            let gs = game_state.read().await;
+            let is_dm = gs
+                .players
+                .get(session_id)
+                .map(|p| p.is_dm)
+                .unwrap_or(false);
+            drop(gs);
+
+            if !is_dm {
+                return;
+            }
+
+            let mut gs = game_state.write().await;
+            if let Some(token) = gs.tokens.iter_mut().find(|t| t.id == token_id) {
+                if token.entity_type != crate::models::TokenType::Object {
+                    return;
+                }
+                token.hidden_from_players = hidden_from_players;
+                drop(gs);
+
                 let tokens = game_state.read().await.tokens.clone();
                 let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
@@ -1071,6 +1197,10 @@ async fn handle_client_message(
                         if let Some(img) = &token.image_url {
                             token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
                         }
+                        token_data.insert(
+                            "hidden_from_players".to_string(),
+                            serde_json::Value::Bool(token.hidden_from_players),
+                        );
                         
                         // Add HP values from characters or enemy instances
                         if token.entity_type == crate::models::TokenType::Player {
@@ -1227,6 +1357,10 @@ async fn handle_client_message(
                     if let Some(ref img) = token.image_url {
                         token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
                     }
+                    token_data.insert(
+                        "hidden_from_players".to_string(),
+                        serde_json::Value::Bool(token.hidden_from_players),
+                    );
                     
                     // Add HP values from characters or enemy instances
                     if token.entity_type == crate::models::TokenType::Player {
@@ -1408,15 +1542,177 @@ async fn handle_client_message(
                     map_state: map_row.6.clone(),
                 };
                 info!("Map loaded from DB: {} - image_path: {}", map.name, map_row.2);
-                game_state.write().await.load_map(map.clone(), clear);
-                let map_loaded = ServerMessage::MapLoaded { map };
+                
+                let mut gs = game_state.write().await;
+                gs.load_map(map.clone(), clear);
+                
+                // Restore state if map_state exists and we're not clearing tokens
+                if let Some(ref state_json) = map_row.6 {
+                    if !clear {
+                        info!("🔄 Restoring map state for: {}", map.name);
+                        
+                        if let Ok(state_data) = serde_json::from_str::<serde_json::Value>(state_json) {
+                            // Restore tokens
+                            if let Some(tokens_array) = state_data.get("tokens").and_then(|v| v.as_array()) {
+                                for token_data in tokens_array {
+                                    if let (Some(id), Some(entity_id), Some(entity_type_str), Some(x), Some(y)) = (
+                                        token_data.get("id").and_then(|v| v.as_str()),
+                                        token_data.get("entity_id").and_then(|v| v.as_str()),
+                                        token_data.get("entity_type").and_then(|v| v.as_str()),
+                                        token_data.get("x").and_then(|v| v.as_f64()),
+                                        token_data.get("y").and_then(|v| v.as_f64()),
+                                    ) {
+                                        // Parse entity type
+                                        let entity_type = if entity_type_str == "Player" {
+                                            crate::models::TokenType::Player
+                                        } else if entity_type_str == "Enemy" {
+                                            crate::models::TokenType::Enemy
+                                        } else if entity_type_str == "NPC" {
+                                            crate::models::TokenType::NPC
+                                        } else {
+                                            crate::models::TokenType::Object
+                                        };
+                                        
+                                        let size = token_data.get("size").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                                        let image_url = token_data
+                                            .get("image_url")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                            .filter(|s| !s.trim().is_empty());
+                                        let display_name = token_data
+                                            .get("display_name")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                            .filter(|s| !s.trim().is_empty());
+                                        let raw_hidden = token_data
+                                            .get("hidden_from_players")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
+                                        let hidden_from_players = entity_type
+                                            == crate::models::TokenType::Object
+                                            && raw_hidden;
+
+                                        let token = Token {
+                                            id: id.to_string(),
+                                            map_id: map_id.clone(),
+                                            entity_id: entity_id.to_string(),
+                                            entity_type: entity_type.clone(),
+                                            x: x as f32,
+                                            y: y as f32,
+                                            size,
+                                            image_url,
+                                            display_name,
+                                            hidden_from_players,
+                                        };
+                                        
+                                        // Add token if it doesn't exist
+                                        if !gs.tokens.iter().any(|t| t.id == token.id) {
+                                            gs.tokens.push(token.clone());
+                                            
+                                            // Restore HP values
+                                            if let (Some(current_hp), Some(max_hp)) = (
+                                                token_data.get("current_hp").and_then(|v| v.as_i64()),
+                                                token_data.get("max_hp").and_then(|v| v.as_i64()),
+                                            ) {
+                                                if entity_type == crate::models::TokenType::Player {
+                                                    if let Some(char) = gs.characters.get_mut(entity_id) {
+                                                        char.current_hp = current_hp as i32;
+                                                        char.max_hp = max_hp as i32;
+                                                    }
+                                                } else if entity_type == crate::models::TokenType::Enemy {
+                                                    if let Some(enemy) = gs.enemy_instances.get_mut(entity_id) {
+                                                        enemy.current_hp = current_hp as i32;
+                                                        enemy.max_hp = max_hp as i32;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                info!("✅ Restored {} tokens", tokens_array.len());
+                            }
+                            
+                            // Restore combat state if it was saved
+                            if let Some(combat_data) = state_data.get("combat") {
+                                if let Some(active) = combat_data.get("active").and_then(|v| v.as_bool()) {
+                                    if active {
+                                        if let Some(participants) = combat_data.get("participants") {
+                                            if let Ok(participants_vec) = serde_json::from_value::<Vec<CombatParticipant>>(participants.clone()) {
+                                                let round = combat_data.get("round").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+                                                let current_turn_index = combat_data.get("current_turn_index").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
+                                                
+                                                gs.combat.participants = participants_vec;
+                                                gs.combat.active = true;
+                                                gs.combat.round = round;
+                                                gs.combat.current_turn_index = current_turn_index;
+                                                
+                                                info!("✅ Restored combat state: Round {}, Turn {}", round, current_turn_index);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            warn!("⚠️ Failed to parse map state JSON");
+                        }
+                    }
+                }
+                
+                // Broadcast character list update to reflect HP changes
+                let characters: Vec<Character> = game_state.read().await.characters.values().cloned().collect();
+                let character_list = ServerMessage::CharacterList { characters, style: None };
+                broadcast_message(clients, &character_list).await;
+                
+                let player_map_viewport = gs.player_map_viewport.clone();
+                drop(gs);
+                
+                // Broadcast token update after restoring (enrich so enemy/NPC portraits resolve for all clients)
+                let tokens = game_state.read().await.tokens.clone();
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let token_update = ServerMessage::TokenUpdate { tokens };
+                broadcast_message(clients, &token_update).await;
+                
+                // Broadcast combat state if restored
+                if let Some(ref state_json) = map_row.6 {
+                    if !clear {
+                        if let Ok(state_data) = serde_json::from_str::<serde_json::Value>(state_json) {
+                            if let Some(combat_data) = state_data.get("combat") {
+                                if let Some(active) = combat_data.get("active").and_then(|v| v.as_bool()) {
+                                    if active {
+                                        let gs = game_state.read().await;
+                                        let participants = gs.combat.participants.clone();
+                                        drop(gs);
+                                        let combat_started = ServerMessage::CombatStarted { participants };
+                                        broadcast_message(clients, &combat_started).await;
+                                        
+                                        // Broadcast current turn
+                                        let gs = game_state.read().await;
+                                        if let Some(current) = gs.combat.get_current_participant() {
+                                            let turn_changed = ServerMessage::TurnChanged {
+                                                current_turn: current.id.clone(),
+                                                participant_name: current.name.clone(),
+                                            };
+                                            drop(gs);
+                                            broadcast_message(clients, &turn_changed).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                let map_loaded = ServerMessage::MapLoaded {
+                    map,
+                    player_map_viewport: player_map_viewport.clone(),
+                };
                 broadcast_message(clients, &map_loaded).await;
                 let vp_msg = ServerMessage::PlayerMapViewportUpdated {
-                    enabled: vp.enabled,
-                    x: vp.x,
-                    y: vp.y,
-                    width: vp.width,
-                    height: vp.height,
+                    enabled: player_map_viewport.enabled,
+                    x: player_map_viewport.x,
+                    y: player_map_viewport.y,
+                    width: player_map_viewport.width,
+                    height: player_map_viewport.height,
                 };
                 broadcast_message(clients, &vp_msg).await;
             } else {
@@ -1872,6 +2168,39 @@ async fn handle_client_message(
             .await
             {
                 error!("Failed to create enemy: {}", e);
+            } else {
+                // Keep all clients' enemy templates in sync (DM-added sheet attacks, etc.)
+                if let Ok(rows) = sqlx::query(
+                    "SELECT id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url FROM enemies"
+                )
+                .fetch_all(dnd_db)
+                .await
+                {
+                    use crate::models::Enemy;
+                    let enemies: Vec<Enemy> = rows.into_iter().filter_map(|row| {
+                        Some(Enemy {
+                            id: row.try_get("id").ok()?,
+                            name: row.try_get("name").ok()?,
+                            creature_type: row.try_get("creature_type").ok()?,
+                            challenge_rating: row.try_get("challenge_rating").ok()?,
+                            max_hp: row.try_get("max_hp").ok()?,
+                            armor_class: row.try_get("armor_class").ok()?,
+                            initiative_bonus: row.try_get("initiative_bonus").ok()?,
+                            strength: row.try_get("strength").ok()?,
+                            dexterity: row.try_get("dexterity").ok()?,
+                            constitution: row.try_get("constitution").ok()?,
+                            intelligence: row.try_get("intelligence").ok()?,
+                            wisdom: row.try_get("wisdom").ok()?,
+                            charisma: row.try_get("charisma").ok()?,
+                            speed: row.try_get("speed").ok()?,
+                            actions: row.try_get("actions").ok()?,
+                            description: row.try_get("description").ok()?,
+                            portrait_url: row.try_get("portrait_url").ok()?,
+                        })
+                    }).collect();
+                    let enemy_list = ServerMessage::EnemyList { enemies };
+                    broadcast_message(clients, &enemy_list).await;
+                }
             }
         }
         
@@ -1899,7 +2228,21 @@ async fn handle_client_message(
                     armor_class,
                     initiative_bonus,
                 };
-                game_state.write().await.add_enemy_instance(instance);
+                let portrait_url = row
+                    .try_get::<Option<String>, _>("portrait_url")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.trim().is_empty());
+                let actions = row.try_get::<String, _>("actions").ok();
+                game_state.write().await.add_enemy_instance(instance.clone());
+                let spawned = ServerMessage::EnemyInstanceSpawned {
+                    instance_id: instance.id.clone(),
+                    enemy_id: instance.enemy_id.clone(),
+                    name: instance.name.clone(),
+                    portrait_url,
+                    actions,
+                };
+                broadcast_message(clients, &spawned).await;
             }
         }
         
@@ -2224,6 +2567,78 @@ async fn save_game_state_internal(
         "path": file_path.display().to_string(),
         "message": "Game state saved successfully"
     })))
+}
+
+/// Campaign notes files live in `campaign_notes/<id>.json`. `id` must be a single path segment (no slashes, no `..`).
+fn sanitize_campaign_notes_file_id(id: &str) -> Option<String> {
+    if id.is_empty() || id.len() > 220 {
+        return None;
+    }
+    if id.contains("..") || id.contains('/') || id.contains('\\') {
+        return None;
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+async fn get_campaign_notes(Path(id): Path<String>) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
+    let id = sanitize_campaign_notes_file_id(&id).ok_or(StatusCode::BAD_REQUEST)?;
+    let dir = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("campaign_notes");
+    let path = dir.join(format!("{id}.json"));
+    if !path.is_file() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| {
+            error!("campaign_notes read {}: {}", path.display(), e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+        error!("campaign_notes parse {}: {}", path.display(), e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(axum::response::Json(v))
+}
+
+async fn put_campaign_notes(Path(id): Path<String>, body: axum::body::Body) -> Result<StatusCode, StatusCode> {
+    let id = sanitize_campaign_notes_file_id(&id).ok_or(StatusCode::BAD_REQUEST)?;
+    let body_bytes = axum::body::to_bytes(body, 8_000_000).await.map_err(|e| {
+        warn!("campaign_notes body read: {}", e);
+        StatusCode::BAD_REQUEST
+    })?;
+    let v: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
+        warn!("campaign_notes JSON: {}", e);
+        StatusCode::BAD_REQUEST
+    })?;
+    if !v.is_object() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let dir = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("campaign_notes");
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| {
+        error!("campaign_notes mkdir: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let path = dir.join(format!("{id}.json"));
+    let json_string = serde_json::to_string_pretty(&v).map_err(|e| {
+        error!("campaign_notes serialize: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    tokio::fs::write(&path, json_string).await.map_err(|e| {
+        error!("campaign_notes write {}: {}", path.display(), e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    info!("💾 Campaign notes saved: {}", path.display());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn delete_saved_state(Path(filename): Path<String>) -> Result<StatusCode, StatusCode> {

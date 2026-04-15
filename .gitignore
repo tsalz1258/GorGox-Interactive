@@ -27,5 +27,7 @@ Thumbs.db
 # Logs
 *.log
 
+# Per-character campaign notes (server writes JSON here)
+campaign_notes/
 
 

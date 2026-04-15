@@ -73,6 +73,11 @@ body {
     display: none !important;
 }
 
+/* Spell / tech / force / item tooltips — must paint above #playerActionBar (JS sets bar to z-index 99999) */
+#spellTooltip {
+    z-index: 200000 !important;
+}
+
 /* Player Action Bar - full width across entire bottom of screen */
 #playerActionBar.player-action-bar,
 .player-action-bar {

@@ -80,8 +80,16 @@ pub struct Token {
     pub y: f32,
     pub size: f32, // Size in grid squares (1.0 = medium, 2.0 = large, etc.)
     pub image_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "displayName",
+        alias = "name"
+    )]
     pub display_name: Option<String>, // Name to show on the map (e.g. "Goblin 1")
+    /// When true, non-DM clients should not draw this token (DM-only secrets; typically used for Object tokens).
+    #[serde(default)]
+    pub hidden_from_players: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -152,10 +160,27 @@ pub enum ClientMessage {
     ClearMap, // Clear current map and all tokens
     
     // Token management
-    PlaceToken { entity_id: String, entity_type: TokenType, x: f32, y: f32, size: Option<f32>, #[serde(default)] display_name: Option<String> },
+    PlaceToken {
+        entity_id: String,
+        entity_type: TokenType,
+        x: f32,
+        y: f32,
+        size: Option<f32>,
+        #[serde(default, alias = "displayName", alias = "name")]
+        display_name: Option<String>,
+        #[serde(default)]
+        image_url: Option<String>,
+        #[serde(default)]
+        hidden_from_players: bool,
+    },
     MoveToken { token_id: String, x: f32, y: f32 },
     RemoveToken { token_id: String },
     UpdateTokenSize { token_id: String, size: f32 },
+    /// DM only: toggle object visibility for players (token must be Object).
+    UpdateTokenHiddenFromPlayers {
+        token_id: String,
+        hidden_from_players: bool,
+    },
     
     // Combat
     StartCombat { #[serde(default)] token_ids: Option<Vec<String>> },
@@ -282,6 +307,17 @@ pub enum ServerMessage {
     // Data responses
     CharacterList { characters: Vec<Character>, style: Option<String> },
     EnemyList { enemies: Vec<Enemy> },
+    /// Lets all clients (especially players) map instance token entity_id → template portrait
+    EnemyInstanceSpawned {
+        instance_id: String,
+        enemy_id: String,
+        name: String,
+        #[serde(default)]
+        portrait_url: Option<String>,
+        /// Full template `actions` JSON from DB (includes sheet_attacks) so tokens match DB even if client template cache is stale.
+        #[serde(default)]
+        actions: Option<String>,
+    },
     MapList { maps: Vec<Map> },
     PlayerList { players: Vec<String> },
     
