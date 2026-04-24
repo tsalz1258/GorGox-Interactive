@@ -159,6 +159,7 @@ pub async fn start_server(
         .route("/api/test", get(|| async { 
             axum::response::Json(serde_json::json!({"status": "ok", "message": "API is working"}))
         }))
+        .route("/api/maps", get(list_maps_http))
         .route("/api/saves", get(list_saved_states))
         .route("/api/saves/:filename", get(get_saved_state))
         .route("/api/saves/:filename", post(save_game_state_handler))
@@ -183,6 +184,7 @@ pub async fn start_server(
     info!("Server listening on http://0.0.0.0:3000");
     info!("✅ Save/Load API endpoints available:");
     info!("   GET  /api/test - Test endpoint");
+    info!("   GET  /api/maps - List maps (compact JSON for UI)");
     info!("   GET  /api/saves - List saved states");
     info!("   GET  /api/saves/:filename - Get saved state");
     info!("   POST /api/saves/:filename - Save game state");
@@ -420,6 +422,112 @@ async fn enrich_tokens_with_display_names(
     tokens
 }
 
+/// Compact rows for `MapList` / GET /api/maps — never ship full `map_state` (breaks WebSocket JSON size).
+///
+/// NOTE: Historically, maps have existed in both `gorgox_dnd.db` and `gorgox_starwars.db`.
+/// We treat maps as shared assets and list/resolve them from either DB, without deleting anything.
+async fn fetch_maps_for_list(dnd_db: &Database, starwars_db: &Database) -> Vec<crate::models::Map> {
+    use crate::models::Map;
+    use std::collections::HashMap;
+
+    async fn fetch_one(pool: &Database) -> Vec<Map> {
+        // Backward compatible: older DBs may not have the `map_state` column yet.
+        // In that case, list maps anyway (state indicator will be absent).
+        let with_state = sqlx::query(
+            "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps ORDER BY name",
+        )
+        .fetch_all(pool)
+        .await;
+
+        match with_state {
+            Ok(rows) => {
+                return rows
+                    .into_iter()
+                    .map(|row| {
+                        let full = row.get::<Option<String>, _>(6);
+                        Map {
+                            id: row.get::<String, _>(0),
+                            name: row.get::<String, _>(1),
+                            image_path: row.get::<String, _>(2),
+                            grid_size: row.get::<i32, _>(3),
+                            width: row.get::<i32, _>(4),
+                            height: row.get::<i32, _>(5),
+                            // Placeholder only: "has state" indicator for UI
+                            map_state: full
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|_| "1".to_string()),
+                        }
+                    })
+                    .collect();
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.to_lowercase().contains("map_state") && msg.to_lowercase().contains("no such column") {
+                    // fallback below
+                } else {
+                    error!("fetch_maps_for_list (pool): {}", e);
+                    return Vec::new();
+                }
+            }
+        }
+
+        match sqlx::query("SELECT id, name, image_path, grid_size, width, height FROM maps ORDER BY name")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| Map {
+                    id: row.get::<String, _>(0),
+                    name: row.get::<String, _>(1),
+                    image_path: row.get::<String, _>(2),
+                    grid_size: row.get::<i32, _>(3),
+                    width: row.get::<i32, _>(4),
+                    height: row.get::<i32, _>(5),
+                    map_state: None,
+                })
+                .collect(),
+            Err(e) => {
+                error!("fetch_maps_for_list (fallback, pool): {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    let mut merged: HashMap<String, Map> = HashMap::new();
+    for m in fetch_one(dnd_db).await {
+        merged.insert(m.id.clone(), m);
+    }
+    for m in fetch_one(starwars_db).await {
+        merged
+            .entry(m.id.clone())
+            .and_modify(|existing| {
+                // Prefer showing "has saved state" if either DB has it
+                if existing.map_state.is_none() && m.map_state.is_some() {
+                    existing.map_state = m.map_state.clone();
+                }
+            })
+            .or_insert(m);
+    }
+
+    let mut maps: Vec<Map> = merged.into_values().collect();
+    maps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    maps
+}
+
+async fn list_maps_http(
+    State((dnd_db, starwars_db, _, _, _)): State<(
+        Database,
+        Database,
+        Arc<RwLock<GameState>>,
+        Clients,
+        broadcast::Sender<()>,
+    )>,
+) -> axum::response::Json<serde_json::Value> {
+    let maps = fetch_maps_for_list(&dnd_db, &starwars_db).await;
+    axum::response::Json(serde_json::json!({ "maps": maps }))
+}
+
 async fn handle_client_message(
     msg: ClientMessage,
     session_id: &str,
@@ -447,7 +555,7 @@ async fn handle_client_message(
             // Send current map if loaded
             if let Some(ref map) = gs.current_map {
                 let map_loaded = ServerMessage::MapLoaded {
-                    map: map.clone(),
+                    map: map.for_client_wire(),
                     player_map_viewport: gs.player_map_viewport.clone(),
                 };
                 send_to_client(clients, session_id, &map_loaded).await;
@@ -1040,7 +1148,7 @@ async fn handle_client_message(
             let gs = game_state.read().await;
             if let Some(ref map) = gs.current_map {
                 let map_loaded = ServerMessage::MapLoaded {
-                    map: map.clone(),
+                    map: map.for_client_wire(),
                     player_map_viewport: gs.player_map_viewport.clone(),
                 };
                 send_to_client(clients, session_id, &map_loaded).await;
@@ -1154,25 +1262,54 @@ async fn handle_client_message(
             let map_id = Uuid::new_v4().to_string();
             let image_path = format!("static/maps/{}.png", map_id);
             
-            // Decode and save image
-            let image_data_clean = image_data.strip_prefix("data:image/png;base64,").unwrap_or(&image_data);
-            if let Ok(decoded) = general_purpose::STANDARD.decode(image_data_clean) {
-                if let Some(parent) = Path::new(&image_path).parent() {
-                    if let Err(e) = fs::create_dir_all(parent) {
-                        error!("Failed to create maps directory: {}", e);
-                    }
+            // Decode and save image FIRST. Never insert a map row if the file isn't on disk —
+            // that produced MapLoaded + 404 image forever (looked like "maps don't load").
+            let raw_b64: &str = image_data
+                .find(";base64,")
+                .map(|i| &image_data[i + ";base64,".len()..])
+                .unwrap_or(image_data.as_str())
+                .trim();
+            let image_data_clean: String = raw_b64.chars().filter(|c| !c.is_whitespace()).collect();
+            let decoded = match general_purpose::STANDARD.decode(image_data_clean.as_bytes()) {
+                Ok(bytes) if !bytes.is_empty() => bytes,
+                Ok(_) => {
+                    let err = ServerMessage::Error {
+                        message: "CreateMap failed: decoded image was empty.".to_string(),
+                    };
+                    send_to_client(clients, session_id, &err).await;
+                    return;
                 }
-                match fs::write(&image_path, decoded) {
-                    Ok(_) => {
-                        info!("Map image saved successfully: {}", image_path);
-                    }
-                    Err(e) => {
-                        error!("Failed to save map image to {}: {}", image_path, e);
-                    }
+                Err(e) => {
+                    error!("Failed to decode base64 image data: {}", e);
+                    let err = ServerMessage::Error {
+                        message: format!(
+                            "CreateMap failed: could not decode image ({}). Try re-exporting as PNG/JPEG.",
+                            e
+                        ),
+                    };
+                    send_to_client(clients, session_id, &err).await;
+                    return;
                 }
-            } else {
-                error!("Failed to decode base64 image data");
+            };
+            if let Some(parent) = Path::new(&image_path).parent() {
+                if let Err(e) = fs::create_dir_all(parent) {
+                    error!("Failed to create maps directory: {}", e);
+                    let err = ServerMessage::Error {
+                        message: format!("CreateMap failed: could not create maps folder: {}", e),
+                    };
+                    send_to_client(clients, session_id, &err).await;
+                    return;
+                }
             }
+            if let Err(e) = fs::write(&image_path, decoded) {
+                error!("Failed to save map image to {}: {}", image_path, e);
+                let err = ServerMessage::Error {
+                    message: format!("CreateMap failed: could not write map image: {}", e),
+                };
+                send_to_client(clients, session_id, &err).await;
+                return;
+            }
+            info!("Map image saved successfully: {}", image_path);
             
             // Save current state if there are tokens on current map
             let gs = game_state.read().await;
@@ -1249,7 +1386,7 @@ async fn handle_client_message(
                 map_state: map_state_json.clone(),
             };
             
-            // Save to database
+            // Save to both style DBs so list/load stays consistent regardless of campaign DB.
             if let Err(e) = sqlx::query(
                 "INSERT OR REPLACE INTO maps (id, name, image_path, grid_size, width, height, map_state) VALUES (?, ?, ?, ?, ?, ?, ?)"
             )
@@ -1263,7 +1400,28 @@ async fn handle_client_message(
             .execute(dnd_db)
             .await
             {
-                error!("Failed to save map to database: {}", e);
+                error!("Failed to save map to D&D database: {}", e);
+                let err = ServerMessage::Error {
+                    message: format!("CreateMap failed: could not save map metadata: {}", e),
+                };
+                send_to_client(clients, session_id, &err).await;
+                let _ = fs::remove_file(&image_path);
+                return;
+            }
+            if let Err(e) = sqlx::query(
+                "INSERT OR REPLACE INTO maps (id, name, image_path, grid_size, width, height, map_state) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&map_id)
+            .bind(&name)
+            .bind(&map.image_path)
+            .bind(50)
+            .bind(width)
+            .bind(height)
+            .bind(&map_state_json)
+            .execute(starwars_db)
+            .await
+            {
+                warn!("Failed to mirror map to Star Wars database (map still saved in D&D DB): {}", e);
             }
             
             let mut gs = game_state.write().await;
@@ -1272,7 +1430,7 @@ async fn handle_client_message(
             drop(gs);
             let vp = game_state.read().await.player_map_viewport.clone();
             let map_loaded = ServerMessage::MapLoaded {
-                map,
+                map: map.for_client_wire(),
                 player_map_viewport: vp.clone(),
             };
             broadcast_message(clients, &map_loaded).await;
@@ -1416,6 +1574,15 @@ async fn handle_client_message(
                 broadcast_message(clients, &error).await;
             } else {
                 info!("✅ Map state saved successfully for map: {} ({} tokens)", actual_map_id, tokens_count);
+                // Mirror to Star Wars DB when present (maps are shared assets across style DBs).
+                if let Err(e) = sqlx::query("UPDATE maps SET map_state = ? WHERE id = ?")
+                    .bind(&map_state_json)
+                    .bind(&actual_map_id)
+                    .execute(starwars_db)
+                    .await
+                {
+                    tracing::debug!("Star Wars DB map_state mirror skipped/failed (non-fatal): {}", e);
+                }
                 // Broadcast success message
                 let success = ServerMessage::Error { 
                     message: format!("✅ Map state saved successfully! ({} tokens, {} bytes)", tokens_count, map_state_json.len()) 
@@ -1425,26 +1592,9 @@ async fn handle_client_message(
         }
         
         ClientMessage::ListMaps => {
-            if let Ok(rows) = sqlx::query(
-                "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps ORDER BY name"
-            )
-            .fetch_all(dnd_db)
-            .await
-            {
-                let maps: Vec<Map> = rows.into_iter().map(|row| {
-                    Map {
-                        id: row.get::<String, _>(0),
-                        name: row.get::<String, _>(1),
-                        image_path: row.get::<String, _>(2),
-                        grid_size: row.get::<i32, _>(3),
-                        width: row.get::<i32, _>(4),
-                        height: row.get::<i32, _>(5),
-                        map_state: row.get::<Option<String>, _>(6),
-                    }
-                }).collect();
-                let map_list = ServerMessage::MapList { maps };
-                broadcast_message(clients, &map_list).await;
-            }
+            let maps = fetch_maps_for_list(dnd_db, starwars_db).await;
+            let map_list = ServerMessage::MapList { maps };
+            broadcast_message(clients, &map_list).await;
         }
         
         ClientMessage::DeleteMap { map_id } => {
@@ -1483,36 +1633,20 @@ async fn handle_client_message(
                         }
                     }
                     
-                    // Remove from game state if it's the current map
-                    let mut gs = game_state.write().await;
-                    if let Some(ref current) = gs.current_map {
-                        if current.id == map_id {
-                            gs.current_map = None;
-                            info!("✅ Removed deleted map from current map");
+                    // Remove from game state if it's the current map (release lock before DB work)
+                    {
+                        let mut gs = game_state.write().await;
+                        if let Some(ref current) = gs.current_map {
+                            if current.id == map_id {
+                                gs.current_map = None;
+                                info!("✅ Removed deleted map from current map");
+                            }
                         }
                     }
                     
-                    // Broadcast updated map list
-                    if let Ok(rows) = sqlx::query(
-                        "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps ORDER BY name"
-                    )
-                    .fetch_all(dnd_db)
-                    .await
-                    {
-                        let maps: Vec<Map> = rows.into_iter().map(|row| {
-                            Map {
-                                id: row.get::<String, _>(0),
-                                name: row.get::<String, _>(1),
-                                image_path: row.get::<String, _>(2),
-                                grid_size: row.get::<i32, _>(3),
-                                width: row.get::<i32, _>(4),
-                                height: row.get::<i32, _>(5),
-                                map_state: row.get::<Option<String>, _>(6),
-                            }
-                        }).collect();
-                        let map_list = ServerMessage::MapList { maps };
-                        broadcast_message(clients, &map_list).await;
-                    }
+                    let maps = fetch_maps_for_list(dnd_db, starwars_db).await;
+                    let map_list = ServerMessage::MapList { maps };
+                    broadcast_message(clients, &map_list).await;
                 }
             } else {
                 warn!("Map {} not found in database", map_id);
@@ -1525,13 +1659,28 @@ async fn handle_client_message(
             // Load map from database
             let clear = clear_tokens.unwrap_or(true); // Default to true for backward compatibility
             info!("Loading map: {} (clear_tokens: {})", map_id, clear);
-            if let Ok(Some(map_row)) = sqlx::query_as::<_, (String, String, String, i32, i32, i32, Option<String>)>(
-                "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps WHERE id = ?"
+            // Maps may exist in either DB (D&D or Star Wars). Try D&D first, then fall back.
+            let mut map_row = sqlx::query_as::<_, (String, String, String, i32, i32, i32, Option<String>)>(
+                "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps WHERE id = ?",
             )
             .bind(&map_id)
             .fetch_optional(dnd_db)
             .await
-            {
+            .ok()
+            .flatten();
+
+            if map_row.is_none() {
+                map_row = sqlx::query_as::<_, (String, String, String, i32, i32, i32, Option<String>)>(
+                    "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps WHERE id = ?",
+                )
+                .bind(&map_id)
+                .fetch_optional(starwars_db)
+                .await
+                .ok()
+                .flatten();
+            }
+
+            if let Some(map_row) = map_row {
                 let map = Map {
                     id: map_row.0.clone(),
                     name: map_row.1.clone(),
@@ -1658,15 +1807,29 @@ async fn handle_client_message(
                     }
                 }
                 
-                // Broadcast character list update to reflect HP changes
-                let characters: Vec<Character> = game_state.read().await.characters.values().cloned().collect();
-                let character_list = ServerMessage::CharacterList { characters, style: None };
-                broadcast_message(clients, &character_list).await;
-                
+                // Clone while write lock held; do not call read() here — would deadlock with `gs`.
+                let characters: Vec<Character> = gs.characters.values().cloned().collect();
                 let player_map_viewport = gs.player_map_viewport.clone();
                 drop(gs);
                 
-                // Broadcast token update after restoring (enrich so enemy/NPC portraits resolve for all clients)
+                let character_list = ServerMessage::CharacterList { characters, style: None };
+                broadcast_message(clients, &character_list).await;
+                
+                // Clients need MapLoaded (canvas size + image) BEFORE TokenUpdate applies tokens.
+                let map_loaded = ServerMessage::MapLoaded {
+                    map: map.for_client_wire(),
+                    player_map_viewport: player_map_viewport.clone(),
+                };
+                broadcast_message(clients, &map_loaded).await;
+                let vp_msg = ServerMessage::PlayerMapViewportUpdated {
+                    enabled: player_map_viewport.enabled,
+                    x: player_map_viewport.x,
+                    y: player_map_viewport.y,
+                    width: player_map_viewport.width,
+                    height: player_map_viewport.height,
+                };
+                broadcast_message(clients, &vp_msg).await;
+                
                 let tokens = game_state.read().await.tokens.clone();
                 let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
@@ -1701,23 +1864,11 @@ async fn handle_client_message(
                         }
                     }
                 }
-                
-                let map_loaded = ServerMessage::MapLoaded {
-                    map,
-                    player_map_viewport: player_map_viewport.clone(),
-                };
-                broadcast_message(clients, &map_loaded).await;
-                let vp_msg = ServerMessage::PlayerMapViewportUpdated {
-                    enabled: player_map_viewport.enabled,
-                    x: player_map_viewport.x,
-                    y: player_map_viewport.y,
-                    width: player_map_viewport.width,
-                    height: player_map_viewport.height,
-                };
-                broadcast_message(clients, &vp_msg).await;
             } else {
                 warn!("Map not found in database: {}", map_id);
-                let error = ServerMessage::Error { message: format!("Map not found: {}", map_id) };
+                let error = ServerMessage::Error {
+                    message: format!("Map not found: {}", map_id),
+                };
                 broadcast_message(clients, &error).await;
             }
         }

@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v70'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v82'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 var characterSheetListRefreshDebounceId = null; // CharacterList → debounced sheet re-render (see scheduleDebouncedCharacterSheetRefresh)
@@ -89,6 +89,126 @@ let playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
 let dmPlayerViewportToolActive = false;
 let playerViewportDrag = null; // { mode, startMx, startMy, ox, oy, ow, oh }
 let playerViewportSendTimer = null;
+
+// Save/load: wait for server MapLoaded after LoadMap / CreateMap (do not set currentMap early — breaks token clear).
+let pendingMapLoadPromiseResolver = null;
+let pendingMapLoadPromiseRejecter = null;
+let pendingMapLoadTimeoutId = null;
+
+function clearPendingMapLoadPromise() {
+    if (pendingMapLoadTimeoutId) {
+        clearTimeout(pendingMapLoadTimeoutId);
+        pendingMapLoadTimeoutId = null;
+    }
+    pendingMapLoadPromiseResolver = null;
+    pendingMapLoadPromiseRejecter = null;
+}
+
+function waitForNextMapLoaded(timeoutMs) {
+    return new Promise((resolve, reject) => {
+        if (pendingMapLoadPromiseResolver || pendingMapLoadPromiseRejecter) {
+            clearPendingMapLoadPromise();
+        }
+        pendingMapLoadPromiseResolver = resolve;
+        pendingMapLoadPromiseRejecter = reject;
+        pendingMapLoadTimeoutId = setTimeout(() => {
+            clearPendingMapLoadPromise();
+            reject(new Error('Timed out waiting for map load'));
+        }, timeoutMs);
+    });
+}
+
+function resolvePendingMapLoad(message) {
+    if (pendingMapLoadPromiseResolver) {
+        pendingMapLoadPromiseResolver(message);
+        clearPendingMapLoadPromise();
+    }
+}
+
+function rejectPendingMapLoad(error) {
+    if (pendingMapLoadPromiseRejecter) {
+        pendingMapLoadPromiseRejecter(error);
+        clearPendingMapLoadPromise();
+    }
+}
+
+async function fetchImageAsDataUrl(imagePath) {
+    if (!imagePath) return null;
+    try {
+        const url = new URL(imagePath, window.location.origin).href;
+        const response = await fetch(url, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const blob = await response.blob();
+        return await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                if (reader.result) resolve(reader.result.toString());
+                else reject(new Error('FileReader produced no data'));
+            };
+            reader.onerror = () => reject(new Error('FileReader error'));
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.warn('⚠️ Could not fetch map image for restore fallback:', e);
+        return null;
+    }
+}
+
+/** Ask server to load map by id; do not assign global currentMap first (keeps MapLoaded mapChanged correct). */
+async function openOrCreateMapForSavedState(savedMap) {
+    if (!savedMap) return;
+    const mapId = savedMap.id;
+    console.log('📂 Restore map from save (await server):', savedMap.name, mapId);
+    try {
+        const loadPromise = waitForNextMapLoaded(180000);
+        sendMessage({ type: 'LoadMap', map_id: mapId, clear_tokens: true });
+        await loadPromise;
+        console.log('✅ Server loaded map:', mapId);
+    } catch (e) {
+        console.warn('⚠️ LoadMap failed for id', mapId, e);
+        if (savedMap.image_path) {
+            const imageData = await fetchImageAsDataUrl(savedMap.image_path);
+            if (imageData) {
+                try {
+                    const createPromise = waitForNextMapLoaded(180000);
+                    sendMessage({
+                        type: 'CreateMap',
+                        name: savedMap.name || 'Restored Map',
+                        image_data: imageData,
+                        width: savedMap.width || 800,
+                        height: savedMap.height || 600
+                    });
+                    await createPromise;
+                    console.log('✅ Fallback CreateMap succeeded');
+                } catch (e2) {
+                    console.warn('❌ Fallback CreateMap failed:', e2);
+                }
+            }
+        }
+    }
+}
+
+async function refreshSavedMapsListFromHttp() {
+    const container = document.getElementById('savedMapsList');
+    try {
+        const res = await fetch(new URL('/api/maps', window.location.href).href, { cache: 'no-store' });
+        if (!res.ok) {
+            // Older servers / alternate deployments may not expose /api/maps (404). We always request WS ListMaps too,
+            // so don't replace the UI with an error in that case — just let WS populate.
+            if (res.status !== 404 && container) {
+                container.innerHTML = '<div style="padding:10px;color:#f88;">Could not load map list (HTTP ' + res.status + ').</div>';
+            }
+            return;
+        }
+        const data = await res.json();
+        renderSavedMapsList(Array.isArray(data.maps) ? data.maps : []);
+    } catch (err) {
+        console.warn('[maps] /api/maps', err);
+        if (container) {
+            container.innerHTML = '<div style="padding:10px;color:#f88;">Could not load map list (network).</div>';
+        }
+    }
+}
 
 // Ping system
 let activePings = []; // Array of active pings: [{x, y, timestamp, playerName, id}]
@@ -280,6 +400,8 @@ window.connect = connect;
 function sendMessage(message) {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(message));
+    } else {
+        console.warn('[sendMessage] WebSocket not open; dropped:', message && message.type);
     }
 }
 
@@ -889,23 +1011,55 @@ function handleServerMessage(message) {
             break;
             
         case 'MapLoaded':
+            if (!message.map || !message.map.id) {
+                rejectPendingMapLoad(new Error('MapLoaded missing map'));
+                break;
+            }
+            const prevMapId = currentMap ? currentMap.id : null;
+            const newMapId = message.map.id;
+            const mapIdChanged = prevMapId !== newMapId;
             currentMap = message.map;
-            if (canvas && currentMap.width && currentMap.height) {
+            if (currentMap) {
+                currentMap.image = null;
+                currentMap._imgLoadGen = (currentMap._imgLoadGen || 0) + 1;
+            }
+            resolvePendingMapLoad(message);
+            isDragging = false;
+            playerViewportDrag = null;
+            if (currentMap && currentMap.grid_size != null && !isNaN(Number(currentMap.grid_size)) && Number(currentMap.grid_size) > 0) {
+                gridSize = Number(currentMap.grid_size);
+            }
+            if (mapIdChanged) {
+                tokens = [];
+                selectedToken = null;
+                measurementShapes = [];
+                rulerStart = null;
+                rulerEnd = null;
+                playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+                dmPlayerViewportToolActive = false;
+                playerViewportDrag = null;
+                syncPlayerViewportCheckbox();
+                updateTokenInfo();
+            }
+            if (canvas && currentMap && currentMap.width && currentMap.height) {
                 canvas.width = currentMap.width;
                 canvas.height = currentMap.height;
             }
-            // Viewport is bundled with the map so players always get fog state in the same tick
-            // (avoids only seeing full map if a separate WS message was dropped or reordered).
             if (message.player_map_viewport != null && typeof message.player_map_viewport === 'object') {
                 applyPlayerMapViewportFromServer(message.player_map_viewport);
             }
+            if (message.map.name) {
+                const mapNameElement = document.getElementById('currentMapName');
+                if (mapNameElement) mapNameElement.textContent = message.map.name;
+            }
             console.log('🗺️ MapLoaded - image_path:', message.map.image_path);
-            loadMapImage(message.map.image_path);
-            renderCanvas(); // Draw immediately so tokens show even before map image loads
+            loadMapImage(message.map.image_path, currentMap && currentMap._imgLoadGen);
+            renderCanvas();
             addLogEntry(`Map loaded: ${message.map.name}`, 'info');
             break;
             
         case 'MapCleared':
+            rejectPendingMapLoad(new Error('Map cleared'));
             console.log('🗑️ MapCleared message received - clearing map and tokens (same as local clear)');
             
             // EXACT SAME CLEARING LOGIC as clearCurrentMap() function
@@ -1151,16 +1305,9 @@ function handleServerMessage(message) {
             else if (isFail) playNat1Sound();
             break;
             
-        case 'TokenUpdate':
-            console.log('📍 ========== TOKEN UPDATE ==========');
-            console.log('Received tokens:', message.tokens);
-            console.log('Number of tokens:', Array.isArray(message.tokens) ? message.tokens.length : 0);
-            
-            // CRITICAL: Before updating tokens, verify NPC instances still exist in enemies array
+        case 'TokenUpdate': {
+            // Update tokens array - this is authoritative from server (avoid heavy console on hot path)
             const npcInstancesBefore = enemies.filter(e => e && e.isNPC && e.npcData);
-            console.log('📋 NPC instances before token update:', npcInstancesBefore.length);
-            
-            // Update tokens array - this is authoritative from server
             const serverTokens = message.tokens || [];
             
             // CRITICAL: Preserve manually set sizes from local tokens array
@@ -1245,7 +1392,9 @@ function handleServerMessage(message) {
                 updateInitiativeList();
             }
             break;
-            
+
+        }
+
         case 'TokenList':
             console.log('📋 Received TokenList from server:', message.tokens);
             if (Array.isArray(message.tokens)) {
@@ -2059,17 +2208,22 @@ function handleServerMessage(message) {
             }
             break;
             
-        case 'Error':
-            // Check if this is actually a success message (server uses Error for both)
-            if (message.message.includes('saved successfully') || message.message.includes('Map state saved')) {
-                addLogEntry(message.message, 'info');
-                // Show a brief success notification instead of alert
-                console.log('✅', message.message);
+        case 'Error': {
+            const errText = message.message || '';
+            if (errText.includes('Map not found')) {
+                rejectPendingMapLoad(new Error(errText));
+            }
+            if (errText.includes('saved successfully') || errText.includes('Map state saved')) {
+                addLogEntry(errText, 'info');
+                console.log('✅', errText);
+            } else if (errText.includes('Map not found')) {
+                addLogEntry(errText, 'warning');
             } else {
-                alert('Error: ' + message.message);
-                addLogEntry('Error: ' + message.message, 'damage');
+                alert('Error: ' + errText);
+                addLogEntry('Error: ' + errText, 'damage');
             }
             break;
+        }
             
         case 'AllCustomSpells':
             handleCustomSpellsList(message);
@@ -3564,26 +3718,15 @@ function drawToken(token) {
     ctx.shadowBlur = 0;
 }
 
-function loadMapImage(imagePath) {
+function loadMapImage(imagePath, expectedGen) {
     if (!imagePath) {
         console.error('❌ No image path provided');
         return;
     }
-    
-    const img = new Image();
-    img.onload = () => {
-        currentMap.image = img;
-        renderCanvas();
-    };
-    img.onerror = () => {
-        console.error('❌ Failed to load map image:', imagePath);
-    };
-    
-    // FIX: Use window.location.origin to create absolute URL
-    // This prevents the browser from treating 'static' as a hostname
-    let path = String(imagePath).trim();
-    
-    // Remove any existing protocol/hostname
+    if (!currentMap) return;
+
+    let path = String(imagePath).trim().replace(/\\/g, '/');
+
     if (path.startsWith('http://') || path.startsWith('https://')) {
         try {
             const url = new URL(path);
@@ -3594,15 +3737,41 @@ function loadMapImage(imagePath) {
     } else if (path.startsWith('//')) {
         path = path.replace(/^\/\/[^\/]+/, '');
     }
-    
-    // Ensure it starts with /
-    if (!path.startsWith('/')) {
-        path = '/' + path;
-    }
-    
-    // Use current origin + path to create absolute URL
-    // This ensures it's always relative to the current server
-    img.src = window.location.origin + path;
+    if (!path.startsWith('/')) path = '/' + path;
+
+    const abs = new URL(path, window.location.origin).href + (path.includes('?') ? '&' : '?') + 'v=' + Date.now();
+
+    const applyLoadedImage = (img) => {
+        if (!currentMap || (expectedGen != null && currentMap._imgLoadGen !== expectedGen)) return;
+        currentMap.image = img;
+        renderCanvas();
+    };
+
+    const img = new Image();
+    try { img.decoding = 'async'; } catch (e) {}
+    img.onload = () => applyLoadedImage(img);
+    img.onerror = async () => {
+        try {
+            const res = await fetch(abs, { cache: 'no-store', credentials: 'same-origin' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const img2 = new Image();
+            try { img2.decoding = 'async'; } catch (e2) {}
+            img2.onload = () => {
+                applyLoadedImage(img2);
+                URL.revokeObjectURL(url);
+            };
+            img2.onerror = () => {
+                URL.revokeObjectURL(url);
+                console.error('❌ Failed to load map image (fetch fallback):', abs);
+            };
+            img2.src = url;
+        } catch (e) {
+            console.error('❌ Failed to load map image:', abs, e);
+        }
+    };
+    img.src = abs;
 }
 
 // Canvas Interaction
@@ -7180,9 +7349,15 @@ function updateCombatParticipantHP(targetId, newHp) {
 
 // Map Management
 function showMapUpload() {
-    document.getElementById('mapUploadModal').classList.add('active');
-    // Request list of saved maps
+    const modal = document.getElementById('mapUploadModal');
+    if (!modal) return;
+    modal.classList.add('active');
+    const listEl = document.getElementById('savedMapsList');
+    if (listEl) {
+        listEl.innerHTML = '<div style="padding:12px;color:#888;text-align:center;">Loading saved maps…</div>';
+    }
     sendMessage({ type: 'ListMaps' });
+    void refreshSavedMapsListFromHttp();
 }
 
 function uploadMap() {
@@ -17583,6 +17758,97 @@ async function loadGameState() {
 
 // Load game state from data object (used by both file and localStorage loading)
 async function loadGameStateFromData(gameState, sourceName) {
+    // Fail-safe load: never leave the app in a "bricked" half-loaded state.
+    const prevSnapshot = {
+        selectedStyle,
+        currentMap: currentMap ? { ...currentMap } : null,
+        tokens: Array.isArray(tokens) ? tokens.map(t => ({ ...t })) : [],
+        characters: Array.isArray(characters) ? characters.map(c => ({ ...c })) : [],
+        enemies: Array.isArray(enemies) ? enemies.map(e => ({ ...e })) : [],
+        combatState: combatState ? JSON.parse(JSON.stringify(combatState)) : null,
+        gridSize,
+        zoom,
+        panX,
+        panY,
+        playerMapViewport: playerMapViewport ? { ...playerMapViewport } : null,
+        dmPlayerViewportToolActive,
+        measurementShapes: Array.isArray(measurementShapes) ? measurementShapes.map(s => ({ ...s })) : [],
+        rulerStart: rulerStart ? { ...rulerStart } : null,
+        rulerEnd: rulerEnd ? { ...rulerEnd } : null,
+        rulerActive,
+        selectedTokenId: selectedToken ? selectedToken.id : null,
+    };
+
+    // Clear any stale async state that can break subsequent loads.
+    clearPendingMapLoadPromise();
+    pendingSkipTokenMoveOnNextMouseUp = false;
+    isDragging = false;
+    playerViewportDrag = null;
+
+    const sendPlaceTokensBatched = (savedTokens) => {
+        // Keep UI responsive and avoid WS flooding freezes.
+        const batchSize = 25;
+        let i = 0;
+        const pump = () => {
+            const end = Math.min(i + batchSize, savedTokens.length);
+            for (; i < end; i++) {
+                const token = savedTokens[i];
+                const tokenSize = getTokenSize(token.entity_id, token.entity_type);
+                const displayName =
+                    token.display_name ||
+                    ((token.entity_type === 'Enemy' || token.entity_type === 'NPC')
+                        ? (enemies.find(e => e.id === token.entity_id)?.name)
+                        : undefined);
+                const placeMsg = {
+                    type: 'PlaceToken',
+                    entity_id: token.entity_id,
+                    entity_type: token.entity_type,
+                    x: token.x,
+                    y: token.y,
+                    size: tokenSize,
+                    display_name: displayName || undefined,
+                    image_url: token.image_url || undefined
+                };
+                if (token.entity_type === 'Object') {
+                    placeMsg.hidden_from_players = token.hidden_from_players === true;
+                }
+                sendMessage(placeMsg);
+            }
+            if (i < savedTokens.length) requestAnimationFrame(pump);
+        };
+        pump();
+    };
+
+    // Normalize save formats across versions (arrays vs object-maps).
+    const normalizeArrayLike = (v) => {
+        if (!v) return [];
+        if (Array.isArray(v)) return v;
+        if (typeof v === 'object') {
+            // Rust `HashMap` serialized as object: { id: {...}, id2: {...} }
+            return Object.values(v);
+        }
+        return [];
+    };
+
+    const normalizeTokenType = (t) => {
+        if (!t) return t;
+        // Accept older/alternate casing: player/enemy/npc/object or PascalCase
+        const et = t.entity_type;
+        if (typeof et === 'string') {
+            const s = et.trim();
+            const lowered = s.toLowerCase();
+            const mapped =
+                lowered === 'player' ? 'Player' :
+                lowered === 'enemy' ? 'Enemy' :
+                lowered === 'npc' ? 'NPC' :
+                lowered === 'object' ? 'Object' :
+                s;
+            if (mapped !== et) return { ...t, entity_type: mapped };
+        }
+        return t;
+    };
+
+    try {
     // Validate version
     if (!gameState.version) {
         console.warn('⚠️ Save file has no version, proceeding anyway...');
@@ -17594,32 +17860,21 @@ async function loadGameStateFromData(gameState, sourceName) {
         console.log('✅ Restored style:', selectedStyle);
     }
         
-        // Restore map first (before tokens)
+        // Restore map on server first (wait for MapLoaded); do not set global currentMap here — breaks sync with server.
         if (gameState.currentMap) {
-            currentMap = gameState.currentMap;
-            console.log('✅ Restored map:', currentMap.name);
-            
-            // Send map to server - clear tokens first, we'll restore them from save
-            sendMessage({
-                type: 'LoadMap',
-                map_id: currentMap.id,
-                clear_tokens: true
-            });
-            
-            // Send map settings to server
-            if (currentMap.grid_size && currentMap.width && currentMap.height) {
-                sendMessage({
-                    type: 'MapSettingsChanged',
-                    grid_size: currentMap.grid_size,
-                    width: currentMap.width,
-                    height: currentMap.height
-                });
+            await openOrCreateMapForSavedState(gameState.currentMap);
+            // Prefer grid/size from save file (it is the user's intended state). Fall back to server map.
+            const desiredGrid = (gameState.currentMap.grid_size != null) ? Number(gameState.currentMap.grid_size) : (currentMap && currentMap.grid_size != null ? Number(currentMap.grid_size) : null);
+            const desiredW = (gameState.currentMap.width != null) ? Number(gameState.currentMap.width) : (currentMap ? Number(currentMap.width) : null);
+            const desiredH = (gameState.currentMap.height != null) ? Number(gameState.currentMap.height) : (currentMap ? Number(currentMap.height) : null);
+            if (desiredGrid && desiredW && desiredH) {
+                gridSize = desiredGrid;
+                if (canvas) { canvas.width = desiredW; canvas.height = desiredH; }
+                if (currentMap) { currentMap.grid_size = desiredGrid; currentMap.width = desiredW; currentMap.height = desiredH; }
+                sendMessage({ type: 'MapSettingsChanged', grid_size: desiredGrid, width: desiredW, height: desiredH });
             }
-            
-            // Load map image locally
-            if (currentMap.image_path) {
-                // Wait for map image to load
-                await new Promise((resolve, reject) => {
+            if (currentMap && currentMap.image_path) {
+                await new Promise((resolve) => {
                     const img = new Image();
                     img.crossOrigin = 'anonymous';
                     img.onload = () => {
@@ -17627,18 +17882,12 @@ async function loadGameStateFromData(gameState, sourceName) {
                         renderCanvas();
                         resolve();
                     };
-                    img.onerror = (err) => {
-                        console.error('❌ Error loading map image:', err);
-                        // Don't reject - continue loading even if image fails
-                        resolve();
-                    };
-                    // Add cache busting and ensure proper path
-                    const imagePath = currentMap.image_path.startsWith('/') 
-                        ? currentMap.image_path 
+                    img.onerror = () => resolve();
+                    const imagePath = currentMap.image_path.startsWith('/')
+                        ? currentMap.image_path
                         : '/' + currentMap.image_path;
                     img.src = imagePath + '?t=' + Date.now();
                 });
-                console.log('✅ Map image loaded');
             }
         }
         
@@ -17647,19 +17896,19 @@ async function loadGameStateFromData(gameState, sourceName) {
             zoom = gameState.canvasState.zoom || 1.0;
             panX = gameState.canvasState.panX || 0;
             panY = gameState.canvasState.panY || 0;
-            gridSize = gameState.canvasState.gridSize || 50;
+            // Do NOT override gridSize here — grid comes from map settings / saved map and must remain consistent with token placement.
             console.log('✅ Restored canvas state: zoom=', zoom, 'pan=', panX, panY, 'grid=', gridSize);
         }
         
         // Restore characters
-        if (gameState.characters && Array.isArray(gameState.characters)) {
-            characters = gameState.characters;
+        if (gameState.characters) {
+            characters = normalizeArrayLike(gameState.characters);
             console.log('✅ Restored', characters.length, 'characters');
         }
         
         // Restore enemies (including NPC instances)
-        if (gameState.enemies && Array.isArray(gameState.enemies)) {
-            enemies = gameState.enemies;
+        if (gameState.enemies) {
+            enemies = normalizeArrayLike(gameState.enemies);
             console.log('✅ Restored', enemies.length, 'enemies');
             
             // Save NPC instances to localStorage if they exist (if function exists)
@@ -17675,12 +17924,10 @@ async function loadGameStateFromData(gameState, sourceName) {
         }
         
         // Restore tokens after map is loaded
-        if (gameState.tokens && Array.isArray(gameState.tokens) && gameState.tokens.length > 0) {
-            // Wait for map to be fully loaded and processed by server
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
+        const normalizedTokens = normalizeArrayLike(gameState.tokens).map(normalizeTokenType);
+        if (normalizedTokens.length > 0) {
             // Store saved tokens for HP restoration and placement
-            const savedTokens = gameState.tokens;
+            const savedTokens = normalizedTokens;
             console.log('📋 Restoring', savedTokens.length, 'tokens...');
             
             // First, restore HP values from tokens to their entities
@@ -17704,50 +17951,17 @@ async function loadGameStateFromData(gameState, sourceName) {
                 }
             });
             
-            // Clear local tokens first - server will send updated tokens via TokenUpdate
-            tokens = [];
-            renderCanvas(); // Clear canvas
-            
-            // Send tokens to server to sync with all clients
-            // Place tokens sequentially with delays to avoid overwhelming the server
-            console.log('📤 Sending', savedTokens.length, 'tokens to server...');
-            for (let i = 0; i < savedTokens.length; i++) {
-                const token = savedTokens[i];
-                // Always calculate size - don't trust saved size, recalculate from entity data
-                const tokenSize = getTokenSize(token.entity_id, token.entity_type);
-                console.log(`📐 Restoring token ${token.entity_id} with calculated size: ${tokenSize}`);
-                const displayName = token.display_name || (token.entity_type === 'Enemy' || token.entity_type === 'NPC' ? (enemies.find(e => e.id === token.entity_id)?.name) : undefined);
-                const placeMsg = {
-                    type: 'PlaceToken',
-                    entity_id: token.entity_id,
-                    entity_type: token.entity_type,
-                    x: token.x,
-                    y: token.y,
-                    size: tokenSize,
-                    display_name: displayName || undefined,
-                    image_url: token.image_url || undefined
-                };
-                if (token.entity_type === 'Object') {
-                    placeMsg.hidden_from_players = token.hidden_from_players === true;
-                }
-                sendMessage(placeMsg);
-                
-                // Small delay between tokens to avoid race conditions
-                if (i < savedTokens.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                }
-            }
-            
-            // Wait for all tokens to be placed and server to respond with TokenUpdate
-            // Server sends TokenUpdate after each PlaceToken, so wait for all to complete
-            console.log('⏳ Waiting for server to process all tokens...');
-            await new Promise(resolve => setTimeout(resolve, savedTokens.length * 150 + 500));
-            
-            // Server should have sent TokenUpdate which updated our tokens array
-            // Force a final render to ensure everything is displayed
-            console.log('✅ Tokens synced. Current token count:', tokens.length);
+            // Optimistic local apply: show tokens instantly; server will broadcast authoritative TokenUpdate soon after.
+            tokens = savedTokens.map(t => ({
+                ...t,
+                size: (t.size != null && !isNaN(Number(t.size)) && Number(t.size) > 0) ? Number(t.size) : getTokenSize(t.entity_id, t.entity_type),
+                hidden_from_players: t.hidden_from_players === true
+            }));
             renderCanvas();
-            console.log('✅ Canvas rendered with tokens');
+            
+            // Send tokens to server to sync with all clients (batched).
+            console.log('📤 Sending', savedTokens.length, 'tokens to server (batched)...');
+            sendPlaceTokensBatched(savedTokens);
             
             // Update token info display
             if (selectedToken) {
@@ -17814,6 +18028,37 @@ async function loadGameStateFromData(gameState, sourceName) {
                   `- Enemies: ${enemies.length}\n` +
                   `- Combat: ${combatState.active ? 'Active' : 'Inactive'}`);
         }, 1000);
+    } catch (e) {
+        console.error('❌ loadGameStateFromData failed:', e);
+        // Restore previous state so the app remains usable and the user can try another load.
+        selectedStyle = prevSnapshot.selectedStyle;
+        currentMap = prevSnapshot.currentMap;
+        tokens = prevSnapshot.tokens;
+        characters = prevSnapshot.characters;
+        enemies = prevSnapshot.enemies;
+        if (prevSnapshot.combatState) combatState = prevSnapshot.combatState;
+        gridSize = prevSnapshot.gridSize;
+        zoom = prevSnapshot.zoom;
+        panX = prevSnapshot.panX;
+        panY = prevSnapshot.panY;
+        if (prevSnapshot.playerMapViewport) playerMapViewport = prevSnapshot.playerMapViewport;
+        dmPlayerViewportToolActive = prevSnapshot.dmPlayerViewportToolActive;
+        measurementShapes = prevSnapshot.measurementShapes;
+        rulerStart = prevSnapshot.rulerStart;
+        rulerEnd = prevSnapshot.rulerEnd;
+        rulerActive = prevSnapshot.rulerActive;
+        selectedToken = prevSnapshot.selectedTokenId ? tokens.find(t => t.id === prevSnapshot.selectedTokenId) || null : null;
+
+        clearPendingMapLoadPromise();
+        pendingSkipTokenMoveOnNextMouseUp = false;
+        isDragging = false;
+        playerViewportDrag = null;
+
+        renderCanvas();
+        updateTokenInfo();
+        addLogEntry('❌ Load failed (previous state restored).', 'damage');
+        alert('❌ Load failed. Previous state restored so you can try again.\n\n' + (e && e.message ? e.message : String(e)));
+    }
 }
 
 // ==================== SOUND BOARD ====================

@@ -70,6 +70,21 @@ pub struct Map {
     pub map_state: Option<String>, // JSON string containing tokens, HP values, etc.
 }
 
+impl Map {
+    /// Strip `map_state` for WebSocket payloads (can be megabytes). Clients render from image + tokens.
+    pub fn for_client_wire(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            image_path: self.image_path.clone(),
+            grid_size: self.grid_size,
+            width: self.width,
+            height: self.height,
+            map_state: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Token {
     pub id: String,
