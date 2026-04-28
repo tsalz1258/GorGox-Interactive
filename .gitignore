@@ -13,6 +13,9 @@ Cargo.lock
 static/maps/*
 !static/maps/.gitkeep
 
+static/arena_stl/*
+!static/arena_stl/.gitkeep
+
 # IDE
 .vscode/
 .idea/

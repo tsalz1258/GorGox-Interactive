@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v82'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v86'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 var characterSheetListRefreshDebounceId = null; // CharacterList → debounced sheet re-render (see scheduleDebouncedCharacterSheetRefresh)
@@ -262,6 +262,10 @@ window.addEventListener('DOMContentLoaded', () => {
     var badge = document.getElementById('appVersionBadge');
     if (badge) badge.textContent = typeof APP_UI_VERSION !== 'undefined' ? APP_UI_VERSION : 'v29';
     if (typeof APP_UI_VERSION !== 'undefined') document.title = 'Gorgox Interactive (' + APP_UI_VERSION + ')';
+    const arenaStlPick = document.getElementById('arenaStlHiddenFilePicker');
+    if (arenaStlPick) arenaStlPick.addEventListener('change', handleArenaStlHiddenFilePickerChange);
+    const enemyArenaStlFileEl = document.getElementById('enemyArenaStlFile');
+    if (enemyArenaStlFileEl) enemyArenaStlFileEl.addEventListener('change', handleEnemyArenaStlFileChange);
     function actionBarScrollRevert() {
         if (typeof actionBarScrollLockUntil !== 'undefined' && Date.now() < actionBarScrollLockUntil && lastActionBarScrollBeforeClick) {
             var s = lastActionBarScrollBeforeClick;
@@ -396,6 +400,304 @@ function cancelReconnect() {
 
 // Also assign to window for global access
 window.connect = connect;
+
+/** Read-only snapshot for the 3D battlefield overlay — same map art & grid as 2D. Combat, initiative, and token moves stay on the main map. */
+function getBattlefieldSnapshotForArena3d() {
+    const cm = currentMap;
+    const canvasEl = typeof document !== 'undefined' ? document.getElementById('mapCanvas') : null;
+    const fallbackW = canvasEl && canvasEl.width > 0 ? canvasEl.width : 1200;
+    const fallbackH = canvasEl && canvasEl.height > 0 ? canvasEl.height : 800;
+    const gp =
+        typeof gridSize === 'number' && !isNaN(gridSize) && gridSize > 0 ? gridSize : 50;
+    if (!cm) {
+        return {
+            hasMap: false,
+            image: null,
+            imagePath: null,
+            width: fallbackW,
+            height: fallbackH,
+            gridPixels: gp,
+            tokens: [],
+        };
+    }
+    const gw = Number(cm.width);
+    const gh = Number(cm.height);
+    const gFromMap =
+        cm.grid_size != null && !isNaN(Number(cm.grid_size)) && Number(cm.grid_size) > 0
+            ? Number(cm.grid_size)
+            : gp;
+    const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+    const tokenList = [];
+    if (cm && Array.isArray(tokens)) {
+        for (const t of tokens) {
+            if (!t || t.entity_type === 'Object') continue;
+            if (viewerIsPlayer && t.hidden_from_players) continue;
+            const stlUrl = resolveTokenStlUrlForArena3d(t);
+            if (!stlUrl) continue;
+            const ts = t.size != null && !isNaN(Number(t.size)) ? Number(t.size) : getTokenSize(t.entity_id, t.entity_type);
+            tokenList.push({
+                id: String(t.id),
+                entity_id: String(t.entity_id),
+                entity_type: t.entity_type,
+                x: Number(t.x) || 0,
+                y: Number(t.y) || 0,
+                size: ts,
+                stlUrl,
+            });
+        }
+    }
+    return {
+        hasMap: true,
+        image: cm.image || null,
+        imagePath: cm.image_path || null,
+        width: gw > 0 ? gw : fallbackW,
+        height: gh > 0 ? gh : fallbackH,
+        gridPixels: gFromMap,
+        tokens: tokenList,
+    };
+}
+window.getBattlefieldSnapshotForArena3d = getBattlefieldSnapshotForArena3d;
+
+/** DM or owner — same rules as manual sheet edit (not while picking another character). */
+function canAttachArenaStlToCharacter(char) {
+    return canManuallyEditCharacterSheet(char);
+}
+
+function getCharacterArenaStlUrl(char) {
+    if (!char || !char.character_data) return '';
+    try {
+        const root = JSON.parse(char.character_data);
+        const inner = root && typeof root === 'object' ? (root.character || root) : null;
+        const u = inner && inner._gorgox_arena_stl_url != null ? String(inner._gorgox_arena_stl_url).trim() : '';
+        return u || '';
+    } catch (_) {
+        return '';
+    }
+}
+
+function getArenaStlUrlFromEnemyActions(actionsStr) {
+    if (actionsStr == null) return '';
+    try {
+        const o = typeof actionsStr === 'string' ? JSON.parse(actionsStr) : actionsStr;
+        if (o && typeof o === 'object' && !Array.isArray(o) && o._gorgox_arena_stl_url != null) {
+            return String(o._gorgox_arena_stl_url).trim() || '';
+        }
+    } catch (_) {}
+    return '';
+}
+
+function upsertArenaStlInEnemyActions(actionsStr, urlOrNull) {
+    const s = typeof actionsStr === 'string' ? actionsStr.trim() : '';
+    let o = {};
+    try {
+        o = s.length ? JSON.parse(s) : {};
+    } catch (_) {
+        if (urlOrNull) return JSON.stringify({ _gorg_actions_freeform: s, _gorgox_arena_stl_url: urlOrNull });
+        return JSON.stringify({ _gorg_actions_freeform: s });
+    }
+    if (Array.isArray(o)) return s;
+    if (!o || typeof o !== 'object') return s;
+    if (urlOrNull) o._gorgox_arena_stl_url = urlOrNull;
+    else delete o._gorgox_arena_stl_url;
+    return JSON.stringify(o);
+}
+
+function resolveTokenStlUrlForArena3d(token) {
+    if (!token) return '';
+    const et = token.entity_type;
+    if (et === 'Player') {
+        const c = characters.find((x) => x && String(x.id) === String(token.entity_id));
+        return c ? getCharacterArenaStlUrl(c) : '';
+    }
+    if (et === 'Enemy' || et === 'NPC') {
+        const e = enemies.find((x) => x && String(x.id) === String(token.entity_id));
+        const tpl = e && e.isCustomInstance ? getEnemyTemplateForCustomInstance(e) : e;
+        return tpl ? getArenaStlUrlFromEnemyActions(tpl.actions) : '';
+    }
+    return '';
+}
+
+async function postArenaStlUpload(file) {
+    if (!file || !file.name) throw new Error('No file');
+    if (typeof window !== 'undefined' && window.location && window.location.protocol === 'file:') {
+        throw new Error('Open the app from the game server (e.g. http://localhost:3000), not a saved HTML file.');
+    }
+    const fd = new FormData();
+    fd.append('file', file);
+    const origin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
+    const url = (origin || '') + '/api/arena-stl';
+    let res;
+    try {
+        res = await fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' });
+    } catch (netErr) {
+        const hint =
+            'Could not reach ' + url + '. Use the same address in the address bar as the server (e.g. http://localhost:3000), restart the server after updating, and avoid opening the app as a local file (file://).';
+        throw new Error((netErr && netErr.message) ? netErr.message + '. ' + hint : hint);
+    }
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || res.statusText || String(res.status));
+    let j;
+    try {
+        j = JSON.parse(text);
+    } catch (_) {
+        throw new Error(text || 'Invalid JSON from server');
+    }
+    if (!j.url) throw new Error('Server did not return a URL');
+    return String(j.url);
+}
+
+function setCharacterArenaStlUrl(characterId, urlOrNull) {
+    const char = characters.find((c) => c && String(c.id) === String(characterId));
+    if (!char) {
+        alert('Character not found.');
+        return;
+    }
+    if (!canAttachArenaStlToCharacter(char)) {
+        alert('You cannot change this attachment for this character.');
+        return;
+    }
+    let root = {};
+    try {
+        root = char.character_data ? JSON.parse(char.character_data) : {};
+    } catch (_) {
+        root = {};
+    }
+    if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+    if (root.character && typeof root.character === 'object') {
+        if (urlOrNull) root.character._gorgox_arena_stl_url = urlOrNull;
+        else delete root.character._gorgox_arena_stl_url;
+    } else {
+        if (urlOrNull) root._gorgox_arena_stl_url = urlOrNull;
+        else delete root._gorgox_arena_stl_url;
+    }
+    char.character_data = JSON.stringify(root);
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(characterId)) {
+        try {
+            const p = JSON.parse(char.character_data);
+            currentViewingCharacterData = p.character || p;
+        } catch (_) {
+            currentViewingCharacterData = root.character || root;
+        }
+    }
+    const payload = buildCharacterUpdatePayload(char);
+    if (payload) sendMessage({ type: 'UpdateCharacter', character: payload });
+    renderCharacterSheetContent();
+    addLogEntry(urlOrNull ? `Attached 3D model for ${char.name}` : `Cleared 3D model for ${char.name}`, 'info');
+}
+
+async function uploadArenaStlForCharacter(characterId) {
+    const input = document.getElementById('arenaStlHiddenFilePicker');
+    if (!input) return;
+    input.dataset.targetKind = 'character';
+    input.dataset.targetId = String(characterId);
+    input.value = '';
+    input.click();
+}
+
+async function clearArenaStlForCharacter(characterId) {
+    if (!confirm('Remove the 3D model (.stl / .glb) from this character?')) return;
+    setCharacterArenaStlUrl(characterId, null);
+}
+
+function readEnemyArenaStlHiddenValue() {
+    const el = document.getElementById('enemyArenaStlUrl');
+    return el && el.value ? String(el.value).trim() : '';
+}
+
+function setEnemyArenaStlHiddenValue(url) {
+    const el = document.getElementById('enemyArenaStlUrl');
+    const prev = document.getElementById('enemyArenaStlPreview');
+    if (el) el.value = url || '';
+    if (prev) {
+        prev.textContent = url ? (url.split('/').pop() || url) : '(none)';
+    }
+}
+
+async function uploadArenaStlForEnemyModal() {
+    const input = document.getElementById('enemyArenaStlFile');
+    if (!input) return;
+    input.value = '';
+    input.click();
+}
+
+async function clearEnemyArenaStlModal() {
+    setEnemyArenaStlHiddenValue('');
+}
+
+async function uploadArenaStlForEnemySheet(templateEnemyId) {
+    const input = document.getElementById('arenaStlHiddenFilePicker');
+    if (!input) return;
+    input.dataset.targetKind = 'enemy';
+    input.dataset.targetId = String(templateEnemyId);
+    input.value = '';
+    input.click();
+}
+
+async function clearArenaStlForEnemySheet(templateEnemyId) {
+    if (!isDM) return;
+    if (!confirm('Remove the 3D model from this creature template?')) return;
+    const tpl = enemies.find((e) => e && String(e.id) === String(templateEnemyId));
+    if (!tpl || tpl.isCustomInstance) {
+        alert('Edit the base template from the enemy list.');
+        return;
+    }
+    const nextActions = upsertArenaStlInEnemyActions(tpl.actions, null);
+    const updated = { ...tpl, actions: nextActions };
+    sendMessage({ type: 'CreateEnemy', enemy: buildEnemyServerPayload(updated) });
+    const idx = enemies.findIndex((e) => e && String(e.id) === String(templateEnemyId));
+    if (idx !== -1) enemies[idx] = updated;
+    syncCustomEnemyInstanceActionsFromTemplate(updated.id, updated.actions);
+    addLogEntry(`Cleared 3D model for ${tpl.name}`, 'info');
+    showNPCCharacterSheet(templateEnemyId);
+}
+
+async function handleArenaStlHiddenFilePickerChange(ev) {
+    const input = ev && ev.target;
+    if (!input || !input.files || !input.files[0]) return;
+    const kind = input.dataset.targetKind;
+    const id = input.dataset.targetId;
+    const file = input.files[0];
+    input.value = '';
+    if (!kind || !id) return;
+    try {
+        const url = await postArenaStlUpload(file);
+        if (kind === 'character') {
+            setCharacterArenaStlUrl(id, url);
+        } else if (kind === 'enemy') {
+            if (!isDM) return;
+            const tpl = enemies.find((e) => e && String(e.id) === String(id));
+            if (!tpl || tpl.isCustomInstance) {
+                alert('Enemy template not found.');
+                return;
+            }
+            const nextActions = upsertArenaStlInEnemyActions(tpl.actions, url);
+            const updated = { ...tpl, actions: nextActions };
+            sendMessage({ type: 'CreateEnemy', enemy: buildEnemyServerPayload(updated) });
+            const idx = enemies.findIndex((e) => e && String(e.id) === String(id));
+            if (idx !== -1) enemies[idx] = updated;
+            syncCustomEnemyInstanceActionsFromTemplate(updated.id, updated.actions);
+            addLogEntry(`Attached 3D model for ${tpl.name}`, 'info');
+            showNPCCharacterSheet(id);
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Model upload failed: ' + (err && err.message ? err.message : String(err)));
+    }
+}
+
+async function handleEnemyArenaStlFileChange(ev) {
+    const input = ev && ev.target;
+    if (!input || !input.files || !input.files[0]) return;
+    const file = input.files[0];
+    input.value = '';
+    try {
+        const url = await postArenaStlUpload(file);
+        setEnemyArenaStlHiddenValue(url);
+    } catch (err) {
+        console.error(err);
+        alert('Model upload failed: ' + (err && err.message ? err.message : String(err)));
+    }
+}
 
 function sendMessage(message) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -767,7 +1069,7 @@ function parseCustomEnemyActionsFromRawString(raw) {
             }));
         }
         const obj = parsed.actions && typeof parsed.actions === 'object' ? parsed.actions : parsed;
-        return Object.entries(obj).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform').map(([name, val]) => ({
+        return Object.entries(obj).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform' && k !== '_gorgox_arena_stl_url').map(([name, val]) => ({
             name: name,
             description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
         }));
@@ -8124,6 +8426,9 @@ function showCreateEnemy() {
     document.getElementById('enemyPortrait').value = '';
     const preview = document.getElementById('enemyPortraitPreview');
     if (preview) preview.innerHTML = '';
+    const stlFile = document.getElementById('enemyArenaStlFile');
+    if (stlFile) stlFile.value = '';
+    setEnemyArenaStlHiddenValue('');
     document.getElementById('createEnemyModal').classList.add('active');
 }
 
@@ -8158,6 +8463,10 @@ function showEditEnemy(enemy) {
             preview.innerHTML = '<span style="opacity: 0.7;">No portrait</span>';
         }
     }
+    const stlSrcEnemy = resolveEnemyTemplateForSheetEdits(enemy.id) || enemy;
+    setEnemyArenaStlHiddenValue(getArenaStlUrlFromEnemyActions(stlSrcEnemy.actions));
+    const stlFileEl = document.getElementById('enemyArenaStlFile');
+    if (stlFileEl) stlFileEl.value = '';
     document.getElementById('createEnemyModal').classList.add('active');
 }
 
@@ -8190,7 +8499,10 @@ async function createEnemy() {
         wisdom: parseInt(document.getElementById('enemyWis').value),
         charisma: parseInt(document.getElementById('enemyCha').value),
         speed: parseInt(document.getElementById('enemySpeed').value),
-        actions: mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', null),
+        actions: upsertArenaStlInEnemyActions(
+            mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', null),
+            readEnemyArenaStlHiddenValue() || null
+        ),
         description: document.getElementById('enemyDescription').value || '',
         style: selectedStyle
     };
@@ -8218,6 +8530,9 @@ async function createEnemy() {
     document.getElementById('enemyForm').reset();
     document.getElementById('enemyEditId').value = '';
     document.getElementById('enemyPortraitPreview').innerHTML = '';
+    setEnemyArenaStlHiddenValue('');
+    const stlFileC = document.getElementById('enemyArenaStlFile');
+    if (stlFileC) stlFileC.value = '';
     addLogEntry(`Created enemy: ${baseEnemy.name}`, 'info');
 }
 
@@ -8253,7 +8568,10 @@ async function updateEnemy() {
         wisdom: parseInt(document.getElementById('enemyWis').value),
         charisma: parseInt(document.getElementById('enemyCha').value),
         speed: parseInt(document.getElementById('enemySpeed').value),
-        actions: mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', existing),
+        actions: upsertArenaStlInEnemyActions(
+            mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', existing),
+            readEnemyArenaStlHiddenValue() || null
+        ),
         description: document.getElementById('enemyDescription').value || '',
         style: existing.style || selectedStyle
     };
@@ -8273,6 +8591,9 @@ async function updateEnemy() {
     document.getElementById('enemyForm').reset();
     document.getElementById('enemyEditId').value = '';
     document.getElementById('enemyPortraitPreview').innerHTML = '';
+    setEnemyArenaStlHiddenValue('');
+    const stlFileU = document.getElementById('enemyArenaStlFile');
+    if (stlFileU) stlFileU.value = '';
     addLogEntry(`Updated enemy: ${updated.name}`, 'info');
 }
 
@@ -8997,6 +9318,22 @@ function showNPCCharacterSheet(entityId) {
                 <div class="hp-bar" style="margin-top: 10px;"><div class="hp-fill" style="width: ${maxHp ? (currentHp / maxHp) * 100 : 0}%"></div></div>
             </div>
         </div>`;
+        const tplForArenaStl = resolveEnemyTemplateForSheetEdits(enemy.id) || enemy;
+        const stlUrlEnemySheet = getArenaStlUrlFromEnemyActions(tplForArenaStl.actions);
+        const stlFileLabel = stlUrlEnemySheet ? escapeHtml(stlUrlEnemySheet.split('/').pop() || stlUrlEnemySheet) : '(none)';
+        const escapedTplIdArenaStl = escapeJs(String(tplForArenaStl.id));
+        const canEditEnemyStl = isDM && tplForArenaStl && !tplForArenaStl.isCustomInstance && !isInstanceStyleName(tplForArenaStl.name || '');
+        if (canEditEnemyStl) {
+            html += `<div class="panel" style="padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255, 136, 68, 0.4);">
+                <h4 style="color: #ffaa66; margin: 0 0 6px 0;">🎴 3D arena mini (.stl / .glb)</h4>
+                <p style="font-size: 12px; opacity: 0.75; margin: 0 0 8px 0;">Saved on the creature template — all spawned tokens use it in 3D view (.stl or .glb).</p>
+                <div style="font-size: 12px; margin-bottom: 8px;">Current: <strong>${stlFileLabel}</strong></div>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                    <button type="button" onclick="uploadArenaStlForEnemySheet('${escapedTplIdArenaStl}')" style="padding: 6px 12px; background: #4a3020; color: #fff; border: 1px solid #ff8844; border-radius: 4px; cursor: pointer;">Attach model…</button>
+                    <button type="button" onclick="clearArenaStlForEnemySheet('${escapedTplIdArenaStl}')" style="padding: 6px 12px; background: #3a2a2a; color: #fff; border: 1px solid #888; border-radius: 4px; cursor: pointer;" ${stlUrlEnemySheet ? '' : 'disabled'}>Clear</button>
+                </div>
+            </div>`;
+        }
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #4a9eff;">📊 Ability Scores <span style="font-size: 12px; opacity: 0.6;">(Click to roll!)</span></h4>
             <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;">`;
@@ -9052,7 +9389,7 @@ function showNPCCharacterSheet(entityId) {
         }
         // Fallback: if enemy.actions is an object (e.g. from server as parsed JSON), build actionsData directly
         if (actionsData.length === 0 && enemy.actions && typeof enemy.actions === 'object' && !Array.isArray(enemy.actions)) {
-            actionsData = Object.entries(enemy.actions).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform').map(([name, val]) => ({
+            actionsData = Object.entries(enemy.actions).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform' && k !== '_gorgox_arena_stl_url').map(([name, val]) => ({
                 name: name,
                 description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
             }));
@@ -15072,6 +15409,7 @@ function buildCharacterEditForm(char, charData) {
     
     return `
         <form id="characterEditForm" onsubmit="return false;" style="display: flex; flex-direction: column; gap: 15px; margin-top: 10px;">
+            ${buildArenaStlCharacterSheetSection(char)}
             <div class="panel" style="padding: 15px;">
                 <h4 style="color: #4a9eff;">Core Details</h4>
                 <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px;">
@@ -15344,6 +15682,22 @@ function escapeJs(str) {
               .replace(/\r/g, '\\r');
 }
 
+function buildArenaStlCharacterSheetSection(char) {
+    if (!char || !canAttachArenaStlToCharacter(char)) return '';
+    const url = getCharacterArenaStlUrl(char);
+    const label = url ? (url.split('/').pop() || url) : '(none)';
+    const eid = escapeJs(String(char.id));
+    return `<div class="panel" style="padding: 12px; margin-bottom: 15px; border: 1px solid rgba(74, 158, 255, 0.35);">
+        <h4 style="color: #4a9eff; margin: 0 0 6px 0;">🎴 3D arena mini (.stl / .glb)</h4>
+        <p style="font-size: 12px; opacity: 0.75; margin: 0 0 8px 0;">Shown in 3D view at this character's map token (.stl or .glb).</p>
+        <div style="font-size: 12px; margin-bottom: 8px;">Current: <strong>${escapeHtml(label)}</strong></div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+            <button type="button" onclick="uploadArenaStlForCharacter('${eid}')" style="padding: 6px 12px; background: #2a3f5a; color: #fff; border: 1px solid #4a9eff; border-radius: 4px; cursor: pointer;">Attach model…</button>
+            <button type="button" onclick="clearArenaStlForCharacter('${eid}')" style="padding: 6px 12px; background: #3a2a2a; color: #fff; border: 1px solid #888; border-radius: 4px; cursor: pointer;" ${url ? '' : 'disabled'}>Clear</button>
+        </div>
+    </div>`;
+}
+
 function buildDetailedCharacterSheet(char, charData) {
     const formatMod = (mod) => (typeof mod === 'number' && !isNaN(mod) ? (mod >= 0 ? `+${mod}` : `${mod}`) : '+0');
     
@@ -15418,6 +15772,8 @@ function buildDetailedCharacterSheet(char, charData) {
             <div class="hp-bar" style="margin-top: 10px;"><div class="hp-fill" style="width: ${(char.current_hp / maxHP) * 100}%"></div></div>
         </div>
     </div>`;
+    
+    html += buildArenaStlCharacterSheetSection(char);
     
     // Abilities - handle both D&D and Star Wars formats
     if (charData.baseAbilityScores && isStarWars) {

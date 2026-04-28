@@ -3,8 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gorgox Interactive (v82)</title>
-    <link rel="stylesheet" href="/static/style.css?v=82">
+    <title>Gorgox Interactive (v83)</title>
+    <!-- Required for Three.js examples/jsm/* (OrbitControls, etc.) which import bare "three" -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+    </script>
+    <link rel="stylesheet" href="/static/style.css?v=83">
 </head>
 <body>
     <div id="app">
@@ -31,7 +39,7 @@
         <div id="mainInterface" class="hidden">
             <!-- Header -->
     <header>
-        <h1>🎲 Gorgox Interactive <span id="appVersionBadge" style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;" title="UI version – refresh if you don’t see latest features">v82</span></h1>
+        <h1>🎲 Gorgox Interactive <span id="appVersionBadge" style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;" title="UI version – refresh if you don’t see latest features">v83</span></h1>
         <button onclick="showSpellTooltip('Fireball', {clientX: 300, clientY: 300})" style="background: #aa88ff; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🧪 Test Tooltip</button>
         <button onclick="populateCombatActionPanel()" style="background: #ff4444; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🔧 MANUAL POPULATE</button>
         <button onclick="console.log('CHARACTERS:', characters); console.log('MY CHARACTER ID:', myCharacterId);" style="background: #00ff00; color: black; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🐛 DEBUG DATA</button>
@@ -154,10 +162,38 @@
                 <!-- Center - Map View -->
                 <main class="map-container">
                     <canvas id="mapCanvas" width="1200" height="800"></canvas>
+
+                    <!-- 3D Arena (experimental) -->
+                    <div id="arena3D" class="arena3d hidden" aria-label="3D arena">
+                        <div class="arena3d-toolbar">
+                            <div class="arena3d-toolbar-left">
+                                <button type="button" onclick="toggle3DArena()" class="arena3d-btn">⬅ Back to 2D</button>
+                                <label class="arena3d-file-label">
+                                    <input id="arena3dStlInput" type="file" accept=".stl,.glb,model/stl,model/gltf-binary,application/sla,application/vnd.ms-pki.stl" />
+                                    <span class="arena3d-btn">📦 Add STL / GLB</span>
+                                </label>
+                                <button type="button" onclick="arena3dClearAll()" class="arena3d-btn arena3d-btn-danger">🗑 Clear 3D</button>
+                                <span class="arena3d-rotate-tools" title="Select a mini first (click it). Token minis: rotate only.">
+                                    <span class="arena3d-rotate-label">Tilt</span>
+                                    <button type="button" class="arena3d-btn arena3d-btn-compact" onclick="arena3dRotateSelection('x', -90)">X−90°</button>
+                                    <button type="button" class="arena3d-btn arena3d-btn-compact" onclick="arena3dRotateSelection('x', 90)">X+90°</button>
+                                    <button type="button" class="arena3d-btn arena3d-btn-compact" onclick="arena3dRotateSelection('z', -90)">Z−90°</button>
+                                    <button type="button" class="arena3d-btn arena3d-btn-compact" onclick="arena3dRotateSelection('z', 90)">Z+90°</button>
+                                </span>
+                            </div>
+                            <div class="arena3d-toolbar-right">
+                                <div class="arena3d-hint">Click a mini to select · E = rotate gizmo (all axes in rotate mode) · X±90° / Z±90° = world tilt · W / R = move / scale for placed models only (token minis follow the 2D map) · Del removes placed mini only · orbit drag · scroll zoom</div>
+                            </div>
+                        </div>
+                        <div id="arena3dViewport" class="arena3d-viewport"></div>
+                        <div id="arena3dDropHint" class="arena3d-drop-hint hidden">Drop .stl or .glb here</div>
+                    </div>
+
                     <div id="mapControls">
                         <button onclick="zoomIn()">🔍+</button>
                         <button onclick="zoomOut()">🔍-</button>
                         <button onclick="resetZoom()">Reset</button>
+                        <button type="button" onclick="toggle3DArena()" title="Experimental 3D arena">🧊 3D Arena</button>
                     </div>
                 </main>
 
@@ -264,6 +300,15 @@
                     <label style="margin-top: 10px;">Enemy Portrait (optional; leave empty to keep current):</label>
                     <div id="enemyPortraitPreview" style="margin: 8px 0; min-height: 60px;"></div>
                     <input type="file" id="enemyPortrait" accept="image/*">
+
+                    <label style="margin-top: 12px;">3D arena mini — .stl or .glb (optional):</label>
+                    <input type="hidden" id="enemyArenaStlUrl" value="">
+                    <div id="enemyArenaStlPreview" style="font-size: 12px; opacity: 0.85; margin: 4px 0;">(none)</div>
+                    <input type="file" id="enemyArenaStlFile" accept=".stl,.glb,model/stl,model/gltf-binary" style="display: none;">
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+                        <button type="button" onclick="uploadArenaStlForEnemyModal()" style="padding: 6px 12px; background: #2a3f5a; color: #fff; border: 1px solid #4a9eff; border-radius: 4px; cursor: pointer;">Upload model…</button>
+                        <button type="button" onclick="clearEnemyArenaStlModal()" style="padding: 6px 12px; background: #3a2a2a; color: #fff; border: 1px solid #666; border-radius: 4px; cursor: pointer;">Clear model</button>
+                    </div>
                     
                     <div class="modal-actions">
                         <button type="button" id="enemyFormSubmitBtn" onclick="saveEnemyForm()">Create</button>
@@ -945,8 +990,11 @@
         <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
+    <input type="file" id="arenaStlHiddenFilePicker" accept=".stl,.glb,model/stl,model/gltf-binary,application/sla,application/vnd.ms-pki.stl" style="display: none;" aria-hidden="true">
+
     <script src="/static/data/armstech_data.js?v=68"></script>
-    <script src="/static/app.js?v=82"></script>
+    <script src="/static/arena3d-boot.js?v=6"></script>
+    <script src="/static/app.js?v=86"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

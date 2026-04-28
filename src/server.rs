@@ -5,6 +5,7 @@ use base64::{Engine as _, engine::general_purpose};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
+        DefaultBodyLimit,
         State, Path, Multipart,
     },
     response::{Response, IntoResponse},
@@ -172,11 +173,11 @@ pub async fn start_server(
         .route("/api/sounds", post(upload_sound))
         .route("/api/sounds/:filename", delete(delete_sound))
         .route("/static/sounds/:filename", get(get_sound_file))
+        .route("/api/arena-stl", post(upload_arena_stl))
         .nest_service("/static", tower_http::services::ServeDir::new("static"))
-        .layer(
-            tower::ServiceBuilder::new()
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(50 * 1024 * 1024)) // 50MB limit
-        )
+        // Axum's default body limit is 2MB; Multipart ignores tower's RequestBodyLimitLayer until
+        // DefaultBodyLimit is raised — without this, large STL uploads can abort (browser: "Failed to fetch").
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state((dnd_db, starwars_db, game_state, clients.clone(), shutdown_tx.clone()));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -189,6 +190,7 @@ pub async fn start_server(
     info!("   GET  /api/saves/:filename - Get saved state");
     info!("   POST /api/saves/:filename - Save game state");
     info!("   DELETE /api/saves/:filename - Delete saved state");
+    info!("   POST /api/arena-stl - Upload .stl / .glb for 3D token minis (static/arena_stl)");
 
     // Open browser automatically
     let url = format!("http://localhost:{}", addr.port());
@@ -2933,6 +2935,77 @@ async fn upload_sound(
         "filename": safe_filename,
         "size": file_path.metadata().map(|m| m.len()).unwrap_or(0),
         "message": "Sound uploaded successfully"
+    })))
+}
+
+/// STL / GLB uploads for 3D arena token minis — served via `/static/arena_stl/...`.
+async fn upload_arena_stl(
+    mut multipart: Multipart,
+) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
+    use std::path::Path;
+
+    let dir = Path::new("static").join("arena_stl");
+    if !dir.exists() {
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            error!("❌ Failed to create arena_stl directory: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    let mut filename = String::new();
+    let mut file_data = Vec::new();
+
+    while let Some(mut field) = multipart.next_field().await.map_err(|e| {
+        error!("❌ arena-stl multipart read: {}", e);
+        StatusCode::BAD_REQUEST
+    })? {
+        if field.name().unwrap_or("") == "file" {
+            if let Some(name) = field.file_name() {
+                filename = name.to_string();
+            }
+            let mut field_data = Vec::new();
+            while let Some(chunk) = field.chunk().await.map_err(|e| {
+                error!("❌ arena-stl chunk: {}", e);
+                StatusCode::BAD_REQUEST
+            })? {
+                field_data.extend_from_slice(&chunk);
+            }
+            file_data = field_data;
+        }
+    }
+
+    if filename.is_empty() || file_data.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let lower = filename.to_lowercase();
+    if !lower.ends_with(".stl") && !lower.ends_with(".glb") {
+        error!("❌ arena model rejected (need .stl or .glb): {}", filename);
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let safe_base = filename
+        .replace('/', "_")
+        .replace('\\', "_")
+        .replace("..", "_");
+    let unique = format!("{}_{}", Uuid::new_v4(), safe_base);
+    let file_path = dir.join(&unique);
+
+    info!("📤 Uploading arena 3D model: {} ({} bytes)", unique, file_data.len());
+
+    if let Err(e) = tokio::fs::write(&file_path, file_data).await {
+        error!("❌ Failed to write arena model {}: {}", file_path.display(), e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let url = format!("/static/arena_stl/{}", unique);
+    info!("✅ Arena model saved: {}", url);
+
+    Ok(axum::response::Json(serde_json::json!({
+        "status": "success",
+        "url": url,
+        "filename": unique,
+        "size": file_path.metadata().map(|m| m.len()).unwrap_or(0)
     })))
 }
 

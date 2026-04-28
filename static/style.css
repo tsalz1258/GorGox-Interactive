@@ -972,6 +972,104 @@ body.player-action-bar-visible .main-container {
     gap: 10px;
 }
 
+/* 3D Arena (experimental) */
+.arena3d {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: rgba(10, 10, 14, 0.92);
+    z-index: 50;
+}
+.arena3d-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 10px 12px;
+    background: linear-gradient(135deg, rgba(20, 20, 30, 0.95), rgba(10, 10, 14, 0.95));
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.arena3d-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.arena3d-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.arena3d-hint {
+    font-size: 11px;
+    opacity: 0.8;
+    white-space: normal;
+    max-width: min(520px, 42vw);
+    line-height: 1.35;
+}
+.arena3d-rotate-tools {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 0 2px 8px;
+    margin-left: 4px;
+    border-left: 1px solid rgba(255, 255, 255, 0.15);
+}
+.arena3d-rotate-label {
+    font-size: 11px;
+    opacity: 0.75;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 2px;
+}
+.arena3d-btn-compact {
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+}
+.arena3d-viewport {
+    flex: 1;
+    min-height: 0;
+    border-radius: 0 0 10px 10px;
+}
+.arena3d-btn {
+    padding: 8px 12px;
+    background: rgba(74, 158, 255, 0.9);
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    transition: transform 0.15s ease, filter 0.15s ease;
+}
+.arena3d-btn:hover {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+}
+.arena3d-btn-danger {
+    background: rgba(255, 68, 68, 0.9);
+}
+.arena3d-file-label input[type="file"] {
+    display: none;
+}
+.arena3d-drop-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    background: rgba(0, 0, 0, 0.55);
+    border: 3px dashed rgba(74, 158, 255, 0.8);
+    color: rgba(255, 255, 255, 0.92);
+    pointer-events: none;
+}
+
 #mapControls button {
     padding: 10px 15px;
     background: rgba(74, 158, 255, 0.9);
