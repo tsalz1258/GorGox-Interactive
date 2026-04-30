@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v92'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v97'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -443,30 +443,13 @@ function getBattlefieldSnapshotForArena3d() {
     const fallbackH = canvasEl && canvasEl.height > 0 ? canvasEl.height : 800;
     const gp =
         typeof gridSize === 'number' && !isNaN(gridSize) && gridSize > 0 ? gridSize : 50;
-    if (!cm) {
-        return {
-            hasMap: false,
-            image: null,
-            imagePath: null,
-            width: fallbackW,
-            height: fallbackH,
-            gridPixels: gp,
-            tokens: [],
-        };
-    }
-    const gw = Number(cm.width);
-    const gh = Number(cm.height);
-    const gFromMap =
-        cm.grid_size != null && !isNaN(Number(cm.grid_size)) && Number(cm.grid_size) > 0
-            ? Number(cm.grid_size)
-            : gp;
     const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
     const tokenList = [];
-    if (cm && Array.isArray(tokens)) {
+    if (Array.isArray(tokens)) {
         for (const t of tokens) {
             if (!t || t.entity_type === 'Object') continue;
             if (viewerIsPlayer && t.hidden_from_players) continue;
-            const stlUrl = resolveTokenStlUrlForArena3d(t);
+            const stlUrl = normalizeArenaModelUrl(resolveTokenStlUrlForArena3d(t));
             if (!stlUrl) continue;
             const ts = t.size != null && !isNaN(Number(t.size)) ? Number(t.size) : getTokenSize(t.entity_id, t.entity_type);
             tokenList.push({
@@ -480,6 +463,23 @@ function getBattlefieldSnapshotForArena3d() {
             });
         }
     }
+    if (!cm) {
+        return {
+            hasMap: false,
+            image: null,
+            imagePath: null,
+            width: fallbackW,
+            height: fallbackH,
+            gridPixels: gp,
+            tokens: tokenList,
+        };
+    }
+    const gw = Number(cm.width);
+    const gh = Number(cm.height);
+    const gFromMap =
+        cm.grid_size != null && !isNaN(Number(cm.grid_size)) && Number(cm.grid_size) > 0
+            ? Number(cm.grid_size)
+            : gp;
     return {
         hasMap: true,
         image: cm.image || null,
@@ -490,6 +490,9 @@ function getBattlefieldSnapshotForArena3d() {
         tokens: tokenList,
     };
 }
+try {
+    globalThis.getBattlefieldSnapshotForArena3d = getBattlefieldSnapshotForArena3d;
+} catch (_) {}
 window.getBattlefieldSnapshotForArena3d = getBattlefieldSnapshotForArena3d;
 
 /** DM or owner — same rules as manual sheet edit (not while picking another character). */
@@ -617,6 +620,11 @@ function setCharacterArenaStlUrl(characterId, urlOrNull) {
     if (payload) sendMessage({ type: 'UpdateCharacter', character: payload });
     renderCharacterSheetContent();
     addLogEntry(urlOrNull ? `Attached 3D model for ${char.name}` : `Cleared 3D model for ${char.name}`, 'info');
+    try {
+        if (typeof window !== 'undefined' && typeof window.arena3dSyncNow === 'function') {
+            window.arena3dSyncNow();
+        }
+    } catch (_) {}
 }
 
 async function uploadArenaStlForCharacter(characterId) {
@@ -3812,6 +3820,16 @@ function normalizePortraitUrl(src) {
     if (s.startsWith('//')) return window.location.protocol + s;
     if (s.startsWith('/')) return window.location.origin + s;
     return s;
+}
+
+function normalizeArenaModelUrl(src) {
+    if (src == null) return '';
+    const s = String(src).trim();
+    if (!s) return '';
+    if (/^(https?:|data:|blob:)/i.test(s)) return s;
+    if (s.startsWith('//')) return window.location.protocol + s;
+    if (s.startsWith('/')) return s; // leave relative-to-origin; arena3d resolves to absolute
+    return '/' + s.replace(/^\.?\//, '');
 }
 
 /** Resolve portrait for enemy/NPC tokens: server image_url, then template/instance from enemies list. */

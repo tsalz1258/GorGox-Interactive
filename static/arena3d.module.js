@@ -22,8 +22,10 @@ let pointerNdc = null;
 let battlefieldGroup = null;
 /** Token-linked STLs (not in `selectable`); preserved when the floor texture reloads. */
 let tokenMiniRoot = null;
-/** @type {Map<string, { mesh: THREE.Mesh, url: string }>} */
+/** @type {Map<string, { mesh: THREE.Object3D | null, url: string, loading?: boolean, pendingWorld?: { wx: number, wz: number, cell: number } }>} */
 let tokenMiniById = new Map();
+/** Monotonic per-token generation so stale fetches never add a second mesh. */
+let tokenMiniLoadGen = new Map();
 let groundMesh = null;
 let gridLines = null;
 let groundPlane = null;
@@ -195,11 +197,34 @@ function applyMiniConstraints(mesh, opts) {
   plantMiniOnFloor(mesh);
 }
 
-function getSnapshot() {
-  if (typeof window.getBattlefieldSnapshotForArena3d === "function") {
-    return window.getBattlefieldSnapshotForArena3d();
+function resolveBattlefieldSnapshotFn() {
+  const out = [];
+  try {
+    if (typeof globalThis !== "undefined") out.push(globalThis);
+  } catch (_) {}
+  try {
+    if (typeof window !== "undefined") out.push(window);
+  } catch (_) {}
+  try {
+    if (typeof document !== "undefined" && document.defaultView) out.push(document.defaultView);
+  } catch (_) {}
+  for (let i = 0; i < out.length; i++) {
+    const o = out[i];
+    const f = o && o.getBattlefieldSnapshotForArena3d;
+    if (typeof f === "function") return f;
   }
-  return { hasMap: false, image: null, imagePath: null, width: 1200, height: 800, gridPixels: 50 };
+  return null;
+}
+
+function getSnapshot() {
+  if (typeof window !== "undefined" && typeof window.__arena3dPullBattlefieldSnapshot === "function") {
+    return window.__arena3dPullBattlefieldSnapshot();
+  }
+  const fn = resolveBattlefieldSnapshotFn();
+  if (fn) {
+    return fn();
+  }
+  return { hasMap: false, image: null, imagePath: null, width: 1200, height: 800, gridPixels: 50, tokens: [] };
 }
 
 function disposeBattlefieldChildren() {
@@ -635,6 +660,23 @@ function tryDispose(obj) {
   });
 }
 
+function bumpTokenMiniLoadGen(tokenId) {
+  const n = (tokenMiniLoadGen.get(tokenId) || 0) + 1;
+  tokenMiniLoadGen.set(tokenId, n);
+  return n;
+}
+
+/** Remove every scene child tagged for this token (handles orphan meshes from superseded loads). */
+function removeTokenMiniMeshesForId(tokenId) {
+  if (!tokenMiniRoot) return;
+  for (const ch of [...tokenMiniRoot.children]) {
+    if (ch.userData && ch.userData.gorgoxTokenMiniId === tokenId) {
+      tokenMiniRoot.remove(ch);
+      tryDispose(ch);
+    }
+  }
+}
+
 function arena3dClearAll() {
   if (!scene) return;
   setSelected(null);
@@ -644,13 +686,14 @@ function arena3dClearAll() {
 }
 
 function clearTokenMiniMeshes() {
-  tokenMiniById.forEach((rec) => {
-    if (rec && rec.mesh) {
-      tokenMiniRoot?.remove(rec.mesh);
-      tryDispose(rec.mesh);
+  if (tokenMiniRoot) {
+    for (const ch of [...tokenMiniRoot.children]) {
+      tokenMiniRoot.remove(ch);
+      tryDispose(ch);
     }
-  });
+  }
   tokenMiniById.clear();
+  tokenMiniLoadGen.clear();
 }
 
 /**
@@ -689,11 +732,16 @@ function syncTokenMinisFromSnapshot(snap) {
   }
 
   for (const [id, rec] of [...tokenMiniById.entries()]) {
-    if (!seen.has(id) && rec && rec.mesh) {
+    if (seen.has(id)) continue;
+    bumpTokenMiniLoadGen(id);
+    removeTokenMiniMeshesForId(id);
+    if (rec && rec.mesh && rec.mesh.parent === tokenMiniRoot) {
       tokenMiniRoot.remove(rec.mesh);
       tryDispose(rec.mesh);
-      tokenMiniById.delete(id);
+    } else if (rec && rec.mesh) {
+      tryDispose(rec.mesh);
     }
+    tokenMiniById.delete(id);
   }
 }
 
@@ -702,8 +750,16 @@ function rescaleTokenMiniMesh(mesh, cellWorld) {
 }
 
 function loadTokenMiniStl(tokenId, url, wx, wz, cellWorld) {
+  const prev = tokenMiniById.get(tokenId);
+  if (prev && prev.loading && prev.url === url) {
+    prev.pendingWorld = { wx, wz, cell: cellWorld };
+    return;
+  }
+
+  const gen = bumpTokenMiniLoadGen(tokenId);
+  removeTokenMiniMeshesForId(tokenId);
   const absUrl = /^https?:\/\//i.test(url) ? url : new URL(url, window.location.href).href;
-  tokenMiniById.set(tokenId, { url, mesh: null, loading: true });
+  tokenMiniById.set(tokenId, { url, mesh: null, loading: true, loadGen: gen });
   fetch(absUrl)
     .then((r) => {
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -714,16 +770,31 @@ function loadTokenMiniStl(tokenId, url, wx, wz, cellWorld) {
       return parseArenaModelBuffer(vname, buf, { stlColor: 0xc9b896 });
     })
     .then((root) => {
+      if (tokenMiniLoadGen.get(tokenId) !== gen) {
+        tryDispose(root);
+        return;
+      }
+      let useWx = wx;
+      let useWz = wz;
+      let useCell = cellWorld;
+      const entry = tokenMiniById.get(tokenId);
+      if (entry && entry.pendingWorld) {
+        useWx = entry.pendingWorld.wx;
+        useWz = entry.pendingWorld.wz;
+        useCell = entry.pendingWorld.cell;
+      }
       root.userData.gorgoxTokenMiniId = tokenId;
       captureMiniFootprintReference(root);
-      root.position.set(wx, 0, wz);
-      applyMiniScaleForCell(root, cellWorld, 80);
+      root.position.set(useWx, 0, useWz);
+      applyMiniScaleForCell(root, useCell, 80);
       tokenMiniRoot.add(root);
-      tokenMiniById.set(tokenId, { url, mesh: root, loading: false });
+      tokenMiniById.set(tokenId, { url, mesh: root, loading: false, loadGen: gen });
     })
     .catch((err) => {
       console.warn("[arena3d] Token model load failed:", tokenId, err && err.message ? err.message : err);
-      tokenMiniById.delete(tokenId);
+      if (tokenMiniLoadGen.get(tokenId) !== gen) return;
+      const cur = tokenMiniById.get(tokenId);
+      if (cur && cur.loading) tokenMiniById.delete(tokenId);
     });
 }
 
@@ -797,5 +868,13 @@ function nudgeSelectionWorldRotation(axis, degrees) {
   o.rotateOnWorldAxis(ax, rad);
   applyMiniConstraints(o, { snapGrid: false });
 }
+
+// Allow app.js to force an immediate token mini refresh after attaching a model.
+try {
+  window.arena3dSyncNow = function () {
+    ensureInit();
+    syncBattlefieldFromGorgox(true);
+  };
+} catch (_) {}
 
 export { toggle3DArena, arena3dClearAll, nudgeSelectionWorldRotation };

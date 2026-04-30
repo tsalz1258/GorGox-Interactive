@@ -3,9 +3,37 @@
  * never hits ReferenceError. The real Three.js code loads on first use via dynamic import().
  */
 (function () {
-  var MODULE_URL = "/static/arena3d.module.js?v=9";
+  var MODULE_URL = "/static/arena3d.module.js?v=16";
   var loadPromise = null;
   var api = null;
+
+  /**
+   * Classic-script bridge: ES module scope can miss host globals in some environments.
+   * Always read snapshot fn from the same window object app.js uses, at call time.
+   */
+  window.__arena3dPullBattlefieldSnapshot = function () {
+    var fn = null;
+    try {
+      fn = window.getBattlefieldSnapshotForArena3d;
+    } catch (e) {}
+    if (typeof fn !== "function" && typeof globalThis !== "undefined") {
+      try {
+        fn = globalThis.getBattlefieldSnapshotForArena3d;
+      } catch (e2) {}
+    }
+    if (typeof fn === "function") {
+      return fn();
+    }
+    return {
+      hasMap: false,
+      image: null,
+      imagePath: null,
+      width: 1200,
+      height: 800,
+      gridPixels: 50,
+      tokens: [],
+    };
+  };
 
   function loadModule() {
     if (api) return Promise.resolve(api);
