@@ -16,7 +16,6 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::io::Write;
 use tokio::signal;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
@@ -24,27 +23,6 @@ use uuid::Uuid;
 use sqlx::Row;
 
 type Clients = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
-
-fn debug_ndjson_write(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
-    // Debug-mode runtime evidence log. Keep compact; never log secrets.
-    // NOTE: Writes to repo-local debug file (created automatically).
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("debug-db3468.log")
-    {
-        let payload = serde_json::json!({
-            "sessionId": "db3468",
-            "runId": "pre-fix",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": chrono::Utc::now().timestamp_millis(),
-        });
-        let _ = writeln!(f, "{}", payload.to_string());
-    }
-}
 
 async fn load_characters_from_db(db: &Database, game_state: &Arc<RwLock<GameState>>, db_name: &str) {
     use crate::models::Character;
@@ -320,16 +298,6 @@ async fn handle_socket(
         while let Some(Ok(Message::Text(text))) = receiver.next().await {
             match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(client_msg) => {
-                    let msg_type = serde_json::to_value(&client_msg)
-                        .ok()
-                        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|s| s.to_string()))
-                        .unwrap_or_else(|| "unknown".to_string());
-                    debug_ndjson_write(
-                        "H7_ws_receive",
-                        "src/server.rs:websocket recv",
-                        "WS ClientMessage parsed",
-                        serde_json::json!({ "type": msg_type }),
-                    );
                     handle_client_message(
                         client_msg,
                         &session_id,
@@ -343,22 +311,6 @@ async fn handle_socket(
                 Err(e) => {
                     error!("❌ Failed to deserialize client message: {}", e);
                     error!("   Message text: {}", text);
-                    if let Ok(partial) = serde_json::from_str::<serde_json::Value>(&text) {
-                        let t = partial.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        debug_ndjson_write(
-                            "H7_ws_receive",
-                            "src/server.rs:websocket recv",
-                            "WS ClientMessage deserialize failed",
-                            serde_json::json!({ "type": t, "err": e.to_string() }),
-                        );
-                    } else {
-                        debug_ndjson_write(
-                            "H7_ws_receive",
-                            "src/server.rs:websocket recv",
-                            "WS ClientMessage deserialize failed (no json)",
-                            serde_json::json!({ "err": e.to_string() }),
-                        );
-                    }
                     // Try to log what type of message it was supposed to be
                     if let Ok(partial) = serde_json::from_str::<serde_json::Value>(&text) {
                         if let Some(msg_type) = partial.get("type") {
@@ -574,12 +526,6 @@ async fn list_maps_http(
         broadcast::Sender<()>,
     )>,
 ) -> axum::response::Json<serde_json::Value> {
-    debug_ndjson_write(
-        "H6_http_maps_404",
-        "src/server.rs:list_maps_http",
-        "HTTP /api/maps hit",
-        serde_json::json!({}),
-    );
     let maps = fetch_maps_for_list(&dnd_db, &starwars_db).await;
     axum::response::Json(serde_json::json!({ "maps": maps }))
 }

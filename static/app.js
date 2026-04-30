@@ -1,7 +1,8 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v90'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v92'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
+const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
 var characterSheetListRefreshDebounceId = null; // CharacterList → debounced sheet re-render (see scheduleDebouncedCharacterSheetRefresh)
 var lastActionBarScrollBeforeClick = null; // Capture scroll on mousedown so we restore to pre-click position (avoid grid dragging down)
 var actionBarScrollLockUntil = 0; // Until this timestamp, we force-restore scroll on any scroll event (stops grid drag)
@@ -373,9 +374,6 @@ function performConnection(playerName, isDmValue, style) {
             alert('Error receiving message from server. Please refresh the page.');
             return;
         }
-        // #region agent log
-        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H2_server_not_responding',location:'static/app.js:ws.onmessage',message:'WS message received',data:{type:message&&message.type,keys:message?Object.keys(message).slice(0,12):[],hasMap:!!(message&&message.map&&message.map.id),errText:(message&&message.type==='Error'&&message.message)?String(message.message).slice(0,140):undefined},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-        // #endregion agent log
         try {
             handleServerMessage(message);
         } catch (e) {
@@ -390,9 +388,6 @@ function performConnection(playerName, isDmValue, style) {
     ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         updateConnectionStatus(false);
-        // #region agent log
-        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H1_send_dropped',location:'static/app.js:ws.onerror',message:'WS error',data:{wsState:ws?ws.readyState:null},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-        // #endregion agent log
     };
     
     ws.onclose = (event) => {
@@ -400,9 +395,6 @@ function performConnection(playerName, isDmValue, style) {
         if (typeof addLogEntry === 'function') {
             addLogEntry('Disconnected from server', 'info');
         }
-        // #region agent log
-        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H1_send_dropped',location:'static/app.js:ws.onclose',message:'WS closed',data:{wasClean:!!event.wasClean,code:event.code,reason:(event.reason||'').slice(0,120)},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-        // #endregion agent log
         ws = null;
         
         // Auto-reconnect for dropped connections (e.g. slow/unstable network) so players see updates again
@@ -742,9 +734,6 @@ async function handleEnemyArenaStlFileChange(ev) {
 }
 
 function sendMessage(message) {
-    // #region agent log
-    try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H1_send_dropped',location:'static/app.js:sendMessage',message:'sendMessage called',data:{type:message&&message.type,wsState:ws?ws.readyState:null,hasCurrentMap:!!currentMap,currentMapId:currentMap&&currentMap.id},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-    // #endregion agent log
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(message));
     } else {
@@ -1362,9 +1351,6 @@ function handleServerMessage(message) {
                 rejectPendingMapLoad(new Error('MapLoaded missing map'));
                 break;
             }
-            // #region agent log
-            try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H2_server_not_responding',location:'static/app.js:handleServerMessage(MapLoaded)',message:'MapLoaded received',data:{mapId:message.map&&message.map.id,mapName:message.map&&message.map.name,imagePath:message.map&&message.map.image_path,gridSize:message.map&&message.map.grid_size,width:message.map&&message.map.width,height:message.map&&message.map.height,playerViewport:!!message.player_map_viewport},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-            // #endregion agent log
             const prevMapId = currentMap ? currentMap.id : null;
             const newMapId = message.map.id;
             const mapIdChanged = prevMapId !== newMapId;
@@ -1659,6 +1645,7 @@ function handleServerMessage(message) {
             // Update tokens array - this is authoritative from server (avoid heavy console on hot path)
             const npcInstancesBefore = enemies.filter(e => e && e.isNPC && e.npcData);
             const serverTokens = message.tokens || [];
+            const prevTokensSnapshot = Array.isArray(tokens) ? tokens.slice() : [];
             
             // CRITICAL: Preserve manually set sizes from local tokens array
             // Store current local token sizes before replacing the array
@@ -1672,7 +1659,7 @@ function handleServerMessage(message) {
             
             const prevTokensById = new Map(tokens.map(pt => [pt.id, pt]));
             // Merge server tokens with preserved sizes
-            tokens = serverTokens.map(t => {
+            const mergedServer = serverTokens.map(t => {
                 const prev = prevTokensById.get(t.id);
                 const mergedBase = {
                     ...t,
@@ -1683,7 +1670,7 @@ function handleServerMessage(message) {
                 // Check if we have a manually set size for this token
                 const preservedSize = localTokenSizes.get(t.id);
                 if (preservedSize) {
-                    console.log(`✅ Preserving manually set size ${preservedSize} for token ${t.id} (server had: ${t.size})`);
+                    if (DEBUG_TOKEN_SYNC) console.log(`✅ Preserving manually set size ${preservedSize} for token ${t.id} (server had: ${t.size})`);
                     return { ...mergedBase, size: preservedSize };
                 }
                 
@@ -1700,21 +1687,17 @@ function handleServerMessage(message) {
                 } else {
                     // Calculate if size is truly missing
                     const calculatedSize = getTokenSize(t.entity_id, t.entity_type);
-                    console.log(`🔧 Token ${t.id} (${t.entity_id}) missing/invalid size, calculated: ${calculatedSize}`);
+                    if (DEBUG_TOKEN_SYNC) console.log(`🔧 Token ${t.id} (${t.entity_id}) missing/invalid size, calculated: ${calculatedSize}`);
                     return { ...mergedBase, size: calculatedSize };
                 }
             });
-            
-            console.log('✅ Local tokens array updated. Total tokens:', tokens.length);
-            if (tokens.length > 0) {
-                console.log('Token details:');
-                tokens.forEach((t, i) => {
-                    const enemy = enemies.find(e => e.id === t.entity_id);
-                    const char = characters.find(c => c.id === t.entity_id);
-                    const name = enemy ? enemy.name : (char ? char.name : 'Unknown');
-                    console.log(`  ${i + 1}. ${t.entity_type} at (${t.x}, ${t.y}) - entity_id: ${t.entity_id} - name: ${name} - size: ${t.size}`);
-                });
-            }
+            // Keep optimistic placements until the server list includes that entity (avoids a flash if another TokenUpdate arrives first).
+            const keepPending = prevTokensSnapshot.filter(pt =>
+                pt && typeof pt.id === 'string' && pt.id.startsWith('pending:') &&
+                !mergedServer.some(st => st.entity_id === pt.entity_id && st.entity_type === pt.entity_type)
+            );
+            tokens = mergedServer.concat(keepPending);
+            if (DEBUG_TOKEN_SYNC) console.log('✅ Local tokens array updated. Total tokens:', tokens.length);
             
             // Verify NPC instances still exist after token update
             const npcInstancesAfter = enemies.filter(e => e && e.isNPC && e.npcData);
@@ -2560,9 +2543,6 @@ function handleServerMessage(message) {
             
         case 'Error': {
             const errText = message.message || '';
-            // #region agent log
-            try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H3_mapload_error',location:'static/app.js:handleServerMessage(Error)',message:'Server Error received',data:{text:errText.slice(0,220)},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-            // #endregion agent log
             if (errText.includes('Map not found')) {
                 rejectPendingMapLoad(new Error(errText));
             }
@@ -3048,9 +3028,6 @@ function renderCanvas() {
     drawTargetingRangeCircle();
     
     // Draw all measurement shapes
-    if (measurementShapes.length > 0) {
-        console.log('Drawing', measurementShapes.length, 'measurement shapes');
-    }
     measurementShapes.forEach((shape, index) => {
         if (shape.type === 'ruler') {
             drawRulerShape(shape);
@@ -3858,6 +3835,54 @@ function resolveEnemyNpcPortraitSrc(token) {
     return null;
 }
 
+function isTokenVisibleToViewer(token) {
+    if (!token) return false;
+    if (token.hidden_from_players === true) {
+        const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+        if (viewerIsPlayer) return false;
+    }
+    return true;
+}
+
+/**
+ * Append a token locally so placement feels instant; server TokenUpdate replaces the list with authoritative rows (new ids).
+ */
+function applyOptimisticPlaceToken(fields) {
+    if (!fields || !fields.entity_id || !fields.entity_type) return;
+    const {
+        entity_id,
+        entity_type,
+        x,
+        y,
+        size,
+        display_name,
+        image_url,
+        hidden_from_players,
+    } = fields;
+    const mapId = currentMap && currentMap.id != null ? String(currentMap.id) : '';
+    let sz = size;
+    if (sz === undefined || sz === null || isNaN(Number(sz)) || Number(sz) <= 0) {
+        sz = getTokenSize(entity_id, entity_type);
+    } else {
+        sz = Number(sz);
+    }
+    const dn = display_name != null ? String(display_name).trim() : '';
+    const img = image_url != null && String(image_url).trim() !== '' ? String(image_url).trim() : null;
+    tokens.push({
+        id: 'pending:' + generateUUID(),
+        map_id: mapId,
+        entity_id: String(entity_id),
+        entity_type,
+        x: Number(x) || 0,
+        y: Number(y) || 0,
+        size: sz,
+        image_url: img,
+        display_name: dn || null,
+        hidden_from_players: entity_type === 'Object' && hidden_from_players === true,
+    });
+    renderCanvas();
+}
+
 function drawToken(token) {
     // Calculate token dimensions based on size - always use circles
     // size = 1.0: Medium (1x1 square, circle radius = gridSize/2)
@@ -4437,17 +4462,21 @@ function onCanvasMouseUp(e) {
         
         // Only move if position actually changed
         if (selectedToken.x !== gridX || selectedToken.y !== gridY) {
-            console.log(`📍 Moving token ${selectedToken.id} from (${selectedToken.x}, ${selectedToken.y}) to (${gridX}, ${gridY})`);
+            // Optimistic local move so it feels instant; server TokenUpdate will reconcile.
+            selectedToken.x = gridX;
+            selectedToken.y = gridY;
+            const idx = tokens.findIndex(t => t && t.id === selectedToken.id);
+            if (idx !== -1) {
+                tokens[idx] = { ...tokens[idx], x: gridX, y: gridY };
+            }
+            renderCanvas();
+            updateTokenInfo();
             sendMessage({
                 type: 'MoveToken',
                 token_id: selectedToken.id,
                 x: gridX,
                 y: gridY
             });
-            
-            addLogEntry(`Moving token to (${gridX}, ${gridY})`, 'info');
-        } else {
-            console.log('📍 Token already at this position, skipping move');
         }
     }
 }
@@ -7722,9 +7751,6 @@ function showMapUpload() {
 function uploadMap() {
     const name = document.getElementById('mapName').value.trim();
     const file = document.getElementById('mapFile').files[0];
-    // #region agent log
-    try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H5_upload_flow',location:'static/app.js:uploadMap',message:'uploadMap invoked',data:{hasName:!!name,fileName:file&&file.name,fileType:file&&file.type,fileSize:file&&file.size,wsState:ws?ws.readyState:null},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-    // #endregion agent log
     
     if (!name || !file) {
         alert('Please provide a map name and select an image!');
@@ -7737,15 +7763,9 @@ function uploadMap() {
     
     const reader = new FileReader();
     reader.onload = (e) => {
-        // #region agent log
-        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H5_upload_flow',location:'static/app.js:uploadMap(reader.onload)',message:'FileReader loaded map image',data:{dataUrlPrefix:String(e&&e.target&&e.target.result||'').slice(0,40)},timestamp:Date.now()})}).catch(()=>{});} catch(e2) {}
-        // #endregion agent log
         console.log('📤 [UPLOAD MAP] File read, creating image to get dimensions...');
         const img = new Image();
         img.onload = () => {
-            // #region agent log
-            try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H5_upload_flow',location:'static/app.js:uploadMap(img.onload)',message:'Map image decoded, sending CreateMap',data:{w:img.width,h:img.height,wsState:ws?ws.readyState:null},timestamp:Date.now()})}).catch(()=>{});} catch(e3) {}
-            // #endregion agent log
             console.log('📤 [UPLOAD MAP] Image loaded, dimensions:', img.width, 'x', img.height);
             console.log('📤 [UPLOAD MAP] Sending CreateMap message...');
             
@@ -7869,9 +7889,6 @@ function deleteMap(mapId, mapName) {
 
 // Load map (with optional background loading)
 function loadMap(mapId, inBackground = false) {
-    // #region agent log
-    try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H4_wrong_params',location:'static/app.js:loadMap',message:'loadMap invoked',data:{mapId:String(mapId),inBackground:!!inBackground,computedClearTokens:!inBackground,wsState:ws?ws.readyState:null,currentMapId:currentMap&&currentMap.id},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
-    // #endregion agent log
     sendMessage({
         type: 'LoadMap',
         map_id: mapId,
@@ -9005,6 +9022,15 @@ function spawnNPC(npc) {
     // Place token with automatically calculated size
     const tokenSize = getTokenSize(instanceId, 'Enemy');
     console.log(`🎯 Placing NPC token ${instanceName} (${instanceId}) with size: ${tokenSize}`);
+    applyOptimisticPlaceToken({
+        entity_id: instanceId,
+        entity_type: 'Enemy',
+        x: 5,
+        y: 5,
+        size: tokenSize,
+        display_name: instanceName,
+        image_url: npcEnemy.local_portrait || undefined,
+    });
     sendMessage({
         type: 'PlaceToken',
         entity_id: instanceId,
@@ -10701,6 +10727,15 @@ function spawnEnemy(enemyId, enemyName) {
         }
         console.log(`🎯 Placing enemy token ${instanceName} (${instanceId}) with size: ${tokenSize} squares`);
         const enemyPortrait = enemy.portrait_url || enemy.local_portrait || null;
+        applyOptimisticPlaceToken({
+            entity_id: instanceId,
+            entity_type: 'Enemy',
+            x: 5,
+            y: 5,
+            size: tokenSize,
+            display_name: instanceName,
+            image_url: enemyPortrait || undefined,
+        });
         sendMessage({
             type: 'PlaceToken',
             entity_id: instanceId,
@@ -10714,6 +10749,14 @@ function spawnEnemy(enemyId, enemyName) {
     } else {
         console.error('❌ Base enemy not found:', enemyId);
         const tokenSize = 1.0;
+        applyOptimisticPlaceToken({
+            entity_id: instanceId,
+            entity_type: 'Enemy',
+            x: 5,
+            y: 5,
+            size: tokenSize,
+            display_name: instanceName || 'Enemy',
+        });
         sendMessage({
             type: 'PlaceToken',
             entity_id: instanceId,
@@ -14423,6 +14466,13 @@ function placeCharacterToken(charId, charName) {
     }
     
     console.log(`🎯 Placing player token ${charName} (${charId}) with FINAL size: ${tokenSize}`);
+    applyOptimisticPlaceToken({
+        entity_id: charId,
+        entity_type: 'Player',
+        x,
+        y,
+        size: tokenSize,
+    });
     sendMessage({
         type: 'PlaceToken',
         entity_id: charId,
@@ -14464,6 +14514,15 @@ function confirmPlaceObjectToken() {
     const entityId = generateUUID();
     const x = 5;
     const y = 5;
+    applyOptimisticPlaceToken({
+        entity_id: entityId,
+        entity_type: 'Object',
+        x,
+        y,
+        size: 1.0,
+        display_name: label,
+        hidden_from_players: hiddenFromPlayers,
+    });
     sendMessage({
         type: 'PlaceToken',
         entity_id: entityId,
