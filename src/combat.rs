@@ -27,13 +27,6 @@ impl CombatState {
         self.round = 1;
     }
 
-    pub fn add_participant(&mut self, participant: CombatParticipant) {
-        self.participants.push(participant);
-        if self.active {
-            self.sort_by_initiative();
-        }
-    }
-
     /// Update one participant's initiative. Prefer participant_id when set (so multiple with same entity_id are updated correctly).
     pub fn update_initiative(&mut self, entity_id: &str, initiative: i32, participant_id: Option<&str>) {
         if let Some(id) = participant_id {

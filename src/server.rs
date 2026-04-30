@@ -279,7 +279,7 @@ async fn handle_socket(
     // Clone values needed after the task
     let clients_clone = clients.clone();
     let session_id_clone = session_id.clone();
-    let _game_state_clone = game_state.clone();
+    let game_state_for_disconnect = game_state.clone();
     
     // Spawn task to send messages to this client
     let mut send_task = tokio::spawn(async move {
@@ -332,6 +332,10 @@ async fn handle_socket(
     }
 
     clients_clone.write().await.remove(&session_id_clone);
+    {
+        let mut gs = game_state_for_disconnect.write().await;
+        gs.remove_player(&session_id_clone);
+    }
     info!("Client {} disconnected", session_id_clone);
 }
 
@@ -379,14 +383,13 @@ async fn enrich_tokens_with_display_names(
             }
         }
         if t.display_name.is_none() {
-            if let Some(name) = gs.enemy_instances.get(&t.entity_id).map(|e| e.name.clone()) {
+            if let Some(name) = gs.get_enemy_instance(&t.entity_id).map(|e| e.name.clone()) {
                 t.display_name = Some(name);
             }
         }
         if t.image_url.is_none() {
             let template_id = gs
-                .enemy_instances
-                .get(&t.entity_id)
+                .get_enemy_instance(&t.entity_id)
                 .map(|e| e.enemy_id.clone())
                 .unwrap_or_else(|| t.entity_id.clone());
             need_portrait.push((i, template_id));
@@ -927,7 +930,7 @@ async fn handle_client_message(
                                 max_hp: character.max_hp,
                                 armor_class: character.armor_class,
                             }
-                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                        } else if let Some(enemy) = gs.get_enemy_instance(&token.entity_id) {
                             CombatParticipant {
                                 id: token.id.clone(),
                                 entity_id: token.entity_id.clone(),
@@ -970,7 +973,7 @@ async fn handle_client_message(
                                 max_hp: character.max_hp,
                                 armor_class: character.armor_class,
                             }
-                        } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                        } else if let Some(enemy) = gs.get_enemy_instance(&token.entity_id) {
                             CombatParticipant {
                                 id: token.id.clone(),
                                 entity_id: token.entity_id.clone(),
@@ -1033,7 +1036,7 @@ async fn handle_client_message(
                             max_hp: character.max_hp,
                             armor_class: character.armor_class,
                         }
-                    } else if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                    } else if let Some(enemy) = gs.get_enemy_instance(&token.entity_id) {
                         CombatParticipant {
                             id: token.id.clone(),
                             entity_id: token.entity_id.clone(),
@@ -1209,10 +1212,10 @@ async fn handle_client_message(
                             info!("Updated character {} HP to {}", character.name, new_hp);
                         }
                     } else if etype == crate::models::TokenType::Enemy {
-                        // Update enemy instance HP
-                        if let Some(enemy) = gs.enemy_instances.get_mut(&eid) {
-                            enemy.current_hp = new_hp;
-                            info!("Updated enemy {} HP to {}", enemy.name, new_hp);
+                        let enemy_name = gs.get_enemy_instance(&eid).map(|e| e.name.clone());
+                        gs.update_enemy_instance_hp(&eid, new_hp);
+                        if let Some(name) = enemy_name {
+                            info!("Updated enemy {} HP to {}", name, new_hp);
                         }
                     }
                 }
@@ -1242,10 +1245,10 @@ async fn handle_client_message(
                             info!("Updated character {} HP to {}", character.name, new_hp);
                         }
                     } else if etype == crate::models::TokenType::Enemy {
-                        // Update enemy instance HP
-                        if let Some(enemy) = gs.enemy_instances.get_mut(&eid) {
-                            enemy.current_hp = new_hp;
-                            info!("Updated enemy {} HP to {}", enemy.name, new_hp);
+                        let enemy_name = gs.get_enemy_instance(&eid).map(|e| e.name.clone());
+                        gs.update_enemy_instance_hp(&eid, new_hp);
+                        if let Some(name) = enemy_name {
+                            info!("Updated enemy {} HP to {}", name, new_hp);
                         }
                     }
                 }
@@ -1348,7 +1351,7 @@ async fn handle_client_message(
                                 token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.max_hp)));
                             }
                         } else if token.entity_type == crate::models::TokenType::Enemy {
-                            if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                            if let Some(enemy) = gs.get_enemy_instance(&token.entity_id) {
                                 token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.current_hp)));
                                 token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.max_hp)));
                             }
@@ -1530,7 +1533,7 @@ async fn handle_client_message(
                             info!("💾 Saved token {} (Player) with HP: {}/{}", token.id, char.current_hp, char.max_hp);
                         }
                     } else if token.entity_type == crate::models::TokenType::Enemy {
-                        if let Some(enemy) = gs.enemy_instances.get(&token.entity_id) {
+                        if let Some(enemy) = gs.get_enemy_instance(&token.entity_id) {
                             token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.current_hp)));
                             token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.max_hp)));
                             info!("💾 Saved token {} (Enemy) with HP: {}/{}", token.id, enemy.current_hp, enemy.max_hp);
