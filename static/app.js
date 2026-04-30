@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v86'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v90'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 var characterSheetListRefreshDebounceId = null; // CharacterList → debounced sheet re-render (see scheduleDebouncedCharacterSheetRefresh)
@@ -94,6 +94,32 @@ let playerViewportSendTimer = null;
 let pendingMapLoadPromiseResolver = null;
 let pendingMapLoadPromiseRejecter = null;
 let pendingMapLoadTimeoutId = null;
+
+// Saved maps UI cache (prevents transient empty/error from wiping the list)
+let savedMapsCache = [];
+let savedMapsLastGoodAt = 0;
+let savedMapsLastRenderedAt = 0;
+let savedMapsRefreshTimerId = null;
+
+function isMapUploadModalOpen() {
+    const m = document.getElementById('mapUploadModal');
+    return !!(m && m.classList.contains('active'));
+}
+
+function scheduleSavedMapsAutoRefresh() {
+    if (savedMapsRefreshTimerId) return;
+    savedMapsRefreshTimerId = setInterval(() => {
+        if (!isMapUploadModalOpen()) return;
+        // Best-effort refresh; don't spam server more than needed.
+        sendMessage({ type: 'ListMaps' });
+        void refreshSavedMapsListFromHttp();
+    }, 15000);
+}
+
+function stopSavedMapsAutoRefresh() {
+    if (savedMapsRefreshTimerId) clearInterval(savedMapsRefreshTimerId);
+    savedMapsRefreshTimerId = null;
+}
 
 function clearPendingMapLoadPromise() {
     if (pendingMapLoadTimeoutId) {
@@ -195,7 +221,7 @@ async function refreshSavedMapsListFromHttp() {
         if (!res.ok) {
             // Older servers / alternate deployments may not expose /api/maps (404). We always request WS ListMaps too,
             // so don't replace the UI with an error in that case — just let WS populate.
-            if (res.status !== 404 && container) {
+            if (res.status !== 404 && container && (!Array.isArray(savedMapsCache) || savedMapsCache.length === 0)) {
                 container.innerHTML = '<div style="padding:10px;color:#f88;">Could not load map list (HTTP ' + res.status + ').</div>';
             }
             return;
@@ -204,7 +230,7 @@ async function refreshSavedMapsListFromHttp() {
         renderSavedMapsList(Array.isArray(data.maps) ? data.maps : []);
     } catch (err) {
         console.warn('[maps] /api/maps', err);
-        if (container) {
+        if (container && (!Array.isArray(savedMapsCache) || savedMapsCache.length === 0)) {
             container.innerHTML = '<div style="padding:10px;color:#f88;">Could not load map list (network).</div>';
         }
     }
@@ -328,6 +354,13 @@ function performConnection(playerName, isDmValue, style) {
         
         // Apply theme based on style
         applyTheme(selectedStyle);
+
+        // If map upload modal is open (or recently opened), refresh its list on reconnect.
+        if (isMapUploadModalOpen()) {
+            sendMessage({ type: 'ListMaps' });
+            void refreshSavedMapsListFromHttp();
+            scheduleSavedMapsAutoRefresh();
+        }
     };
     
     ws.onmessage = (event) => {
@@ -340,6 +373,9 @@ function performConnection(playerName, isDmValue, style) {
             alert('Error receiving message from server. Please refresh the page.');
             return;
         }
+        // #region agent log
+        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H2_server_not_responding',location:'static/app.js:ws.onmessage',message:'WS message received',data:{type:message&&message.type,keys:message?Object.keys(message).slice(0,12):[],hasMap:!!(message&&message.map&&message.map.id),errText:(message&&message.type==='Error'&&message.message)?String(message.message).slice(0,140):undefined},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+        // #endregion agent log
         try {
             handleServerMessage(message);
         } catch (e) {
@@ -354,6 +390,9 @@ function performConnection(playerName, isDmValue, style) {
     ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         updateConnectionStatus(false);
+        // #region agent log
+        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H1_send_dropped',location:'static/app.js:ws.onerror',message:'WS error',data:{wsState:ws?ws.readyState:null},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+        // #endregion agent log
     };
     
     ws.onclose = (event) => {
@@ -361,6 +400,9 @@ function performConnection(playerName, isDmValue, style) {
         if (typeof addLogEntry === 'function') {
             addLogEntry('Disconnected from server', 'info');
         }
+        // #region agent log
+        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H1_send_dropped',location:'static/app.js:ws.onclose',message:'WS closed',data:{wasClean:!!event.wasClean,code:event.code,reason:(event.reason||'').slice(0,120)},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+        // #endregion agent log
         ws = null;
         
         // Auto-reconnect for dropped connections (e.g. slow/unstable network) so players see updates again
@@ -700,6 +742,9 @@ async function handleEnemyArenaStlFileChange(ev) {
 }
 
 function sendMessage(message) {
+    // #region agent log
+    try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H1_send_dropped',location:'static/app.js:sendMessage',message:'sendMessage called',data:{type:message&&message.type,wsState:ws?ws.readyState:null,hasCurrentMap:!!currentMap,currentMapId:currentMap&&currentMap.id},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+    // #endregion agent log
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(message));
     } else {
@@ -1317,6 +1362,9 @@ function handleServerMessage(message) {
                 rejectPendingMapLoad(new Error('MapLoaded missing map'));
                 break;
             }
+            // #region agent log
+            try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H2_server_not_responding',location:'static/app.js:handleServerMessage(MapLoaded)',message:'MapLoaded received',data:{mapId:message.map&&message.map.id,mapName:message.map&&message.map.name,imagePath:message.map&&message.map.image_path,gridSize:message.map&&message.map.grid_size,width:message.map&&message.map.width,height:message.map&&message.map.height,playerViewport:!!message.player_map_viewport},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+            // #endregion agent log
             const prevMapId = currentMap ? currentMap.id : null;
             const newMapId = message.map.id;
             const mapIdChanged = prevMapId !== newMapId;
@@ -2512,6 +2560,9 @@ function handleServerMessage(message) {
             
         case 'Error': {
             const errText = message.message || '';
+            // #region agent log
+            try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H3_mapload_error',location:'static/app.js:handleServerMessage(Error)',message:'Server Error received',data:{text:errText.slice(0,220)},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+            // #endregion agent log
             if (errText.includes('Map not found')) {
                 rejectPendingMapLoad(new Error(errText));
             }
@@ -7656,15 +7707,24 @@ function showMapUpload() {
     modal.classList.add('active');
     const listEl = document.getElementById('savedMapsList');
     if (listEl) {
-        listEl.innerHTML = '<div style="padding:12px;color:#888;text-align:center;">Loading saved maps…</div>';
+        // Render cached list immediately so the UI doesn't appear empty during transient outages.
+        if (Array.isArray(savedMapsCache) && savedMapsCache.length > 0) {
+            renderSavedMapsList(savedMapsCache);
+        } else {
+            listEl.innerHTML = '<div style="padding:12px;color:#888;text-align:center;">Loading saved maps…</div>';
+        }
     }
     sendMessage({ type: 'ListMaps' });
     void refreshSavedMapsListFromHttp();
+    scheduleSavedMapsAutoRefresh();
 }
 
 function uploadMap() {
     const name = document.getElementById('mapName').value.trim();
     const file = document.getElementById('mapFile').files[0];
+    // #region agent log
+    try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H5_upload_flow',location:'static/app.js:uploadMap',message:'uploadMap invoked',data:{hasName:!!name,fileName:file&&file.name,fileType:file&&file.type,fileSize:file&&file.size,wsState:ws?ws.readyState:null},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+    // #endregion agent log
     
     if (!name || !file) {
         alert('Please provide a map name and select an image!');
@@ -7677,9 +7737,15 @@ function uploadMap() {
     
     const reader = new FileReader();
     reader.onload = (e) => {
+        // #region agent log
+        try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H5_upload_flow',location:'static/app.js:uploadMap(reader.onload)',message:'FileReader loaded map image',data:{dataUrlPrefix:String(e&&e.target&&e.target.result||'').slice(0,40)},timestamp:Date.now()})}).catch(()=>{});} catch(e2) {}
+        // #endregion agent log
         console.log('📤 [UPLOAD MAP] File read, creating image to get dimensions...');
         const img = new Image();
         img.onload = () => {
+            // #region agent log
+            try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H5_upload_flow',location:'static/app.js:uploadMap(img.onload)',message:'Map image decoded, sending CreateMap',data:{w:img.width,h:img.height,wsState:ws?ws.readyState:null},timestamp:Date.now()})}).catch(()=>{});} catch(e3) {}
+            // #endregion agent log
             console.log('📤 [UPLOAD MAP] Image loaded, dimensions:', img.width, 'x', img.height);
             console.log('📤 [UPLOAD MAP] Sending CreateMap message...');
             
@@ -7715,13 +7781,32 @@ function renderSavedMapsList(maps) {
     const container = document.getElementById('savedMapsList');
     if (!container) return;
     
-    if (maps.length === 0) {
+    const arr = Array.isArray(maps) ? maps : [];
+    // Do not wipe a previously-good list with a transient empty payload.
+    // This happens if WS drops / reconnects mid-request, or if a fetch fails and a blank response is rendered.
+    if (arr.length === 0) {
+        const hasCache = Array.isArray(savedMapsCache) && savedMapsCache.length > 0;
+        const recentlyGood = savedMapsLastGoodAt && (Date.now() - savedMapsLastGoodAt) < 10 * 60 * 1000;
+        if (hasCache && recentlyGood) {
+            // Keep the existing list; optionally show a subtle note above it.
+            if (Date.now() - savedMapsLastRenderedAt > 3000) {
+                const note = '<div style="padding:8px 10px;color:#ffaa44;font-size:12px;">⚠️ Map list refresh returned empty; showing last known list. (Will retry)</div>';
+                container.innerHTML = note + container.innerHTML;
+                savedMapsLastRenderedAt = Date.now();
+            }
+            return;
+        }
         container.innerHTML = '<div style="padding: 10px; color: #888; text-align: center;">No saved maps</div>';
+        savedMapsCache = [];
         return;
     }
     
+    // Update cache
+    savedMapsCache = arr.slice();
+    savedMapsLastGoodAt = Date.now();
+    
     let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
-    maps.forEach(map => {
+    arr.forEach(map => {
         const isCurrentMap = currentMap && currentMap.id === map.id;
         html += `
             <div style="position: relative; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; border: 1px solid rgba(255,255,255,0.1);">
@@ -7754,6 +7839,7 @@ function renderSavedMapsList(maps) {
     });
     html += '</div>';
     container.innerHTML = html;
+    savedMapsLastRenderedAt = Date.now();
 }
 
 function deleteMap(mapId, mapName) {
@@ -7783,6 +7869,9 @@ function deleteMap(mapId, mapName) {
 
 // Load map (with optional background loading)
 function loadMap(mapId, inBackground = false) {
+    // #region agent log
+    try { fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'db3468'},body:JSON.stringify({sessionId:'db3468',runId:'pre-fix',hypothesisId:'H4_wrong_params',location:'static/app.js:loadMap',message:'loadMap invoked',data:{mapId:String(mapId),inBackground:!!inBackground,computedClearTokens:!inBackground,wsState:ws?ws.readyState:null,currentMapId:currentMap&&currentMap.id},timestamp:Date.now()})}).catch(()=>{});} catch(e) {}
+    // #endregion agent log
     sendMessage({
         type: 'LoadMap',
         map_id: mapId,
@@ -12024,6 +12113,10 @@ function closeModal(modalId) {
         characterSheetListRefreshDebounceId = null;
     }
     document.getElementById(modalId).classList.remove('active');
+    if (modalId === 'mapUploadModal') {
+        // Stop polling when map upload modal is closed
+        stopSavedMapsAutoRefresh();
+    }
 }
 
 // Helper function to check if a name belongs to a player character
