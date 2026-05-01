@@ -3,7 +3,7 @@
  * never hits ReferenceError. The real Three.js code loads on first use via dynamic import().
  */
 (function () {
-  var MODULE_URL = "/static/arena3d.module.js?v=16";
+  var MODULE_URL = "/static/arena3d.module.js?v=24";
   var loadPromise = null;
   var api = null;
 
@@ -32,6 +32,7 @@
       height: 800,
       gridPixels: 50,
       tokens: [],
+      combatOverlay: { movementCells: null, targeting: null, measurements: [] },
     };
   };
 
@@ -48,6 +49,9 @@
         }
         if (typeof m.nudgeSelectionWorldRotation !== "function") {
           throw new Error("arena3d.module.js did not export nudgeSelectionWorldRotation");
+        }
+        if (typeof m.setArenaGizmoMode !== "function") {
+          throw new Error("arena3d.module.js did not export setArenaGizmoMode");
         }
         api = m;
         return api;
@@ -88,6 +92,15 @@
     loadModule()
       .then(function (m) {
         m.nudgeSelectionWorldRotation(axis, degrees);
+      })
+      .catch(function () {});
+  };
+
+  /** "translate" | "rotate" | "scale" — updates gizmo so players see what the tool does */
+  window.arena3dSetGizmoMode = function (mode) {
+    loadModule()
+      .then(function (m) {
+        m.setArenaGizmoMode(mode);
       })
       .catch(function () {});
   };

@@ -435,6 +435,202 @@ function cancelReconnect() {
 // Also assign to window for global access
 window.connect = connect;
 
+let _arena3dOverlayDebounceTimer = null;
+function scheduleArena3dOverlayFrom2DCanvas() {
+    try {
+        const el = typeof document !== 'undefined' ? document.getElementById('arena3D') : null;
+        if (!el || el.classList.contains('hidden')) return;
+        if (_arena3dOverlayDebounceTimer) return;
+        _arena3dOverlayDebounceTimer = setTimeout(() => {
+            _arena3dOverlayDebounceTimer = null;
+            if (typeof window !== 'undefined' && typeof window.arena3dRefreshBattlefieldIfOpen === 'function') {
+                window.arena3dRefreshBattlefieldIfOpen();
+            }
+        }, 100);
+    } catch (_) {}
+}
+
+/** Shapes for 3D overlay: rulers, circles, cones (map pixel space, same as 2D canvas under pan/zoom). */
+function buildMeasurementOverlayForArena3d() {
+    const out = [];
+    const g = typeof gridSize === 'number' && gridSize > 0 ? gridSize : 50;
+    if (Array.isArray(measurementShapes)) {
+        for (const shape of measurementShapes) {
+            if (!shape) continue;
+            if (shape.type === 'ruler' && shape.start && shape.end) {
+                out.push({
+                    type: 'ruler',
+                    x0: shape.start.x,
+                    y0: shape.start.y,
+                    x1: shape.end.x,
+                    y1: shape.end.y,
+                });
+            } else if (shape.type === 'circle' && shape.x != null && shape.y != null) {
+                const radius = shape.radius != null ? shape.radius : circleRadius * g;
+                const radiusFeet =
+                    shape.radiusFeet != null ? shape.radiusFeet : Math.round((radius / g) * 5);
+                out.push({ type: 'circle', cx: shape.x, cy: shape.y, rPx: radius, radiusFeet });
+            } else if (shape.type === 'cone' && shape.x != null && shape.y != null) {
+                out.push({
+                    type: 'cone',
+                    x: shape.x,
+                    y: shape.y,
+                    angle: shape.angle != null ? shape.angle : coneAngle,
+                    direction: shape.direction != null ? shape.direction : 0,
+                    distance: shape.distance != null ? shape.distance : (coneDistance > 0 ? coneDistance : 15),
+                });
+            }
+        }
+    }
+    if (rulerActive && rulerStart && rulerEnd) {
+        out.push({
+            type: 'ruler',
+            x0: rulerStart.x,
+            y0: rulerStart.y,
+            x1: rulerEnd.x,
+            y1: rulerEnd.y,
+        });
+    }
+    if (conePlacementState && measurementToolType === 'cone' && canvas) {
+        if (lastMouseX !== 0 || lastMouseY !== 0) {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (lastMouseX - rect.left - panX) / zoom;
+            const mouseY = (lastMouseY - rect.top - panY) / zoom;
+            const dx = mouseX - conePlacementState.startX;
+            const dy = mouseY - conePlacementState.startY;
+            const direction = Math.atan2(dy, dx) * (180 / Math.PI);
+            out.push({
+                type: 'cone',
+                x: conePlacementState.startX,
+                y: conePlacementState.startY,
+                angle: coneAngle,
+                direction,
+                distance: coneDistance > 0 ? coneDistance : 15,
+            });
+        }
+    }
+    if (currentPlacementShape && currentPlacementShape.type === 'circle' && currentPlacementShape.x != null) {
+        const radius =
+            currentPlacementShape.radius != null ? currentPlacementShape.radius : circleRadius * g;
+        const radiusFeet =
+            currentPlacementShape.radiusFeet != null
+                ? currentPlacementShape.radiusFeet
+                : Math.round((radius / g) * 5);
+        out.push({
+            type: 'circle',
+            cx: currentPlacementShape.x,
+            cy: currentPlacementShape.y,
+            rPx: radius,
+            radiusFeet,
+        });
+    }
+    return out;
+}
+
+/** Combat + targeting overlay for 3D arena (grid cell list, range rings, measurements). */
+function buildCombatOverlayForArena3d(gridPx, mapW, mapH) {
+    const gp = Math.max(4, Number(gridPx) || 50);
+    const mw = Math.max(100, Number(mapW) || 1200);
+    const mh = Math.max(100, Number(mapH) || 800);
+    const maxGx = Math.max(1, Math.floor(mw / gp));
+    const maxGy = Math.max(1, Math.floor(mh / gp));
+
+    let movementCells = null;
+    if (combatState.active && combatState.currentTurn && turnStartPosition) {
+        const currentParticipant = combatState.participants.find((p) => p.id === combatState.currentTurn);
+        if (currentParticipant) {
+            const showMovement =
+                isDM ||
+                (currentParticipant.entity_type === 'Player' &&
+                    currentParticipant.entity_id === myCharacterId);
+            if (showMovement) {
+                let movementSpeed = 30;
+                if (currentParticipant.entity_type === 'Player') {
+                    const character = characters.find((c) => c.id === currentParticipant.entity_id);
+                    if (character) movementSpeed = character.speed || 30;
+                } else if (
+                    currentParticipant.entity_type === 'Enemy' ||
+                    currentParticipant.entity_type === 'NPC'
+                ) {
+                    const enemy = enemies.find((e) => e.id === currentParticipant.entity_id);
+                    if (enemy) movementSpeed = enemy.speed || 30;
+                }
+                const movementSquares = Math.floor(movementSpeed / 5);
+                const startX = Math.floor(turnStartPosition.x);
+                const startY = Math.floor(turnStartPosition.y);
+                movementCells = calculateReachableSquares(
+                    startX,
+                    startY,
+                    movementSquares,
+                    maxGx,
+                    maxGy
+                );
+            }
+        }
+    }
+
+    let targeting = null;
+    let rangeFeet = null;
+    let rangeMinMax = null;
+    let centerToken = null;
+    if (pendingTargetAttack) {
+        const r = pendingTargetAttack.range;
+        if (r != null && typeof r === 'object' && typeof r.min === 'number' && typeof r.max === 'number' && r.min > 0 && r.max >= r.min) {
+            rangeMinMax = r;
+        } else if (r != null && typeof r === 'number' && r > 0) {
+            rangeFeet = r;
+        } else {
+            rangeFeet = 30;
+        }
+        centerToken = tokens.find(function (t) {
+            if (t.entity_type !== 'Player') return false;
+            if (myCharacterId && t.entity_id === myCharacterId) return true;
+            const c = characters.find(function (ch) {
+                return ch.id === t.entity_id;
+            });
+            return c && (c.name || '').trim() === (pendingTargetAttack.characterName || '').trim();
+        });
+    } else if (
+        pendingTargetPower &&
+        pendingTargetPower.targetType === 'creature' &&
+        pendingTargetPower.range != null
+    ) {
+        const pr = pendingTargetPower.range;
+        if (typeof pr === 'object' && typeof pr.min === 'number' && typeof pr.max === 'number') {
+            rangeMinMax = pr;
+        } else if (typeof pr === 'number' && pr > 0) {
+            rangeFeet = pr;
+        }
+        if (rangeFeet == null && !rangeMinMax) {
+            /* same as drawTargetingRangeCircle: no valid range */
+        } else {
+            centerToken = tokens.find(function (t) {
+                if (t.entity_type !== 'Player') return false;
+                if (myCharacterId && t.entity_id === myCharacterId) return true;
+                const c = characters.find(function (ch) {
+                    return ch.id === t.entity_id;
+                });
+                return c && (c.name || '').trim() === (pendingTargetPower.characterName || '').trim();
+            });
+        }
+    }
+    if (centerToken) {
+        const cx = Number(centerToken.x) * gp + gp / 2;
+        const cy = Number(centerToken.y) * gp + gp / 2;
+        if (rangeMinMax) {
+            const innerPx = (rangeMinMax.min / 5) * gp;
+            const outerPx = (rangeMinMax.max / 5) * gp;
+            targeting = { mode: 'dual', cx, cy, innerPx, outerPx };
+        } else if (rangeFeet != null && rangeFeet > 0) {
+            const rPx = (rangeFeet / 5) * gp;
+            targeting = { mode: 'single', cx, cy, rPx };
+        }
+    }
+
+    const measurements = buildMeasurementOverlayForArena3d();
+    return { movementCells, targeting, measurements };
+}
+
 /** Read-only snapshot for the 3D battlefield overlay — same map art & grid as 2D. Combat, initiative, and token moves stay on the main map. */
 function getBattlefieldSnapshotForArena3d() {
     const cm = currentMap;
@@ -472,6 +668,7 @@ function getBattlefieldSnapshotForArena3d() {
             height: fallbackH,
             gridPixels: gp,
             tokens: tokenList,
+            combatOverlay: buildCombatOverlayForArena3d(gp, fallbackW, fallbackH),
         };
     }
     const gw = Number(cm.width);
@@ -480,20 +677,89 @@ function getBattlefieldSnapshotForArena3d() {
         cm.grid_size != null && !isNaN(Number(cm.grid_size)) && Number(cm.grid_size) > 0
             ? Number(cm.grid_size)
             : gp;
+    const mapW = gw > 0 ? gw : fallbackW;
+    const mapH = gh > 0 ? gh : fallbackH;
     return {
         hasMap: true,
         image: cm.image || null,
         imagePath: cm.image_path || null,
-        width: gw > 0 ? gw : fallbackW,
-        height: gh > 0 ? gh : fallbackH,
+        width: mapW,
+        height: mapH,
         gridPixels: gFromMap,
         tokens: tokenList,
+        combatOverlay: buildCombatOverlayForArena3d(gFromMap, mapW, mapH),
     };
 }
 try {
     globalThis.getBattlefieldSnapshotForArena3d = getBattlefieldSnapshotForArena3d;
 } catch (_) {}
 window.getBattlefieldSnapshotForArena3d = getBattlefieldSnapshotForArena3d;
+
+/**
+ * Called by arena3d when a map token STL is dragged in translate mode to a new grid cell.
+ * Mirrors canvas MoveToken logic (permissions, optimistic update, websocket).
+ */
+function notifyArenaTokenMovedFrom3d(tokenId, gridX, gridY) {
+    try {
+        const tid = tokenId != null ? String(tokenId) : '';
+        const token = Array.isArray(tokens) ? tokens.find((t) => t && String(t.id) === tid) : null;
+        if (!token || token.entity_type === 'Object') return false;
+        if (!isDM) {
+            if (!myCharacterId || token.entity_id !== myCharacterId) return false;
+            if (typeof combatState !== 'undefined' && combatState.active && combatState.currentTurn !== token.id) {
+                alert("It's not your turn!");
+                return false;
+            }
+        }
+        const cm = typeof currentMap !== 'undefined' ? currentMap : null;
+        const cmGp =
+            cm &&
+            cm.grid_size != null &&
+            !isNaN(Number(cm.grid_size)) &&
+            Number(cm.grid_size) > 0
+                ? Number(cm.grid_size)
+                : null;
+        const gp =
+            cmGp != null
+                ? cmGp
+                : typeof gridSize === 'number' && gridSize > 0 && !isNaN(gridSize)
+                  ? gridSize
+                  : 50;
+        let gx = Math.floor(Number(gridX));
+        let gy = Math.floor(Number(gridY));
+        if (isNaN(gx)) gx = 0;
+        if (isNaN(gy)) gy = 0;
+        const cw = cm && cm.width > 0 ? cm.width : canvas && canvas.width > 0 ? canvas.width : 1200;
+        const ch = cm && cm.height > 0 ? cm.height : canvas && canvas.height > 0 ? canvas.height : 800;
+        const maxCX = Math.max(0, Math.floor(cw / gp) - 1);
+        const maxCY = Math.max(0, Math.floor(ch / gp) - 1);
+        gx = Math.max(0, Math.min(maxCX, gx));
+        gy = Math.max(0, Math.min(maxCY, gy));
+        if (token.x === gx && token.y === gy) return true;
+        token.x = gx;
+        token.y = gy;
+        const idx = tokens.findIndex((t) => t && t.id === token.id);
+        if (idx !== -1) {
+            tokens[idx] = { ...tokens[idx], x: gx, y: gy };
+        }
+        renderCanvas();
+        updateTokenInfo();
+        sendMessage({
+            type: 'MoveToken',
+            token_id: token.id,
+            x: gx,
+            y: gy,
+        });
+        return true;
+    } catch (err) {
+        console.warn('[arena3d] notifyArenaTokenMovedFrom3d:', err);
+        return false;
+    }
+}
+try {
+    globalThis.notifyArenaTokenMovedFrom3d = notifyArenaTokenMovedFrom3d;
+} catch (_) {}
+window.notifyArenaTokenMovedFrom3d = notifyArenaTokenMovedFrom3d;
 
 /** DM or owner — same rules as manual sheet edit (not while picking another character). */
 function canAttachArenaStlToCharacter(char) {
@@ -3132,6 +3398,8 @@ function renderCanvas() {
         ctx.strokeRect(x0, y0, w0, h0);
         ctx.restore();
     }
+
+    scheduleArena3dOverlayFrom2DCanvas();
 }
 
 // Update highlighted tokens and remove expired ones
@@ -3735,8 +4003,11 @@ function drawMovementRange() {
     const startX = Math.floor(turnStartPosition.x);
     const startY = Math.floor(turnStartPosition.y);
     
-    // Calculate reachable squares from starting position
-    const reachable = calculateReachableSquares(startX, startY, movementSquares);
+    const mw = currentMap && currentMap.width ? currentMap.width : canvas.width;
+    const mh = currentMap && currentMap.height ? currentMap.height : canvas.height;
+    const maxGx = Math.max(1, Math.floor(mw / gridSize));
+    const maxGy = Math.max(1, Math.floor(mh / gridSize));
+    const reachable = calculateReachableSquares(startX, startY, movementSquares, maxGx, maxGy);
     
     // Draw green highlights
     ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
@@ -3747,12 +4018,23 @@ function drawMovementRange() {
 
 // Calculate which squares are reachable within movement range
 // Uses D&D 5e rules: every other diagonal costs 10 feet (2 squares)
-function calculateReachableSquares(startX, startY, maxSquares) {
+// Optional maxGridX/maxGridY (exclusive upper bounds) default to canvas size for 2D drawing.
+function calculateReachableSquares(startX, startY, maxSquares, maxGridXOpt, maxGridYOpt) {
     const reachable = [];
     const visited = new Set();
     const queue = [{x: startX, y: startY, cost: 0, diagCount: 0}];
     
     visited.add(`${startX},${startY}`);
+    
+    const gsz = typeof gridSize === 'number' && gridSize > 0 ? gridSize : 50;
+    const maxGridX =
+        maxGridXOpt != null && maxGridXOpt > 0
+            ? maxGridXOpt
+            : Math.floor((canvas && canvas.width ? canvas.width : 1200) / gsz);
+    const maxGridY =
+        maxGridYOpt != null && maxGridYOpt > 0
+            ? maxGridYOpt
+            : Math.floor((canvas && canvas.height ? canvas.height : 800) / gsz);
     
     while (queue.length > 0) {
         const current = queue.shift();
@@ -3776,8 +4058,6 @@ function calculateReachableSquares(startX, startY, maxSquares) {
             const key = `${newX},${newY}`;
             
             // Check bounds
-            const maxGridX = Math.floor(canvas.width / gridSize);
-            const maxGridY = Math.floor(canvas.height / gridSize);
             if (newX < 0 || newY < 0 || newX >= maxGridX || newY >= maxGridY) continue;
             
             // Check if already visited

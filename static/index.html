@@ -168,12 +168,22 @@
                         <div class="arena3d-toolbar">
                             <div class="arena3d-toolbar-left">
                                 <button type="button" onclick="toggle3DArena()" class="arena3d-btn">⬅ Back to 2D</button>
+                                <div class="arena3d-gizmo-bar" role="toolbar" aria-label="Transform mini on the battlefield">
+                                    <span class="arena3d-gizmo-bar-label">Move / rotate</span>
+                                    <button type="button" id="arena3dGizmoMove" class="arena3d-btn arena3d-btn-mode" onclick="arena3dSetGizmoMode('translate')" title="Move the selected miniature on the grid (keyboard W). Map token STLs sync to the 2D map when you release the drag.">
+                                        ↔ Move
+                                    </button>
+                                    <button type="button" id="arena3dGizmoRotate" class="arena3d-btn arena3d-btn-mode" onclick="arena3dSetGizmoMode('rotate')" title="Rotate the selected mini (keyboard E).">
+                                        ↻ Rotate
+                                    </button>
+                                    <span id="arena3dGizmoHint" class="arena3d-gizmo-hint" aria-live="polite"></span>
+                                </div>
                                 <label class="arena3d-file-label">
                                     <input id="arena3dStlInput" type="file" accept=".stl,.glb,model/stl,model/gltf-binary,application/sla,application/vnd.ms-pki.stl" />
                                     <span class="arena3d-btn">📦 Add STL / GLB</span>
                                 </label>
                                 <button type="button" onclick="arena3dClearAll()" class="arena3d-btn arena3d-btn-danger">🗑 Clear 3D</button>
-                                <span class="arena3d-rotate-tools" title="Select a mini first (click it). Token minis: rotate only.">
+                                <span class="arena3d-rotate-tools" title="Select a mini first (click it). Map tokens: Move (snap to grid) or Rotate — move updates the token on the 2D map.">
                                     <span class="arena3d-rotate-label">Tilt</span>
                                     <button type="button" class="arena3d-btn arena3d-btn-compact" onclick="arena3dRotateSelection('x', -90)">X−90°</button>
                                     <button type="button" class="arena3d-btn arena3d-btn-compact" onclick="arena3dRotateSelection('x', 90)">X+90°</button>
@@ -182,7 +192,7 @@
                                 </span>
                             </div>
                             <div class="arena3d-toolbar-right">
-                                <div class="arena3d-hint">Click a mini to select · E = rotate gizmo (all axes in rotate mode) · X±90° / Z±90° = world tilt · W / R = move / scale for placed models only (token minis follow the 2D map) · Del removes placed mini only · orbit drag · scroll zoom</div>
+                                <div class="arena3d-hint">Click a mini to select · Toolbar shows Move vs Rotate · E rotate · W move · R scale (placed models) · Tilt buttons adjust token posture · orbit drag · scroll zoom · Space appears beyond the battle map</div>
                             </div>
                         </div>
                         <div id="arena3dViewport" class="arena3d-viewport"></div>
@@ -993,8 +1003,8 @@
     <input type="file" id="arenaStlHiddenFilePicker" accept=".stl,.glb,model/stl,model/gltf-binary,application/sla,application/vnd.ms-pki.stl" style="display: none;" aria-hidden="true">
 
     <script src="/static/data/armstech_data.js?v=68"></script>
-    <script src="/static/arena3d-boot.js?v=10"></script>
-    <script src="/static/app.js?v=97"></script>
+    <script src="/static/arena3d-boot.js?v=15"></script>
+    <script src="/static/app.js?v=98"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

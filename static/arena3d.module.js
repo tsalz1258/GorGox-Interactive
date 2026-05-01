@@ -22,6 +22,8 @@ let pointerNdc = null;
 let battlefieldGroup = null;
 /** Token-linked STLs (not in `selectable`); preserved when the floor texture reloads. */
 let tokenMiniRoot = null;
+/** Combat movement / targeting / measurement overlay (map pixel space → world XZ). */
+let combatOverlayRoot = null;
 /** @type {Map<string, { mesh: THREE.Object3D | null, url: string, loading?: boolean, pendingWorld?: { wx: number, wz: number, cell: number } }>} */
 let tokenMiniById = new Map();
 /** Monotonic per-token generation so stale fetches never add a second mesh. */
@@ -29,6 +31,8 @@ let tokenMiniLoadGen = new Map();
 let groundMesh = null;
 let gridLines = null;
 let groundPlane = null;
+/** Distant inward-facing textured sphere ("space beyond the grid"). Not part of battlefieldGroup. */
+let starfieldMesh = null;
 
 let selectable = [];
 let selectedObject = null;
@@ -188,7 +192,7 @@ function isTokenLinkedMini(mesh) {
 function applyMiniConstraints(mesh, opts) {
   const snapGrid = !!(opts && opts.snapGrid);
   if (!mesh || !isUserTransformableMini(mesh)) return;
-  const doSnap = snapGrid && !isTokenLinkedMini(mesh);
+  const doSnap = snapGrid;
   for (let i = 0; i < 12; i++) {
     if (doSnap) snapObjectToGrid(mesh);
     plantMiniOnFloor(mesh);
@@ -224,7 +228,16 @@ function getSnapshot() {
   if (fn) {
     return fn();
   }
-  return { hasMap: false, image: null, imagePath: null, width: 1200, height: 800, gridPixels: 50, tokens: [] };
+  return {
+    hasMap: false,
+    image: null,
+    imagePath: null,
+    width: 1200,
+    height: 800,
+    gridPixels: 50,
+    tokens: [],
+    combatOverlay: { movementCells: null, targeting: null, measurements: [] },
+  };
 }
 
 function disposeBattlefieldChildren() {
@@ -232,7 +245,7 @@ function disposeBattlefieldChildren() {
   const toRemove = [];
   for (const ch of battlefieldGroup.children) {
     if (selectable.includes(ch)) continue;
-    if (ch === tokenMiniRoot || ch.userData?.gorgoxPreserveInBattlefieldSync) continue;
+    if (ch === tokenMiniRoot || ch === combatOverlayRoot || ch.userData?.gorgoxPreserveInBattlefieldSync) continue;
     toRemove.push(ch);
   }
   for (const ch of toRemove) {
@@ -276,6 +289,274 @@ function buildGridOverlay(w, h, g) {
   return new THREE.LineSegments(geo, mat);
 }
 
+function createStarfieldSky() {
+  const W = 2048;
+  const H = 1024;
+  const canvasEl = typeof document !== "undefined" ? document.createElement("canvas") : null;
+  if (!canvasEl) return null;
+  canvasEl.width = W;
+  canvasEl.height = H;
+  const ctx = canvasEl.getContext("2d");
+  if (!ctx) return null;
+  const radial = ctx.createRadialGradient(W * 0.4, H * 0.12, 0, W * 0.4, H * 0.55, Math.max(W, H) * 1.05);
+  radial.addColorStop(0, "#1f2f58");
+  radial.addColorStop(0.35, "#121a38");
+  radial.addColorStop(0.7, "#080814");
+  radial.addColorStop(1, "#020205");
+  ctx.fillStyle = radial;
+  ctx.fillRect(0, 0, W, H);
+
+  const nebulaCount = 14;
+  for (let i = 0; i < nebulaCount; i++) {
+    const mx = Math.random() * W;
+    const my = Math.random() * H * 0.95;
+    const r = 60 + Math.random() * 180;
+    const g2 = ctx.createRadialGradient(mx, my, 0, mx, my, r);
+    const rr = Math.floor(55 + Math.random() * 80);
+    const rg = Math.floor(35 + Math.random() * 60);
+    const rb = Math.floor(110 + Math.random() * 90);
+    g2.addColorStop(0, `rgba(${rr},${rg},${rb},${0.11 + Math.random() * 0.1})`);
+    g2.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g2;
+    ctx.globalAlpha = 1;
+    ctx.fillRect(mx - r, my - r, r * 2, r * 2);
+  }
+
+  let i = 0;
+  while (i < 5200) {
+    const x = Math.random() * W;
+    const y = Math.random() * H;
+    const band = Math.sin((y / H) * Math.PI); // Fewer stars at bottom for horizon feel
+    if (band < Math.random()) {
+      continue;
+    }
+    i++;
+    const br = Math.random();
+    ctx.fillStyle = br > 0.992 ? "#ffffff" : br > 0.935 ? "#d4e9ff" : "#8aa4cc";
+    ctx.globalAlpha = 0.3 + Math.random() * 0.7;
+    const sz = br > 0.985 ? 2 : br > 0.915 ? 1.5 : 1;
+    ctx.fillRect(Math.floor(x), Math.floor(y), sz, sz);
+  }
+  ctx.globalAlpha = 1;
+
+  const tex = new THREE.CanvasTexture(canvasEl);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearMipMapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+
+  const geo = new THREE.SphereGeometry(16000, 48, 32);
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+  mat.toneMapped = false;
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = "gorgoxStarfield";
+  mesh.renderOrder = -2000;
+  return mesh;
+}
+
+function disposeCombatOverlayChildren() {
+  if (!combatOverlayRoot) return;
+  while (combatOverlayRoot.children.length > 0) {
+    const ch = combatOverlayRoot.children[0];
+    combatOverlayRoot.remove(ch);
+    tryDispose(ch);
+  }
+}
+
+function addMovementCellsOverlay3d(cells, g) {
+  if (!combatOverlayRoot || !Array.isArray(cells) || cells.length < 1) return;
+  const cell = Math.max(4, g);
+  const geom = new THREE.PlaneGeometry(cell, cell);
+  geom.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x22ee55,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false,
+  });
+  const mesh = new THREE.InstancedMesh(geom, mat, cells.length);
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    const px = Number(c.x) * cell + cell / 2;
+    const py = Number(c.y) * cell + cell / 2;
+    const { wx, wz } = pixelToWorldXZ(px, py);
+    dummy.position.set(wx, 0.038, wz);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    mesh.setMatrixAt(i, dummy.matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.renderOrder = 2;
+  combatOverlayRoot.add(mesh);
+}
+
+function addTargetingOverlay3d(t) {
+  if (!combatOverlayRoot || !t || !t.mode) return;
+  const cx = Number(t.cx);
+  const cy = Number(t.cy);
+  if (!isFinite(cx) || !isFinite(cy)) return;
+  const { wx, wz } = pixelToWorldXZ(cx, cy);
+  const y = 0.055;
+  if (t.mode === "dual" && t.innerPx > 0 && t.outerPx >= t.innerPx) {
+    const innerPx = Number(t.innerPx);
+    const outerPx = Number(t.outerPx);
+    const ringGeo = new THREE.RingGeometry(innerPx, outerPx, 64);
+    ringGeo.rotateX(-Math.PI / 2);
+    const ring = new THREE.Mesh(
+      ringGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0xc9a227,
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    ring.position.set(wx, y, wz);
+    ring.renderOrder = 3;
+    combatOverlayRoot.add(ring);
+    const diskGeo = new THREE.CircleGeometry(innerPx, 48);
+    diskGeo.rotateX(-Math.PI / 2);
+    const disk = new THREE.Mesh(
+      diskGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x44cc66,
+        transparent: true,
+        opacity: 0.26,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    disk.position.set(wx, y + 0.004, wz);
+    disk.renderOrder = 4;
+    combatOverlayRoot.add(disk);
+  } else if (t.mode === "single" && t.rPx > 0) {
+    const rPx = Number(t.rPx);
+    const diskGeo = new THREE.CircleGeometry(rPx, 64);
+    diskGeo.rotateX(-Math.PI / 2);
+    const disk = new THREE.Mesh(
+      diskGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0xc9a227,
+        transparent: true,
+        opacity: 0.22,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    disk.position.set(wx, y, wz);
+    disk.renderOrder = 3;
+    combatOverlayRoot.add(disk);
+  }
+}
+
+function addMeasurementRuler3d(m) {
+  if (!combatOverlayRoot || m.x0 == null || m.y0 == null || m.x1 == null || m.y1 == null) return;
+  const a = pixelToWorldXZ(m.x0, m.y0);
+  const b = pixelToWorldXZ(m.x1, m.y1);
+  const y = 0.048;
+  const verts = new Float32Array([a.wx, y, a.wz, b.wx, y, b.wz]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+  const line = new THREE.Line(
+    geo,
+    new THREE.LineBasicMaterial({ color: 0xffaa44, linewidth: 1, depthWrite: false })
+  );
+  line.renderOrder = 5;
+  combatOverlayRoot.add(line);
+}
+
+function addMeasurementCircle3d(m) {
+  if (!combatOverlayRoot || m.cx == null || m.cy == null || !(m.rPx > 0)) return;
+  const { wx, wz } = pixelToWorldXZ(m.cx, m.cy);
+  const rPx = Number(m.rPx);
+  const geo = new THREE.CircleGeometry(rPx, 64);
+  geo.rotateX(-Math.PI / 2);
+  const disk = new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      color: 0x4a9eff,
+      transparent: true,
+      opacity: 0.2,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  disk.position.set(wx, 0.046, wz);
+  disk.renderOrder = 4;
+  combatOverlayRoot.add(disk);
+}
+
+function addMeasurementCone3d(m, g) {
+  if (!combatOverlayRoot || m.x == null || m.y == null) return;
+  const cell = Math.max(4, g);
+  const halfAngle = (((m.angle != null ? m.angle : 60) * Math.PI) / 180) / 2;
+  const directionRad = (((m.direction != null ? m.direction : 0) * Math.PI) / 180);
+  const distFeet = m.distance != null ? m.distance : 15;
+  const length = (distFeet / 5) * cell;
+  const tipX = m.x;
+  const tipY = m.y;
+  const dirX = Math.cos(directionRad);
+  const dirY = Math.sin(directionRad);
+  const baseX = tipX + dirX * length;
+  const baseY = tipY + dirY * length;
+  const perpX = -dirY;
+  const perpY = dirX;
+  const baseWidth = Math.tan(halfAngle) * length;
+  const BLx = baseX + perpX * baseWidth;
+  const BLy = baseY + perpY * baseWidth;
+  const BRx = baseX - perpX * baseWidth;
+  const BRy = baseY - perpY * baseWidth;
+  const t = pixelToWorldXZ(tipX, tipY);
+  const bl = pixelToWorldXZ(BLx, BLy);
+  const br = pixelToWorldXZ(BRx, BRy);
+  const y = 0.042;
+  const verts = new Float32Array([t.wx, y, t.wz, bl.wx, y, bl.wz, br.wx, y, br.wz]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(verts, 3));
+  const coneMesh = new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      color: 0x44ff88,
+      transparent: true,
+      opacity: 0.22,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  coneMesh.renderOrder = 3;
+  combatOverlayRoot.add(coneMesh);
+}
+
+function syncCombatOverlayFromSnapshot(snap) {
+  if (!combatOverlayRoot) return;
+  disposeCombatOverlayChildren();
+  const o = snap && snap.combatOverlay;
+  if (!o) return;
+  const g = Math.max(4, Number(snap.gridPixels) || gridWorld || 50);
+  if (Array.isArray(o.movementCells) && o.movementCells.length > 0) {
+    addMovementCellsOverlay3d(o.movementCells, g);
+  }
+  if (o.targeting && o.targeting.mode) {
+    addTargetingOverlay3d(o.targeting);
+  }
+  if (Array.isArray(o.measurements)) {
+    for (const m of o.measurements) {
+      if (!m) continue;
+      if (m.type === "ruler") addMeasurementRuler3d(m);
+      else if (m.type === "circle") addMeasurementCircle3d(m);
+      else if (m.type === "cone") addMeasurementCone3d(m, g);
+    }
+  }
+}
+
 function syncBattlefieldFromGorgox(force) {
   if (!battlefieldGroup) return;
   const snap = getSnapshot();
@@ -286,6 +567,7 @@ function syncBattlefieldFromGorgox(force) {
   const key = `${w}|${h}|${g}|${snap.imagePath || ""}|${img && img.complete && img.naturalWidth ? img.naturalWidth + "x" + img.naturalHeight : "noimg"}`;
   if (!force && key === lastBattlefieldSyncKey) {
     syncTokenMinisFromSnapshot(snap);
+    syncCombatOverlayFromSnapshot(snap);
     return;
   }
   lastBattlefieldSyncKey = key;
@@ -348,6 +630,8 @@ function syncBattlefieldFromGorgox(force) {
   if (transform && typeof transform.setTranslationSnap === "function") {
     transform.setTranslationSnap(g);
   }
+
+  syncCombatOverlayFromSnapshot(snap);
 }
 
 function worldXZToPixel(wx, wz) {
@@ -375,6 +659,12 @@ function snapObjectToGrid(mesh) {
   mesh.position.z = w.wz;
 }
 
+function worldXZToGridCell(wx, wz) {
+  const { px, py } = worldXZToPixel(wx, wz);
+  const g = Math.max(4, gridWorld || 50);
+  return { gx: Math.floor(px / g), gy: Math.floor(py / g) };
+}
+
 function ensureInit() {
   if (initialized) return;
 
@@ -396,7 +686,12 @@ function ensureInit() {
   viewportEl.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0c10);
+  scene.background = new THREE.Color(0x06040c);
+
+  if (!starfieldMesh) {
+    starfieldMesh = createStarfieldSky();
+    if (starfieldMesh) scene.add(starfieldMesh);
+  }
 
   const w = Math.max(1, viewportEl.clientWidth);
   const h = Math.max(1, viewportEl.clientHeight);
@@ -429,6 +724,10 @@ function ensureInit() {
   battlefieldGroup = new THREE.Group();
   scene.add(battlefieldGroup);
 
+  combatOverlayRoot = new THREE.Group();
+  combatOverlayRoot.userData.gorgoxPreserveInBattlefieldSync = true;
+  battlefieldGroup.add(combatOverlayRoot);
+
   tokenMiniRoot = new THREE.Group();
   tokenMiniRoot.userData.gorgoxPreserveInBattlefieldSync = true;
   battlefieldGroup.add(tokenMiniRoot);
@@ -441,15 +740,29 @@ function ensureInit() {
   transform.setMode = function (mode) {
     origSetMode(mode);
     transform.showY = mode === "rotate";
+    refreshArena3dGizmoToolbar();
   };
   transform.addEventListener("dragging-changed", (e) => {
     orbit.enabled = !e.value;
-    if (!e.value && selectedObject) applyMiniConstraints(selectedObject, { snapGrid: true });
+    if (e.value) return;
+    const o = selectedObject;
+    if (!o) return;
+    const translating = transform.mode === "translate";
+    applyMiniConstraints(o, { snapGrid: translating });
+    if (translating && isTokenLinkedMini(o)) {
+      const id = o.userData && o.userData.gorgoxTokenMiniId;
+      const { gx, gy } = worldXZToGridCell(o.position.x, o.position.z);
+      if (id != null && typeof window !== "undefined") {
+        const fn = window.notifyArenaTokenMovedFrom3d;
+        const ok =
+          typeof fn !== "function" ? true : fn(String(id), gx, gy) !== false;
+        if (!ok && typeof window.arena3dSyncNow === "function") window.arena3dSyncNow();
+      }
+    }
   });
   transform.addEventListener("objectChange", () => {
     const o = selectedObject;
     if (!o || !isUserTransformableMini(o)) return;
-    if (isTokenLinkedMini(o) && transform.mode !== "rotate") transform.setMode("rotate");
     applyMiniConstraints(o, { snapGrid: transform.mode === "translate" });
   });
   transform.setMode("translate");
@@ -477,7 +790,58 @@ function ensureInit() {
 
   initialized = true;
   syncBattlefieldFromGorgox(true);
+  refreshArena3dGizmoToolbar();
   onResize();
+}
+
+function refreshArena3dGizmoToolbar() {
+  const moveBtn = typeof document !== "undefined" ? document.getElementById("arena3dGizmoMove") : null;
+  const rotBtn = typeof document !== "undefined" ? document.getElementById("arena3dGizmoRotate") : null;
+  const hintEl = typeof document !== "undefined" ? document.getElementById("arena3dGizmoHint") : null;
+  if (!moveBtn || !rotBtn || !transform) return;
+  const tokenMini = !!(selectedObject && isTokenLinkedMini(selectedObject));
+  const mode = typeof transform.mode === "string" ? transform.mode : "translate";
+
+  moveBtn.disabled = !selectedObject;
+  moveBtn.classList.toggle("arena3d-btn-active", mode === "translate" && !!selectedObject);
+  rotBtn.classList.toggle("arena3d-btn-active", mode === "rotate");
+
+  if (hintEl) {
+    if (!selectedObject) {
+      hintEl.textContent = "Nothing selected · Pick a mini. Move repositions token minis on the grid (same as the 2D map).";
+    } else if (tokenMini) {
+      hintEl.textContent =
+        "Selected: map token · Move (W) — drag to snap on the grid · Rotate (E) — tilt and facing; map updates when you finish a move.";
+    } else if (mode === "rotate") {
+      hintEl.textContent = "Placed miniature · Rotate — tilt and facing.";
+    } else if (mode === "scale") {
+      hintEl.textContent = "Placed miniature · Scale — shrink or enlarge (keyboard R).";
+    } else {
+      hintEl.textContent = "Placed miniature · Move — drag on the battlefield grid.";
+    }
+  }
+}
+
+/** Switch transform gizmo: "translate" | "rotate" | "scale". */
+export function setArenaGizmoMode(modeRaw) {
+  ensureInit();
+  if (!transform) return;
+  const tokenMini = !!(selectedObject && isTokenLinkedMini(selectedObject));
+  const m = typeof modeRaw === "string" ? modeRaw.trim().toLowerCase() : "translate";
+
+  if (m === "rotate") {
+    transform.setMode("rotate");
+    return;
+  }
+  if (tokenMini && m === "scale") {
+    transform.setMode("rotate");
+    return;
+  }
+  if (m === "scale") {
+    transform.setMode("scale");
+    return;
+  }
+  transform.setMode("translate");
 }
 
 function onResize() {
@@ -525,6 +889,7 @@ function show3D() {
   }, 750);
 
   onResize();
+  refreshArena3dGizmoToolbar();
   startRenderLoop();
 }
 
@@ -555,9 +920,9 @@ function setSelected(obj) {
   selectedObject = obj || null;
   if (!transform) return;
   if (selectedObject) {
-    if (isTokenLinkedMini(selectedObject)) transform.setMode("rotate");
     transform.attach(selectedObject);
   } else transform.detach();
+  refreshArena3dGizmoToolbar();
 }
 
 function raycastTargets() {
@@ -620,9 +985,7 @@ function onKeyDown(e) {
   if (!arenaEl || arenaEl.classList.contains("hidden")) return;
 
   const tokenSel = selectedObject && isTokenLinkedMini(selectedObject);
-  if (e.key === "w" || e.key === "W") {
-    if (!tokenSel) transform?.setMode("translate");
-  }
+  if (e.key === "w" || e.key === "W") transform?.setMode("translate");
   if (e.key === "e" || e.key === "E") transform?.setMode("rotate");
   if (e.key === "r" || e.key === "R") {
     if (!tokenSel) transform?.setMode("scale");
@@ -683,6 +1046,7 @@ function arena3dClearAll() {
   for (const obj of [...selectable]) removeObject(obj);
   selectable = [];
   clearTokenMiniMeshes();
+  disposeCombatOverlayChildren();
 }
 
 function clearTokenMiniMeshes() {
@@ -717,8 +1081,15 @@ function syncTokenMinisFromSnapshot(snap) {
     const cell = Math.max(8, g * tokenSize);
     const rec = tokenMiniById.get(id);
     if (rec && rec.url === t.stlUrl && rec.mesh) {
-      rec.mesh.position.x = wx;
-      rec.mesh.position.z = wz;
+      const skipPos =
+        transform &&
+        transform.dragging &&
+        transform.mode === "translate" &&
+        selectedObject === rec.mesh;
+      if (!skipPos) {
+        rec.mesh.position.x = wx;
+        rec.mesh.position.z = wz;
+      }
       rescaleTokenMiniMesh(rec.mesh, cell);
       plantMiniOnFloor(rec.mesh);
       continue;
@@ -874,6 +1245,11 @@ try {
   window.arena3dSyncNow = function () {
     ensureInit();
     syncBattlefieldFromGorgox(true);
+  };
+  window.arena3dRefreshBattlefieldIfOpen = function () {
+    ensureInit();
+    if (!arenaEl || arenaEl.classList.contains("hidden")) return;
+    syncBattlefieldFromGorgox(false);
   };
 } catch (_) {}
 
