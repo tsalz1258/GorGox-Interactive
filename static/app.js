@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v100'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v102'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -56,6 +56,59 @@ let reconnectAttempts = 0;
 let reconnectTimeoutId = null;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RECONNECT_INITIAL_DELAY_MS = 2000;
+
+/** Full state pull from server (map, viewport, tokens, characters, combat) — safe to call often */
+const FULL_STATE_BACKGROUND_SYNC_MS = 12000;
+/** After connect/reconnect: extra RequestFullState bursts for high-latency players (covers dropped join batches) */
+const LATE_JOIN_FULL_STATE_DELAYS_MS = [350, 1200, 3000, 8000, 20000, 45000];
+
+let backgroundFullStateSyncIntervalId = null;
+let lateJoinCatchupTimerIds = [];
+
+function cancelLateJoinCatchupTimers() {
+    lateJoinCatchupTimerIds.forEach((id) => clearTimeout(id));
+    lateJoinCatchupTimerIds = [];
+}
+
+function stopBackgroundFullStateSync() {
+    if (backgroundFullStateSyncIntervalId != null) {
+        clearInterval(backgroundFullStateSyncIntervalId);
+        backgroundFullStateSyncIntervalId = null;
+    }
+}
+
+function clearBackgroundFullStateTimers() {
+    stopBackgroundFullStateSync();
+    cancelLateJoinCatchupTimers();
+}
+
+function requestFullStateFromServer(reason) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+        sendMessage({ type: 'RequestFullState' });
+        if (reason && reason !== 'background' && typeof console !== 'undefined' && console.log) {
+            console.log(`🔄 RequestFullState (${reason})`);
+        }
+    } catch (e) {
+        console.warn('requestFullStateFromServer:', e);
+    }
+}
+
+/** Staggered full sync during first minute on the socket — improves late joins & slow/long paths */
+function scheduleLateJoinFullStateCatchups() {
+    cancelLateJoinCatchupTimers();
+    lateJoinCatchupTimerIds = LATE_JOIN_FULL_STATE_DELAYS_MS.map((delayMs) =>
+        setTimeout(() => requestFullStateFromServer('catchup +' + delayMs + 'ms'), delayMs)
+    );
+}
+
+/** Periodic lightweight recovery if incremental updates were missed */
+function startBackgroundFullStateSync() {
+    stopBackgroundFullStateSync();
+    backgroundFullStateSyncIntervalId = setInterval(() => {
+        requestFullStateFromServer('background');
+    }, FULL_STATE_BACKGROUND_SYNC_MS);
+}
 
 // Spell data cache
 let spellCache = {};
@@ -336,7 +389,8 @@ function performConnection(playerName, isDmValue, style) {
     serverIsDm = null;
     selectedStyle = style;
     cancelReconnect();
-    
+    clearBackgroundFullStateTimers();
+
     // Connect WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -391,6 +445,7 @@ function performConnection(playerName, isDmValue, style) {
     };
     
     ws.onclose = (event) => {
+        clearBackgroundFullStateTimers();
         updateConnectionStatus(false);
         if (typeof addLogEntry === 'function') {
             addLogEntry('Disconnected from server', 'info');
@@ -1886,19 +1941,10 @@ function handleServerMessage(message) {
             addLogEntry('Connected to game! Requesting game state...', 'info');
             characters = [];
             loadInitialData();
-            // Request full state so slow/high-latency players get map, tokens, combat reliably
-            setTimeout(() => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    console.log('🔄 Requesting full state (join sync)');
-                    sendMessage({ type: 'RequestFullState' });
-                }
-            }, 400);
-            setTimeout(() => {
-                if (ws && ws.readyState === WebSocket.OPEN && tokens.length === 0 && !currentMap) {
-                    console.log('🔄 Re-requesting full state (slow connection)');
-                    sendMessage({ type: 'RequestFullState' });
-                }
-            }, 2500);
+            // Join sync + catchups + interval: DM Connect already pushes state but slow links can lag/drop bursts
+            requestFullStateFromServer('connected_immediate');
+            scheduleLateJoinFullStateCatchups();
+            startBackgroundFullStateSync();
             break;
             
         case 'PlayerJoined':
@@ -3950,48 +3996,6 @@ function highlightCharacterToken(characterId, discordUsername, duration = 3000) 
     const cidNorm = String(characterId || '').trim();
     const cidLc = cidNorm.toLowerCase();
 
-    // #region agent log
-    (function () {
-        const cid = cidNorm;
-        let strictMatches = 0;
-        let caseInsensitiveMatches = 0;
-        const playerSnapshots = [];
-        for (let ti = 0; ti < tokens.length; ti++) {
-            const t = tokens[ti];
-            const eid = String(t.entity_id || '').trim();
-            if (t.entity_type === 'Player') {
-                playerSnapshots.push({
-                    id: String(t.id),
-                    entity_id_len: eid.length,
-                    strict: eid === cid,
-                    ic: eid.toLowerCase() === cidLc,
-                });
-                if (eid === cid) strictMatches++;
-                if (eid.toLowerCase() === cidLc) caseInsensitiveMatches++;
-            }
-        }
-        fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd39e48' },
-            body: JSON.stringify({
-                sessionId: 'd39e48',
-                hypothesisId: 'H5',
-                location: 'app.js:highlightCharacterToken',
-                message: 'token_match_audit',
-                data: {
-                    characterIdLen: cid.length,
-                    totalTokens: tokens.length,
-                    playerTokenCount: playerSnapshots.length,
-                    strictMatches,
-                    caseInsensitiveMatches,
-                    samplePlayers: playerSnapshots.slice(0, 8),
-                },
-                timestamp: Date.now(),
-            }),
-        }).catch(() => {});
-    })();
-    // #endregion
-    
     // Find all tokens with this character_id (trim + case-insensitive UUID match)
     const matchingTokens = tokens.filter(token => {
         const eid = String(token.entity_id || '').trim();
@@ -20091,8 +20095,7 @@ function refreshApplication() {
         return;
     }
     
-    // Single request that pushes full state – reliable for slow/high-latency connections
-    sendMessage({ type: 'RequestFullState' });
+    requestFullStateFromServer('manual_sync_button');
     
     // Fallback requests in case server doesn't support RequestFullState
     if (currentMap && currentMap.id) {

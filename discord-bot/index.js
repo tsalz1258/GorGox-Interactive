@@ -116,7 +116,7 @@ async function initializeEncryption() {
         }
     }
 
-    const { joinVoiceChannel, getVoiceConnection, VoiceConnection } = require('@discordjs/voice');
+    const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
     
     // Verify encryption detection
     console.log('🔍 Verifying encryption detection after @discordjs/voice load...');
@@ -227,46 +227,6 @@ async function initializeEncryption() {
         }
     }
 
-    /** Debug ingest (session d39e48) — no secrets. */
-    function dbgDiscordBot(hypothesisId, location, message, data) {
-        // #region agent log
-        fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd39e48' },
-            body: JSON.stringify({
-                sessionId: 'd39e48',
-                hypothesisId,
-                location,
-                message,
-                data: data || {},
-                timestamp: Date.now(),
-            }),
-        }).catch(() => {});
-        // #endregion
-    }
-
-    // Networking WS close pushes VoiceConnection -> signalling (+ rejoin); log code for UDP/firewall/debug.
-    // #region agent log
-    if (VoiceConnection?.prototype?.onNetworkingClose && !VoiceConnection.prototype._gorgoxNwInstrumented) {
-        VoiceConnection.prototype._gorgoxNwInstrumented = true;
-        const _origNwClose = VoiceConnection.prototype.onNetworkingClose;
-        VoiceConnection.prototype.onNetworkingClose = function instrumentedNwClose(code) {
-            dbgDiscordBot('H10', 'discord-bot:VoiceConnection.onNetworkingClose', 'nw_ws_close', {
-                code: typeof code === 'number' ? code : -1,
-                status: this.state?.status ?? null,
-            });
-            if (typeof code === 'number' && code === 4017) {
-                dbgDiscordBot('H11', 'discord-bot:VoiceConnection.onNetworkingClose', 'nw_ws_close_4017_dave', {});
-                console.warn(
-                    '   → 4017 = DAVE/E2EE required by this channel (@discordjs/voice 0.19+ + @snazzah/davey + Node ≥22.12).'
-                );
-            }
-            console.warn(`   ⚠️ Voice networking closed: wsCode=${typeof code === 'number' ? code : '?'} voiceStatus=${this.state?.status}`);
-            return _origNwClose.call(this, code);
-        };
-    }
-    // #endregion
-
     // Periodically reload links to sync with game (every 2 seconds)
     setInterval(reloadLinks, 2000);
     
@@ -327,31 +287,19 @@ async function initializeEncryption() {
     // Send highlight message to game server
     function highlightCharacter(discordUserId, discordUsername) {
     console.log(`🎯 highlightCharacter called: userId=${discordUserId}, username=${discordUsername}`);
-    dbgDiscordBot('H3', 'discord-bot/index.js:highlightCharacter:entry', 'highlightCharacter entry', {
-        isConnectedToGame,
-        wsNull: gameWebSocket == null,
-        wsReadyState: gameWebSocket ? gameWebSocket.readyState : null,
-        linkKeysCount: Object.keys(discordLinks || {}).length,
-        hasCharacterForUser: !!(discordLinks && discordLinks[discordUserId]),
-    });
 
     if (!isConnectedToGame) {
         console.warn('⚠️ Not connected to game server (isConnectedToGame=false), cannot highlight');
-        dbgDiscordBot('H3', 'discord-bot/index.js:highlightCharacter:abort', 'aborted_not_connected', {});
         return;
     }
     
     if (!gameWebSocket) {
         console.warn('⚠️ Game WebSocket is null, cannot highlight');
-        dbgDiscordBot('H3', 'discord-bot/index.js:highlightCharacter:abort', 'aborted_ws_null', {});
         return;
     }
     
     if (gameWebSocket.readyState !== WebSocket.OPEN) {
         console.warn(`⚠️ WebSocket not ready. State: ${gameWebSocket.readyState} (OPEN=1), cannot highlight`);
-        dbgDiscordBot('H3', 'discord-bot/index.js:highlightCharacter:abort', 'aborted_ws_not_open', {
-            readyState: gameWebSocket.readyState,
-        });
         return;
     }
     
@@ -359,9 +307,6 @@ async function initializeEncryption() {
     if (!characterId) {
         console.log(`⚠️ No character linked for Discord user ${discordUsername} (${discordUserId})`);
         console.log(`   Current links:`, JSON.stringify(discordLinks, null, 2));
-        dbgDiscordBot('H2', 'discord-bot/index.js:highlightCharacter:abort', 'no_discord_character_link', {
-            discordUserIdLen: discordUserId ? String(discordUserId).length : 0,
-        });
         return;
     }
     
@@ -381,14 +326,8 @@ async function initializeEncryption() {
     try {
         gameWebSocket.send(JSON.stringify(message));
         console.log(`✅ Message sent successfully!`);
-        dbgDiscordBot('H4', 'discord-bot/index.js:highlightCharacter:sent', 'HighlightCharacter websocket send ok', {
-            characterIdLen: characterId ? String(characterId).length : 0,
-        });
     } catch (error) {
         console.error(`❌ Error sending message:`, error);
-        dbgDiscordBot('H3', 'discord-bot/index.js:highlightCharacter:error', 'send_throw', {
-            err: error && error.message ? error.message : String(error),
-        });
     }
 }
 
@@ -405,8 +344,6 @@ async function initializeEncryption() {
 
     // Track speaking status
     const speakingUsers = new Map();
-    /** Throttle Opus `data` fallback so we don't call handlers every packet */
-    const opusFallbackLastFire = new Map();
     /** Legacy: keyed by channel id; prefer getVoiceConnection(guildId) */
     const voiceConnections = new Map();
     /** Rapid channel swaps reconfigure VoiceConnection mid-handshake and may never reach `ready` (@discordjs/voice). Debounce joins per guild. */
@@ -422,13 +359,6 @@ async function initializeEncryption() {
         console.log(
             `   📍 Debounced join for ${usernameForLog}: ${channel ? channel.name : '(could not resolve channel)'} (${voiceChannelId})`
         );
-
-        // #region agent log
-        dbgDiscordBot('H9', 'discord-bot/index.js:followUserToVoiceChannel', 'voice_follow_execute', {
-            debounceMs: voiceFollowDebounceMs,
-            channelResolved: !!channel,
-        });
-        // #endregion
 
         if (!channel) {
             console.log(`   ❌ Voice channel missing from cache and fetch failed — check bot permissions & channel id`);
@@ -537,20 +467,6 @@ async function initializeEncryption() {
         connection._gorgoxLifecycleWired = true;
         connection.on('stateChange', (oldS, newS) => {
             console.log(`   🔌 Voice connection state: ${oldS.status} -> ${newS.status}`);
-            // #region agent log
-            if (newS.status === 'ready') {
-                dbgDiscordBot('H9', 'discord-bot/index.js:stateChange', 'voice_ready', {
-                    chIdLen: connection.joinConfig?.channelId ? String(connection.joinConfig.channelId).length : 0,
-                });
-            } else if (oldS.status === 'connecting' && newS.status === 'signalling') {
-                dbgDiscordBot(
-                    'H9',
-                    'discord-bot/index.js:stateChange',
-                    'voice_connecting_to_signalling_oscillation',
-                    {}
-                );
-            }
-            // #endregion
             if (newS.status === 'ready') {
                 const ch = getLiveVoiceChannelFromConnection(connection);
                 console.log(`   ✅ Voice ready — monitoring: ${ch ? ch.name : connection.joinConfig.channelId}`);
@@ -582,7 +498,6 @@ async function initializeEncryption() {
             console.log(
                 `   ⏭️ Reusing voice socket for ${channel.name} (status=${st}) — skip duplicate joinVoiceChannel`
             );
-            dbgDiscordBot('H10', 'discord-bot/index.js:joinOrReuseGuildVoice', 'skip_redundant_join', { st });
             voiceConnections.set(channel.id, existing);
             wireVoiceConnectionLifecycle(existing);
             if (st === 'ready') {
@@ -628,11 +543,6 @@ async function initializeEncryption() {
         console.log(
             `   🤖 Bot voice state channel=${newState.channelId}, libStatus=${st || 'no-connection'} (${st !== 'ready' ? 'subs run only after libStatus=ready' : 'ok'})`
         );
-        dbgDiscordBot('H1', 'discord-bot/index.js:VoiceStateUpdate:bot_self', 'bot_voice_state', {
-            channelChanged: oldState.channelId !== newState.channelId,
-            ready: !!(connection && connection.state.status === 'ready'),
-            libStatus: st || 'none',
-        });
         if (connection && connection.state.status === 'ready') {
             wireSpeakingMapOnce(connection);
             refreshVoiceSubscriptions(connection);
@@ -658,11 +568,6 @@ async function initializeEncryption() {
         console.log(
             `   📍 User ${username} target VC: ${previewName} (follow in ${voiceFollowDebounceMs}ms if settled — env VOICE_JOIN_DEBOUNCE_MS)`
         );
-        // #region agent log
-        dbgDiscordBot('H9', 'discord-bot/index.js:VoiceStateUpdate:debounce', 'voice_follow_scheduled', {
-            debounceMs: voiceFollowDebounceMs,
-        });
-        // #endregion
         const prev = voiceFollowDebounceTimersByGuildId.get(guildId);
         if (prev) clearTimeout(prev);
         voiceFollowDebounceTimersByGuildId.set(
@@ -673,12 +578,6 @@ async function initializeEncryption() {
                 if (!g) return;
                 const m = g.members.cache.get(memberId);
                 const liveChannelId = m && m.voice && m.voice.channelId;
-                // #region agent log
-                dbgDiscordBot('H9', 'discord-bot/index.js:VoiceStateUpdate:debounce_fire', 'voice_follow_live_check', {
-                    hasMember: !!m,
-                    liveCh: !!liveChannelId,
-                });
-                // #endregion
                 if (!liveChannelId) return;
                 followUserToVoiceChannel(g, liveChannelId, username).catch((e) =>
                     console.error(`   ❌ followUserToVoiceChannel:`, e)
@@ -734,7 +633,6 @@ async function initializeEncryption() {
 
         sm.on('end', (userId) => {
             speakingUsers.set(userId, false);
-            opusFallbackLastFire.delete(userId);
         });
     }
 
@@ -743,12 +641,6 @@ async function initializeEncryption() {
         const channel = getLiveVoiceChannelFromConnection(connection);
         const recv = connection.receiver;
         if (!recv || !channel || !channel.isVoiceBased()) {
-            // #region agent log
-            dbgDiscordBot('H1', 'discord-bot/index.js:refreshVoiceSubscriptions:skip', 'no_channel_or_receiver', {
-                hasRecv: !!recv,
-                hasChannel: !!channel,
-            });
-            // #endregion
             return;
         }
 
@@ -776,13 +668,6 @@ async function initializeEncryption() {
             }
         });
         console.log(`   🔄 Voice subscriptions refreshed: humans=${humanCount}, subscribe_ok=${subOk}, channel=${channel.name}`);
-        // #region agent log
-        dbgDiscordBot('H1', 'discord-bot/index.js:refreshVoiceSubscriptions', 'refreshed', {
-            channelId: channel.id,
-            humanCount,
-            subOk,
-        });
-        // #endregion
     }
 
     // SpeakingMap + Opus subscriptions; subscriptions refresh every call so late joiners are not missed.
@@ -823,12 +708,6 @@ async function initializeEncryption() {
         console.log(`╚════════════════════════════════════════════════════════════╝`);
         
         speakingUsers.set(userId, true);
-        dbgDiscordBot('H1', 'discord-bot/index.js:handleUserStartedSpeaking', 'speaking_detected_first_edge', {
-            userIdLen: userId ? String(userId).length : 0,
-            channelOk: !!(liveCh && liveCh.name),
-            isConnectedToGame,
-            wsOpen: !!(gameWebSocket && gameWebSocket.readyState === WebSocket.OPEN),
-        });
         
         // Reload links immediately before checking (in case they were just added)
         reloadLinks();
@@ -839,12 +718,6 @@ async function initializeEncryption() {
             const characterId = discordLinks[userId];
             console.log(`   🔍 Looking up Discord User ID: ${userId}`);
             console.log(`   📋 All loaded links (${Object.keys(discordLinks).length} total):`, JSON.stringify(discordLinks, null, 2));
-            
-            dbgDiscordBot('H2', 'discord-bot/index.js:handleUserStartedSpeaking:lookup', 'post_reload_link_lookup', {
-                linksCount: Object.keys(discordLinks).length,
-                hasLink: !!characterId,
-                characterIdLen: characterId ? String(characterId).length : 0,
-            });
             
             if (characterId) {
                 console.log(`   ✅ FOUND LINK! Character ID = ${characterId}`);

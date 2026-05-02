@@ -26,20 +26,6 @@ use sqlx::Row;
 
 type Clients = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
 
-fn append_discord_debug_log(data: serde_json::Value) {
-    use std::io::Write;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("debug-d39e48.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        let mut line = serde_json::to_string(&data).unwrap_or_default();
-        line.push('\n');
-        let _ = f.write_all(line.as_bytes());
-    }
-}
-
 /// Same path the Node `discord-bot` reads (`__dirname`/discord_links.json), independent of server process cwd.
 fn discord_links_json_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -288,8 +274,9 @@ async fn handle_socket(
     let (mut sender, mut receiver) = socket.split();
     let session_id = Uuid::new_v4().to_string();
     
-    // Large buffer so slow/high-latency clients don't drop map/tokens/combat (broadcast sends can fail if buffer full)
-    let (tx, mut rx) = broadcast::channel(512);
+    // Large buffer while the send task drains onto TCP — slow/long-distance clients can otherwise lag and miss
+    // early MapLoaded / TokenUpdate / EnemyInstance bursts during Connect.
+    let (tx, mut rx) = broadcast::channel(4096);
     clients.write().await.insert(session_id.clone(), tx.clone());
 
     // Send initial connection message
@@ -341,17 +328,6 @@ async fn handle_socket(
                         if let Some(msg_type) = partial.get("type") {
                             error!("   Message type: {}", msg_type);
                         }
-                    }
-                    if text.contains("HighlightCharacter") {
-                        append_discord_debug_log(serde_json::json!({
-                            "sessionId": "d39e48",
-                            "hypothesisId": "H4",
-                            "location": "server.rs:ws_recv:deserialize_fail",
-                            "message": "HighlightCharacter JSON failed to parse as ClientMessage",
-                            "data": { "err": format!("{}", e) },
-                            "timestamp":
-                                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
-                        }));
                     }
                 }
             }
@@ -848,18 +824,6 @@ async fn handle_client_message(
         ClientMessage::HighlightCharacter { character_id, discord_user_id, discord_username, duration } => {
             info!("📥 Received HighlightCharacter from Discord bot: character_id={}, discord_user={} ({})", 
                 character_id, discord_username, discord_user_id);
-            append_discord_debug_log(serde_json::json!({
-                "sessionId": "d39e48",
-                "hypothesisId": "H4",
-                "location": "server.rs:HighlightCharacter",
-                "message": "accepted_and_broadcast",
-                "data": {
-                    "character_id_len": character_id.len(),
-                    "discord_username": discord_username,
-                },
-                "timestamp":
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
-            }));
             let highlight = ServerMessage::HighlightCharacter {
                 character_id,
                 discord_user_id,
