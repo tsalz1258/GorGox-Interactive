@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v97'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v100'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -765,6 +765,25 @@ window.notifyArenaTokenMovedFrom3d = notifyArenaTokenMovedFrom3d;
 let meshyArenaKind = 'character';
 let meshyArenaSelectedId = null;
 
+/** DB enemy row usable as a Meshy target (templates only — not spawned instances). */
+function isMeshyEnemyDbTemplate(en) {
+    if (!en || en.isCustomInstance || en.isNPC) return false;
+    if (en.style && en.style !== selectedStyle) return false;
+    return true;
+}
+
+/** Prefer DB template name over duplicate npc.json row when both exist (case-insensitive). */
+function findEnemyDbTemplateMatchingNpcName(npcName) {
+    var base = String(npcName || '').trim().toLowerCase();
+    if (!base) return null;
+    for (var i = 0; i < enemies.length; i++) {
+        var e = enemies[i];
+        if (!isMeshyEnemyDbTemplate(e)) continue;
+        if (String(e.name || '').trim().toLowerCase() === base) return e;
+    }
+    return null;
+}
+
 function showMeshyArenaModal() {
     if (!isDM) return;
     meshyArenaKind = 'character';
@@ -850,38 +869,74 @@ function renderMeshyArenaList() {
             rows.push('<div class="meshy-arena-item" style="cursor:default;opacity:0.75;">No characters match.</div>');
         }
     } else {
-        const list = Array.isArray(enemies)
+        const merged = [];
+
+        const fromDb = Array.isArray(enemies)
             ? enemies.filter(function (en) {
-                  if (!en || en.isCustomInstance) return false;
+                  if (!isMeshyEnemyDbTemplate(en)) return false;
                   if (q && String(en.name || '').toLowerCase().indexOf(q) === -1) return false;
                   return true;
               })
             : [];
-        list.sort(function (a, b) {
+        fromDb.sort(function (a, b) {
             return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
         });
-        for (let j = 0; j < list.length; j++) {
-            const en = list[j];
-            const id = String(en.id);
+        for (let j = 0; j < fromDb.length; j++) {
+            const en = fromDb[j];
+            const sid = String(en.id);
             const hasStl = !!getArenaStlUrlFromEnemyActions(en.actions);
             const hasPortrait = !!(en.portrait_url && String(en.portrait_url).trim());
-            const sel = meshyArenaSelectedId === id ? ' meshy-arena-item-selected' : '';
-            const badge = hasStl ? 'Has 3D' : !hasPortrait ? 'No portrait' : 'Ready';
+            let badge = hasStl ? 'Has 3D' : !hasPortrait ? 'No portrait' : 'Ready';
+            badge += ' · DB';
+            merged.push({
+                sort: String(en.name || ''),
+                sid: sid,
+                label: String(en.name || 'Unnamed'),
+                badge: badge,
+            });
+        }
+
+        const npcSrc = Array.isArray(npcs) ? npcs : [];
+        for (let k = 0; k < npcSrc.length; k++) {
+            const npc = npcSrc[k];
+            if (!npc || !npc.name) continue;
+            if (findEnemyDbTemplateMatchingNpcName(npc.name)) continue;
+            if (q && String(npc.name || '').toLowerCase().indexOf(q) === -1) continue;
+            const sid = 'npcjson:' + k;
+            merged.push({
+                sort: String(npc.name || ''),
+                sid: sid,
+                label: String(npc.name || 'Unnamed'),
+                badge:
+                    'Portrait #' +
+                    k +
+                    ' · Catalog',
+            });
+        }
+
+        merged.sort(function (a, b) {
+            return a.sort.localeCompare(b.sort, undefined, { sensitivity: 'base' });
+        });
+
+        for (let m = 0; m < merged.length; m++) {
+            const row = merged[m];
+            const sel = meshyArenaSelectedId === row.sid ? ' meshy-arena-item-selected' : '';
             rows.push(
                 '<div class="meshy-arena-item' +
                     sel +
                     '" data-meshy-id="' +
-                    escapeHtml(id) +
+                    escapeHtml(row.sid) +
                     '" onclick="meshyArenaPick(event)"><span>' +
-                    escapeHtml(en.name || 'Unnamed') +
+                    escapeHtml(row.label) +
                     '</span><span class="meshy-arena-badge">' +
-                    escapeHtml(badge) +
+                    escapeHtml(row.badge) +
                     '</span></div>'
             );
         }
-        if (!list.length) {
+
+        if (!merged.length) {
             rows.push(
-                '<div class="meshy-arena-item" style="cursor:default;opacity:0.75;">No creature templates match.</div>'
+                '<div class="meshy-arena-item" style="cursor:default;opacity:0.75;">No creature templates or npc.json entries match.</div>'
             );
         }
     }
@@ -893,6 +948,8 @@ async function confirmMeshyArenaGenerate() {
     if (!isDM || !meshyArenaSelectedId) return;
     const id = meshyArenaSelectedId;
     const kind = meshyArenaKind === 'enemy' ? 'enemy' : 'character';
+    let fetchKind = kind;
+    let fetchId = String(id);
 
     if (kind === 'character') {
         const char = characters.find(function (c) {
@@ -910,12 +967,30 @@ async function confirmMeshyArenaGenerate() {
             alert('Add a portrait to this character first (character sheet / portrait field).');
             return;
         }
+    } else if (String(id).indexOf('npcjson:') === 0) {
+        fetchKind = 'npc_catalog';
+        fetchId = String(id).slice('npcjson:'.length);
+        const ix = parseInt(fetchId, 10);
+        if (isNaN(ix) || ix < 0 || !Array.isArray(npcs) || !npcs[ix]) {
+            alert('NPC catalog entry not found.');
+            return;
+        }
+        const npcPre = npcs[ix];
+        const tMatch = findEnemyDbTemplateMatchingNpcName(npcPre.name);
+        if (tMatch && getArenaStlUrlFromEnemyActions(tMatch.actions)) {
+            alert('This creature already has a 3D arena model attached (enemy database).');
+            return;
+        }
     } else {
         const tpl = enemies.find(function (e) {
             return e && String(e.id) === String(id);
         });
-        if (!tpl || tpl.isCustomInstance) {
-            alert('Choose a creature template from the database.');
+        if (!tpl || tpl.isCustomInstance || tpl.isNPC) {
+            alert('Choose a creature from the list (database template or NPC catalog).');
+            return;
+        }
+        if (tpl.style && tpl.style !== selectedStyle) {
+            alert('Creature is for a different campaign style.');
             return;
         }
         if (getArenaStlUrlFromEnemyActions(tpl.actions)) {
@@ -943,7 +1018,7 @@ async function confirmMeshyArenaGenerate() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ kind: kind, id: String(id) }),
+            body: JSON.stringify({ kind: fetchKind, id: String(fetchId) }),
         });
         let j = {};
         try {
@@ -957,6 +1032,35 @@ async function confirmMeshyArenaGenerate() {
 
         if (kind === 'character') {
             setCharacterArenaStlUrl(id, url);
+        } else if (String(id).indexOf('npcjson:') === 0) {
+            const ix2 = parseInt(String(id).slice('npcjson:'.length), 10);
+            const npcA = npcs[ix2];
+            if (!npcA) throw new Error('NPC catalog entry missing');
+            const tplExisting = findEnemyDbTemplateMatchingNpcName(npcA.name);
+            if (tplExisting) {
+                const nextA = upsertArenaStlInEnemyActions(tplExisting.actions, url);
+                const updatedA = Object.assign({}, tplExisting, { actions: nextA });
+                sendMessage({ type: 'CreateEnemy', enemy: buildEnemyServerPayload(updatedA) });
+                const ixE = enemies.findIndex(function (e) {
+                    return e && String(e.id) === String(tplExisting.id);
+                });
+                if (ixE !== -1) enemies[ixE] = updatedA;
+                syncCustomEnemyInstanceActionsFromTemplate(updatedA.id, updatedA.actions);
+                addLogEntry('Meshy 3D model attached for ' + (tplExisting.name || 'creature'), 'info');
+            } else {
+                const sk = buildEnemySkeletonFromNpcCatalog(npcA, ix2);
+                if (!sk) throw new Error('Could not build creature from NPC data');
+                sk.actions = upsertArenaStlInEnemyActions('{}', url);
+                sendMessage({ type: 'CreateEnemy', enemy: buildEnemyServerPayload(sk) });
+                enemies.push(sk);
+                addLogEntry('Meshy 3D model attached — added Enemy DB template: ' + (sk.name || 'creature'), 'info');
+            }
+            try {
+                if (typeof renderEnemyList === 'function') renderEnemyList();
+            } catch (_) {}
+            try {
+                if (typeof window.arena3dSyncNow === 'function') window.arena3dSyncNow();
+            } catch (_) {}
         } else {
             const tpl = enemies.find(function (e) {
                 return e && String(e.id) === String(id);
@@ -3842,10 +3946,56 @@ function updateHighlightedTokens() {
 function highlightCharacterToken(characterId, discordUsername, duration = 3000) {
     console.log(`🎯 highlightCharacterToken called: characterId=${characterId}, username=${discordUsername}, duration=${duration}`);
     console.log(`📊 Total tokens: ${tokens.length}`);
+
+    const cidNorm = String(characterId || '').trim();
+    const cidLc = cidNorm.toLowerCase();
+
+    // #region agent log
+    (function () {
+        const cid = cidNorm;
+        let strictMatches = 0;
+        let caseInsensitiveMatches = 0;
+        const playerSnapshots = [];
+        for (let ti = 0; ti < tokens.length; ti++) {
+            const t = tokens[ti];
+            const eid = String(t.entity_id || '').trim();
+            if (t.entity_type === 'Player') {
+                playerSnapshots.push({
+                    id: String(t.id),
+                    entity_id_len: eid.length,
+                    strict: eid === cid,
+                    ic: eid.toLowerCase() === cidLc,
+                });
+                if (eid === cid) strictMatches++;
+                if (eid.toLowerCase() === cidLc) caseInsensitiveMatches++;
+            }
+        }
+        fetch('http://127.0.0.1:7671/ingest/360fe0fd-f3b4-45f8-95ca-2dda571cca61', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'd39e48' },
+            body: JSON.stringify({
+                sessionId: 'd39e48',
+                hypothesisId: 'H5',
+                location: 'app.js:highlightCharacterToken',
+                message: 'token_match_audit',
+                data: {
+                    characterIdLen: cid.length,
+                    totalTokens: tokens.length,
+                    playerTokenCount: playerSnapshots.length,
+                    strictMatches,
+                    caseInsensitiveMatches,
+                    samplePlayers: playerSnapshots.slice(0, 8),
+                },
+                timestamp: Date.now(),
+            }),
+        }).catch(() => {});
+    })();
+    // #endregion
     
-    // Find all tokens with this character_id
+    // Find all tokens with this character_id (trim + case-insensitive UUID match)
     const matchingTokens = tokens.filter(token => {
-        const matches = token.entity_id === characterId;
+        const eid = String(token.entity_id || '').trim();
+        const matches = eid === cidNorm || eid.toLowerCase() === cidLc;
         console.log(`  Token ${token.id}: entity_id=${token.entity_id}, matches=${matches}`);
         return matches;
     });
@@ -9437,6 +9587,37 @@ function deleteEnemy(enemyId, enemyName) {
         
         addLogEntry(`Deleted enemy template: ${enemyName}`, 'info');
     }
+}
+
+/** Build a persistent enemy-database row from npc.json so Meshy can attach an arena STL (same stats pattern as spawnNPC). */
+function buildEnemySkeletonFromNpcCatalog(npc, npcIndex) {
+    if (!npc) return null;
+    const hpMatch = npc.hit_points ? String(npc.hit_points).match(/(\d+)/) : null;
+    const maxHp = hpMatch ? parseInt(hpMatch[1], 10) : 0;
+    const acMatch = npc.armor_class ? String(npc.armor_class).match(/(\d+)/) : null;
+    const ac = acMatch ? parseInt(acMatch[1], 10) : 10;
+    const parsedData = parseNPCRawBlock(npc.raw_block || '');
+    return {
+        id: generateUUID(),
+        name: String(npc.name || 'Creature').trim(),
+        creature_type: npc.type || 'Unknown',
+        challenge_rating: parseFloat(npc.challenge) || 0,
+        max_hp: maxHp,
+        current_hp: maxHp,
+        armor_class: ac,
+        initiative_bonus: parsedData.initiative_bonus || 0,
+        strength: parsedData.str || 10,
+        dexterity: parsedData.dex || 10,
+        constitution: parsedData.con || 10,
+        intelligence: parsedData.int || 10,
+        wisdom: parsedData.wis || 10,
+        charisma: parsedData.cha || 10,
+        speed: parseSpeed(npc.speed) || 30,
+        actions: '{}',
+        description: npc.raw_block || '',
+        portrait_url: '/static/enemy_portraits/' + npcIndex + '.png',
+        style: selectedStyle,
+    };
 }
 
 function spawnNPC(npc) {

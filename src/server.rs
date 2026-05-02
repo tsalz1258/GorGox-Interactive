@@ -26,6 +26,27 @@ use sqlx::Row;
 
 type Clients = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
 
+fn append_discord_debug_log(data: serde_json::Value) {
+    use std::io::Write;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("debug-d39e48.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let mut line = serde_json::to_string(&data).unwrap_or_default();
+        line.push('\n');
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// Same path the Node `discord-bot` reads (`__dirname`/discord_links.json), independent of server process cwd.
+fn discord_links_json_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("discord-bot")
+        .join("discord_links.json")
+}
+
 async fn load_characters_from_db(db: &Database, game_state: &Arc<RwLock<GameState>>, db_name: &str) {
     use crate::models::Character;
     
@@ -320,6 +341,17 @@ async fn handle_socket(
                         if let Some(msg_type) = partial.get("type") {
                             error!("   Message type: {}", msg_type);
                         }
+                    }
+                    if text.contains("HighlightCharacter") {
+                        append_discord_debug_log(serde_json::json!({
+                            "sessionId": "d39e48",
+                            "hypothesisId": "H4",
+                            "location": "server.rs:ws_recv:deserialize_fail",
+                            "message": "HighlightCharacter JSON failed to parse as ClientMessage",
+                            "data": { "err": format!("{}", e) },
+                            "timestamp":
+                                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
+                        }));
                     }
                 }
             }
@@ -816,6 +848,18 @@ async fn handle_client_message(
         ClientMessage::HighlightCharacter { character_id, discord_user_id, discord_username, duration } => {
             info!("📥 Received HighlightCharacter from Discord bot: character_id={}, discord_user={} ({})", 
                 character_id, discord_username, discord_user_id);
+            append_discord_debug_log(serde_json::json!({
+                "sessionId": "d39e48",
+                "hypothesisId": "H4",
+                "location": "server.rs:HighlightCharacter",
+                "message": "accepted_and_broadcast",
+                "data": {
+                    "character_id_len": character_id.len(),
+                    "discord_username": discord_username,
+                },
+                "timestamp":
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
+            }));
             let highlight = ServerMessage::HighlightCharacter {
                 character_id,
                 discord_user_id,
@@ -828,11 +872,10 @@ async fn handle_client_message(
         
         // Discord account linking - save to file for bot
         ClientMessage::LinkDiscordAccount { character_id, discord_user_id, character_name } => {
-            // Save link to discord_links.json file (in discord-bot folder)
-            use std::path::Path;
+            // Save link to discord_links.json (crate-root discord-bot/ — matches Node bot resolve path)
             use tokio::fs;
             
-            let links_file = Path::new("discord-bot").join("discord_links.json");
+            let links_file = discord_links_json_path();
             
             info!("📥 Received LinkDiscordAccount request: discord_user_id={}, character_id={}, character_name={}", 
                 discord_user_id, character_id, character_name);
@@ -2985,6 +3028,77 @@ async fn query_enemy_by_id(
     None
 }
 
+async fn query_enemy_has_arena_stl_by_name(
+    dnd: &Database,
+    sw: &Database,
+    name: &str,
+) -> bool {
+    let q = "SELECT actions FROM enemies WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1";
+    for pool in [dnd, sw] {
+        if let Ok(Some(row)) = sqlx::query(q).bind(name).fetch_optional(pool).await {
+            let actions: String = row.get(0);
+            if crate::meshy::arena_stl_from_enemy_actions_json(&actions).is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+async fn meshy_npc_catalog_entry(
+    idx: usize,
+) -> Result<(String, String), (StatusCode, axum::Json<serde_json::Value>)> {
+    use std::path::Path;
+    let path = Path::new("static").join("data").join("npc.json");
+    let raw = tokio::fs::read_to_string(&path).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({ "error": format!("Could not read npc.json: {}", e) })),
+        )
+    })?;
+    let arr: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({ "error": format!("npc.json parse: {}", e) })),
+        )
+    })?;
+    let npc = arr.get(idx).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({ "error": "NPC catalog index out of range" })),
+        )
+    })?;
+    let name = npc
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown")
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": "NPC entry has no name" })),
+        ));
+    }
+    let rel = format!("static/enemy_portraits/{}.png", idx);
+    let portrait_path = Path::new(".").join(&rel);
+    if tokio::fs::metadata(&portrait_path).await.is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": format!(
+                    "Portrait file missing for NPC #{} ({}). Add static/enemy_portraits/{}.png (same index as npc.json).",
+                    idx,
+                    name,
+                    idx,
+                ),
+            })),
+        ));
+    }
+    let portrait_web = format!("/static/enemy_portraits/{}.png", idx);
+    Ok((name, portrait_web))
+}
+
 /// Portrait → Meshy → GLB saved under `static/arena_stl`. Requires env `MESHY_API_KEY` (see [Meshy docs](https://docs.meshy.ai/api/image-to-3d)).
 async fn meshy_generate_arena_stl(
     State((dnd_db, starwars_db, _gs, _c, _sh)): State<(
@@ -3043,10 +3157,25 @@ async fn meshy_generate_arena_stl(
             let has = crate::meshy::arena_stl_from_enemy_actions_json(&actions).is_some();
             (name, portrait, has)
         }
+        "npc_catalog" => {
+            let idx = id.parse::<usize>().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "error": "npc_catalog id must be the numeric index into static/data/npc.json (e.g. \"0\", \"42\").",
+                    })),
+                )
+            })?;
+            let (name, portrait) = meshy_npc_catalog_entry(idx).await?;
+            let has = query_enemy_has_arena_stl_by_name(&dnd_db, &starwars_db, &name).await;
+            (name, Some(portrait), has)
+        }
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                axum::Json(serde_json::json!({ "error": "kind must be \"character\" or \"enemy\"" })),
+                axum::Json(serde_json::json!({
+                    "error": "kind must be \"character\", \"enemy\", or \"npc_catalog\"",
+                })),
             ));
         }
     };

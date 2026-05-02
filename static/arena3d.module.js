@@ -3,6 +3,7 @@ import { OrbitControls } from "https://unpkg.com/three@0.160.0/examples/jsm/cont
 import { TransformControls } from "https://unpkg.com/three@0.160.0/examples/jsm/controls/TransformControls.js";
 import { STLLoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders/STLLoader.js";
 import { GLTFLoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js";
+import { RoomEnvironment } from "https://unpkg.com/three@0.160.0/examples/jsm/environments/RoomEnvironment.js";
 
 let initialized = false;
 let arenaEl = null;
@@ -11,6 +12,8 @@ let dropHintEl = null;
 let fileInputEl = null;
 
 let renderer = null;
+/** PMREM for scene.environment (IBL — critical for MeshStandard / MeshPhysical). */
+let arenaPmremGenerator = null;
 let scene = null;
 let camera = null;
 let orbit = null;
@@ -71,6 +74,25 @@ function virtualNameForModelBuffer(urlOrPath, buffer) {
   return isProbablyGlbArrayBuffer(buffer) ? "model.glb" : "model.stl";
 }
 
+/**
+ * Meshy / GLB exports often use dark textures + high metalness; without IBL they read as black.
+ * scene.environment supplies reflections; this nudges intensity and clamps extreme PBR so faces stay visible.
+ */
+function applyArenaGlbMaterialBoost(root) {
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const mat of mats) {
+      if (!mat) continue;
+      if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+        mat.envMapIntensity = (mat.envMapIntensity ?? 1) * 1.45;
+        if (mat.metalness != null && mat.metalness > 0.92) mat.metalness = 0.88;
+        if (mat.roughness != null && mat.roughness < 0.15) mat.roughness = 0.2;
+      }
+    }
+  });
+}
+
 function captureMiniFootprintReference(root) {
   if (!root) return;
   root.scale.set(1, 1, 1);
@@ -112,6 +134,7 @@ function parseArenaModelBuffer(virtualName, buffer, opts) {
                 c.receiveShadow = true;
               }
             });
+            applyArenaGlbMaterialBoost(scene);
             scene.updateMatrixWorld(true);
             const box = new THREE.Box3().setFromObject(scene);
             const ctr = box.getCenter(new THREE.Vector3());
@@ -681,12 +704,19 @@ function ensureInit() {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.42;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   viewportEl.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x06040c);
+
+  arenaPmremGenerator = new THREE.PMREMGenerator(renderer);
+  const roomEnv = new RoomEnvironment(renderer);
+  scene.environment = arenaPmremGenerator.fromScene(roomEnv, 0.04).texture;
+  roomEnv.dispose();
 
   if (!starfieldMesh) {
     starfieldMesh = createStarfieldSky();
@@ -704,10 +734,13 @@ function ensureInit() {
   orbit.target.set(0, 0, 0);
   orbit.maxPolarAngle = Math.PI * 0.49;
 
-  const ambient = new THREE.AmbientLight(0xffffff, 0.42);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.88);
   scene.add(ambient);
 
-  const key = new THREE.DirectionalLight(0xffffff, 0.95);
+  const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x2a2520, 0.68);
+  scene.add(hemi);
+
+  const key = new THREE.DirectionalLight(0xffffff, 1.28);
   dirKeyLight = key;
   key.position.set(400, 1200, 600);
   key.castShadow = true;
@@ -717,9 +750,14 @@ function ensureInit() {
   key.shadow.camera.far = 8000;
   scene.add(key);
 
-  const rim = new THREE.DirectionalLight(0xaabbff, 0.28);
+  const rim = new THREE.DirectionalLight(0xaabbff, 0.5);
   rim.position.set(-800, 600, -900);
   scene.add(rim);
+
+  const fill = new THREE.DirectionalLight(0xfff2dd, 0.52);
+  fill.castShadow = false;
+  fill.position.set(-350, 550, 520);
+  scene.add(fill);
 
   battlefieldGroup = new THREE.Group();
   scene.add(battlefieldGroup);

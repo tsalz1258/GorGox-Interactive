@@ -461,10 +461,11 @@
                 <h2>✨ Meshy — 3D model from portrait</h2>
                 <p style="opacity:0.88;font-size:13px;line-height:1.45;margin-bottom:12px;">
                     Uses your <a href="https://docs.meshy.ai/api/image-to-3d" target="_blank" rel="noopener">Meshy</a> API key on the <strong>game server</strong> (<code>MESHY_API_KEY</code> env var). Generation can take several minutes.
+                    <span style="display:block;margin-top:6px;">Creatures lists <strong>enemy database templates</strong> plus every entry in <code>npc.json</code> that does not already have a same-name DB row. Catalog portraits use <code>/static/enemy_portraits/&lt;index&gt;.png</code> (same order as npc.json).</span>
                 </p>
                 <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
                     <button type="button" id="meshyArenaTabCharacters" class="meshy-arena-tab meshy-arena-tab-active" onclick="setMeshyArenaKind('character')">Characters</button>
-                    <button type="button" id="meshyArenaTabEnemies" class="meshy-arena-tab" onclick="setMeshyArenaKind('enemy')">Creatures (templates)</button>
+                    <button type="button" id="meshyArenaTabEnemies" class="meshy-arena-tab" onclick="setMeshyArenaKind('enemy')">Creatures (DB + catalog)</button>
                 </div>
                 <input type="search" id="meshyArenaSearch" placeholder="Search by name…" style="width:100%;padding:8px;margin-bottom:10px;box-sizing:border-box;" oninput="renderMeshyArenaList()" />
                 <div id="meshyArenaList" class="meshy-arena-list"></div>
@@ -1025,7 +1026,7 @@
     <input type="file" id="arenaStlHiddenFilePicker" accept=".stl,.glb,model/stl,model/gltf-binary,application/sla,application/vnd.ms-pki.stl" style="display: none;" aria-hidden="true">
 
     <script src="/static/data/armstech_data.js?v=68"></script>
-    <script src="/static/arena3d-boot.js?v=15"></script>
+    <script src="/static/arena3d-boot.js?v=17"></script>
     <script src="/static/app.js?v=99"></script>
     <script>
         // Verify connect function is available

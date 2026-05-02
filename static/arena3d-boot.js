@@ -3,7 +3,7 @@
  * never hits ReferenceError. The real Three.js code loads on first use via dynamic import().
  */
 (function () {
-  var MODULE_URL = "/static/arena3d.module.js?v=24";
+  var MODULE_URL = "/static/arena3d.module.js?v=26";
   var loadPromise = null;
   var api = null;
 
