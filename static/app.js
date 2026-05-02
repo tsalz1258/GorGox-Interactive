@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v102'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v106'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -703,6 +703,7 @@ function getBattlefieldSnapshotForArena3d() {
             const stlUrl = normalizeArenaModelUrl(resolveTokenStlUrlForArena3d(t));
             if (!stlUrl) continue;
             const ts = t.size != null && !isNaN(Number(t.size)) ? Number(t.size) : getTokenSize(t.entity_id, t.entity_type);
+            const miniScale = resolveTokenArenaMiniScaleForArena3d(t);
             tokenList.push({
                 id: String(t.id),
                 entity_id: String(t.entity_id),
@@ -711,6 +712,7 @@ function getBattlefieldSnapshotForArena3d() {
                 y: Number(t.y) || 0,
                 size: ts,
                 stlUrl,
+                miniScale,
             });
         }
     }
@@ -1161,6 +1163,32 @@ function getCharacterArenaStlUrl(char) {
     }
 }
 
+/** Uniform scale multiplier for synced 3D token minis (clamped); 1 = default auto fit to grid cell. */
+const ARENA_MINI_SCALE_MIN = 0.05;
+const ARENA_MINI_SCALE_MAX = 8;
+
+function normalizeArenaMiniScaleNumber(raw) {
+    const n = raw === undefined || raw === null || raw === '' ? NaN : Number(raw);
+    if (!isFinite(n) || n <= 0) return 1;
+    return Math.min(ARENA_MINI_SCALE_MAX, Math.max(ARENA_MINI_SCALE_MIN, n));
+}
+
+function getCharacterArenaMiniScale(char) {
+    if (!char || !char.character_data) return 1;
+    try {
+        const root = JSON.parse(char.character_data);
+        if (!root || typeof root !== 'object' || Array.isArray(root)) return 1;
+        const inner = root.character && typeof root.character === 'object' ? root.character : null;
+        /** Prefer `.character`; fall back to root (some imports put `_gorgox_*` only on wrapper). */
+        let rawScale = null;
+        if (inner && inner._gorgox_arena_mini_scale != null) rawScale = inner._gorgox_arena_mini_scale;
+        else if (root._gorgox_arena_mini_scale != null) rawScale = root._gorgox_arena_mini_scale;
+        return normalizeArenaMiniScaleNumber(rawScale);
+    } catch (_) {
+        return 1;
+    }
+}
+
 function getArenaStlUrlFromEnemyActions(actionsStr) {
     if (actionsStr == null) return '';
     try {
@@ -1188,6 +1216,34 @@ function upsertArenaStlInEnemyActions(actionsStr, urlOrNull) {
     return JSON.stringify(o);
 }
 
+function getArenaMiniScaleFromEnemyActions(actionsStr) {
+    if (actionsStr == null) return 1;
+    try {
+        const o = typeof actionsStr === 'string' ? JSON.parse(actionsStr) : actionsStr;
+        if (o && typeof o === 'object' && !Array.isArray(o) && o._gorgox_arena_mini_scale != null) {
+            return normalizeArenaMiniScaleNumber(o._gorgox_arena_mini_scale);
+        }
+    } catch (_) {}
+    return 1;
+}
+
+/** Merge `_gorgox_arena_mini_scale` into enemy actions JSON. Empty / invalid scaleRaw ⇒ default 1 (key removed). */
+function upsertArenaMiniScaleInEnemyActions(actionsStr, scaleRaw) {
+    const s = typeof actionsStr === 'string' ? actionsStr.trim() : '';
+    let o = {};
+    try {
+        o = s.length ? JSON.parse(s) : {};
+    } catch (_) {
+        return typeof actionsStr === 'string' ? actionsStr : JSON.stringify(actionsStr || {});
+    }
+    if (Array.isArray(o)) return typeof actionsStr === 'string' ? actionsStr : JSON.stringify(actionsStr || []);
+    if (!o || typeof o !== 'object') return s.length ? JSON.stringify(o) : '{}';
+    const n = normalizeArenaMiniScaleNumber(scaleRaw === undefined || scaleRaw === null || scaleRaw === '' ? NaN : scaleRaw);
+    if (Math.abs(n - 1) < 1e-6) delete o._gorgox_arena_mini_scale;
+    else o._gorgox_arena_mini_scale = n;
+    return JSON.stringify(o);
+}
+
 function resolveTokenStlUrlForArena3d(token) {
     if (!token) return '';
     const et = token.entity_type;
@@ -1201,6 +1257,21 @@ function resolveTokenStlUrlForArena3d(token) {
         return tpl ? getArenaStlUrlFromEnemyActions(tpl.actions) : '';
     }
     return '';
+}
+
+function resolveTokenArenaMiniScaleForArena3d(token) {
+    if (!token) return 1;
+    const et = token.entity_type;
+    if (et === 'Player') {
+        const c = characters.find((x) => x && String(x.id) === String(token.entity_id));
+        return c ? getCharacterArenaMiniScale(c) : 1;
+    }
+    if (et === 'Enemy' || et === 'NPC') {
+        const e = enemies.find((x) => x && String(x.id) === String(token.entity_id));
+        const tpl = e && e.isCustomInstance ? getEnemyTemplateForCustomInstance(e) : e;
+        return tpl ? getArenaMiniScaleFromEnemyActions(tpl.actions) : 1;
+    }
+    return 1;
 }
 
 async function postArenaStlUpload(file) {
@@ -1276,6 +1347,66 @@ function setCharacterArenaStlUrl(characterId, urlOrNull) {
     } catch (_) {}
 }
 
+function characterSheetArenaMiniScaleInputId(characterId) {
+    return 'arenaMiniScale-char-' + String(characterId).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function setCharacterArenaMiniScale(characterId, scaleRaw) {
+    const char = characters.find((c) => c && String(c.id) === String(characterId));
+    if (!char) {
+        alert('Character not found.');
+        return;
+    }
+    if (!canAttachArenaStlToCharacter(char)) {
+        alert('You cannot change this for this character.');
+        return;
+    }
+    const n = normalizeArenaMiniScaleNumber(scaleRaw === undefined || scaleRaw === null || scaleRaw === '' ? NaN : scaleRaw);
+    let root = {};
+    try {
+        root = char.character_data ? JSON.parse(char.character_data) : {};
+    } catch (_) {
+        root = {};
+    }
+    if (!root || typeof root !== 'object' || Array.isArray(root)) root = {};
+    if (root.character && typeof root.character === 'object') {
+        if (Math.abs(n - 1) < 1e-6) {
+            delete root.character._gorgox_arena_mini_scale;
+            delete root._gorgox_arena_mini_scale;
+        } else {
+            root.character._gorgox_arena_mini_scale = n;
+            root._gorgox_arena_mini_scale = n;
+        }
+    } else {
+        if (Math.abs(n - 1) < 1e-6) delete root._gorgox_arena_mini_scale;
+        else root._gorgox_arena_mini_scale = n;
+    }
+    char.character_data = JSON.stringify(root);
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(characterId)) {
+        try {
+            const p = JSON.parse(char.character_data);
+            currentViewingCharacterData = p.character || p;
+        } catch (_) {
+            currentViewingCharacterData = root.character || root;
+        }
+    }
+    const payload = buildCharacterUpdatePayload(char);
+    if (payload) sendMessage({ type: 'UpdateCharacter', character: payload });
+    renderCharacterSheetContent();
+    addLogEntry(`Updated 3D mini scale (${n}) for ${char.name}`, 'info');
+    try {
+        if (typeof window !== 'undefined' && typeof window.arena3dSyncNow === 'function') {
+            window.arena3dSyncNow();
+        }
+    } catch (_) {}
+}
+
+function saveCharacterArenaMiniScaleFromSheet(characterId) {
+    const inp = document.getElementById(characterSheetArenaMiniScaleInputId(characterId));
+    const raw = inp ? inp.value : '';
+    setCharacterArenaMiniScale(characterId, raw);
+}
+
 async function uploadArenaStlForCharacter(characterId) {
     const input = document.getElementById('arenaStlHiddenFilePicker');
     if (!input) return;
@@ -1302,6 +1433,49 @@ function setEnemyArenaStlHiddenValue(url) {
     if (prev) {
         prev.textContent = url ? (url.split('/').pop() || url) : '(none)';
     }
+}
+
+function enemyArenaMiniScaleSheetInputId(templateId) {
+    return 'arenaMiniScale-enemy-' + String(templateId).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function readEnemyArenaMiniScaleModalValue() {
+    const el = document.getElementById('enemyArenaMiniScale');
+    if (!el) return '';
+    return String(el.value || '').trim();
+}
+
+function setEnemyArenaMiniScaleModalValue(scaleOrEmpty) {
+    const el = document.getElementById('enemyArenaMiniScale');
+    if (!el) return;
+    el.value =
+        scaleOrEmpty == null || scaleOrEmpty === '' || Math.abs(Number(scaleOrEmpty) - 1) < 1e-6
+            ? ''
+            : String(scaleOrEmpty);
+}
+
+function saveEnemyArenaMiniScaleFromSheet(templateEnemyId) {
+    if (!isDM) return;
+    const inp = document.getElementById(enemyArenaMiniScaleSheetInputId(templateEnemyId));
+    const raw = inp ? inp.value : '';
+    const tpl = enemies.find((e) => e && String(e.id) === String(templateEnemyId));
+    if (!tpl || tpl.isCustomInstance) {
+        alert('Edit the base template from the enemy list.');
+        return;
+    }
+    const nextActions = upsertArenaMiniScaleInEnemyActions(tpl.actions || '{}', raw);
+    const updated = { ...tpl, actions: nextActions };
+    sendMessage({ type: 'CreateEnemy', enemy: buildEnemyServerPayload(updated) });
+    const idx = enemies.findIndex((e) => e && String(e.id) === String(templateEnemyId));
+    if (idx !== -1) enemies[idx] = updated;
+    syncCustomEnemyInstanceActionsFromTemplate(updated.id, updated.actions);
+    addLogEntry(`Updated 3D mini scale for ${tpl.name}`, 'info');
+    try {
+        if (typeof window !== 'undefined' && typeof window.arena3dSyncNow === 'function') {
+            window.arena3dSyncNow();
+        }
+    } catch (_) {}
+    showNPCCharacterSheet(templateEnemyId);
 }
 
 async function uploadArenaStlForEnemyModal() {
@@ -1760,7 +1934,7 @@ function parseCustomEnemyActionsFromRawString(raw) {
             }));
         }
         const obj = parsed.actions && typeof parsed.actions === 'object' ? parsed.actions : parsed;
-        return Object.entries(obj).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform' && k !== '_gorgox_arena_stl_url').map(([name, val]) => ({
+        return Object.entries(obj).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform' && k !== '_gorgox_arena_stl_url' && k !== '_gorgox_arena_mini_scale').map(([name, val]) => ({
             name: name,
             description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
         }));
@@ -3019,13 +3193,31 @@ function handleServerMessage(message) {
                 syncCharactersWithServer();
                 updateArmstechPlayerButtonVisibility();
                 
-                // Update character sheet if viewing one
+                // Update character sheet if viewing one — point at canonical row from `characters`, only re-render if HP/json actually changed (reduces flicker vs orphan refs + floods).
                 if (currentViewingCharacter) {
-                    const updatedChar = characters.find(c => c.id === currentViewingCharacter.id);
+                    const updatedChar = characters.find(function (c) {
+                        return c && String(c.id) === String(currentViewingCharacter.id);
+                    });
                     if (updatedChar) {
-                        currentViewingCharacter.current_hp = updatedChar.current_hp;
-                        currentViewingCharacter.max_hp = updatedChar.max_hp;
-                        scheduleDebouncedCharacterSheetRefresh();
+                        const prev = currentViewingCharacter;
+                        const hpChanged =
+                            prev.current_hp !== updatedChar.current_hp ||
+                            prev.max_hp !== updatedChar.max_hp;
+                        const dataChanged =
+                            String(prev.character_data || '') !== String(updatedChar.character_data || '');
+                        currentViewingCharacter = updatedChar;
+                        try {
+                            if (updatedChar.character_data) {
+                                const parsed = JSON.parse(updatedChar.character_data);
+                                currentViewingCharacterFullData = parsed;
+                                currentViewingCharacterData = parsed.character || parsed;
+                            }
+                        } catch (_) {
+                            /* keep existing sheet data pointers */
+                        }
+                        if (hpChanged || dataChanged) {
+                            scheduleDebouncedCharacterSheetRefresh();
+                        }
                     }
                 }
                 
@@ -9211,6 +9403,7 @@ function showCreateEnemy() {
     const stlFile = document.getElementById('enemyArenaStlFile');
     if (stlFile) stlFile.value = '';
     setEnemyArenaStlHiddenValue('');
+    setEnemyArenaMiniScaleModalValue('');
     document.getElementById('createEnemyModal').classList.add('active');
 }
 
@@ -9247,6 +9440,7 @@ function showEditEnemy(enemy) {
     }
     const stlSrcEnemy = resolveEnemyTemplateForSheetEdits(enemy.id) || enemy;
     setEnemyArenaStlHiddenValue(getArenaStlUrlFromEnemyActions(stlSrcEnemy.actions));
+    setEnemyArenaMiniScaleModalValue(getArenaMiniScaleFromEnemyActions(stlSrcEnemy.actions));
     const stlFileEl = document.getElementById('enemyArenaStlFile');
     if (stlFileEl) stlFileEl.value = '';
     document.getElementById('createEnemyModal').classList.add('active');
@@ -9281,9 +9475,12 @@ async function createEnemy() {
         wisdom: parseInt(document.getElementById('enemyWis').value),
         charisma: parseInt(document.getElementById('enemyCha').value),
         speed: parseInt(document.getElementById('enemySpeed').value),
-        actions: upsertArenaStlInEnemyActions(
-            mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', null),
-            readEnemyArenaStlHiddenValue() || null
+        actions: upsertArenaMiniScaleInEnemyActions(
+            upsertArenaStlInEnemyActions(
+                mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', null),
+                readEnemyArenaStlHiddenValue() || null
+            ),
+            readEnemyArenaMiniScaleModalValue()
         ),
         description: document.getElementById('enemyDescription').value || '',
         style: selectedStyle
@@ -9313,6 +9510,7 @@ async function createEnemy() {
     document.getElementById('enemyEditId').value = '';
     document.getElementById('enemyPortraitPreview').innerHTML = '';
     setEnemyArenaStlHiddenValue('');
+    setEnemyArenaMiniScaleModalValue('');
     const stlFileC = document.getElementById('enemyArenaStlFile');
     if (stlFileC) stlFileC.value = '';
     addLogEntry(`Created enemy: ${baseEnemy.name}`, 'info');
@@ -9350,9 +9548,12 @@ async function updateEnemy() {
         wisdom: parseInt(document.getElementById('enemyWis').value),
         charisma: parseInt(document.getElementById('enemyCha').value),
         speed: parseInt(document.getElementById('enemySpeed').value),
-        actions: upsertArenaStlInEnemyActions(
-            mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', existing),
-            readEnemyArenaStlHiddenValue() || null
+        actions: upsertArenaMiniScaleInEnemyActions(
+            upsertArenaStlInEnemyActions(
+                mergeEnemyActionsFromEditorTextarea(document.getElementById('enemyActions').value || '', existing),
+                readEnemyArenaStlHiddenValue() || null
+            ),
+            readEnemyArenaMiniScaleModalValue()
         ),
         description: document.getElementById('enemyDescription').value || '',
         style: existing.style || selectedStyle
@@ -9374,6 +9575,7 @@ async function updateEnemy() {
     document.getElementById('enemyEditId').value = '';
     document.getElementById('enemyPortraitPreview').innerHTML = '';
     setEnemyArenaStlHiddenValue('');
+    setEnemyArenaMiniScaleModalValue('');
     const stlFileU = document.getElementById('enemyArenaStlFile');
     if (stlFileU) stlFileU.value = '';
     addLogEntry(`Updated enemy: ${updated.name}`, 'info');
@@ -10144,6 +10346,9 @@ function showNPCCharacterSheet(entityId) {
         const stlUrlEnemySheet = getArenaStlUrlFromEnemyActions(tplForArenaStl.actions);
         const stlFileLabel = stlUrlEnemySheet ? escapeHtml(stlUrlEnemySheet.split('/').pop() || stlUrlEnemySheet) : '(none)';
         const escapedTplIdArenaStl = escapeJs(String(tplForArenaStl.id));
+        const enemyScaleInpId = enemyArenaMiniScaleSheetInputId(tplForArenaStl.id);
+        const scTpl = getArenaMiniScaleFromEnemyActions(tplForArenaStl.actions);
+        const enemyScaleValAttr = Math.abs(scTpl - 1) < 1e-6 ? '' : String(scTpl);
         const canEditEnemyStl = isDM && tplForArenaStl && !tplForArenaStl.isCustomInstance && !isInstanceStyleName(tplForArenaStl.name || '');
         if (canEditEnemyStl) {
             html += `<div class="panel" style="padding: 12px; margin-bottom: 15px; border: 1px solid rgba(255, 136, 68, 0.4);">
@@ -10153,6 +10358,11 @@ function showNPCCharacterSheet(entityId) {
                 <div style="display: flex; flex-wrap: wrap; gap: 8px;">
                     <button type="button" onclick="uploadArenaStlForEnemySheet('${escapedTplIdArenaStl}')" style="padding: 6px 12px; background: #4a3020; color: #fff; border: 1px solid #ff8844; border-radius: 4px; cursor: pointer;">Attach model…</button>
                     <button type="button" onclick="clearArenaStlForEnemySheet('${escapedTplIdArenaStl}')" style="padding: 6px 12px; background: #3a2a2a; color: #fff; border: 1px solid #888; border-radius: 4px; cursor: pointer;" ${stlUrlEnemySheet ? '' : 'disabled'}>Clear</button>
+                </div>
+                <p style="font-size: 12px; opacity: 0.75; margin: 10px 0 6px 0;">3D scale multiplier (uniform; 1 = default).</p>
+                <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px;">
+                    <input type="number" id="${enemyScaleInpId}" min="0.05" max="8" step="0.05" value="${escapeHtml(enemyScaleValAttr)}" placeholder="1" style="width: 100px; padding: 6px; background: #222; color: #fff; border: 1px solid #555; border-radius: 4px;">
+                    <button type="button" onclick="saveEnemyArenaMiniScaleFromSheet('${escapedTplIdArenaStl}')" style="padding: 6px 12px; background: #2a4a3a; color: #fff; border: 1px solid #4a9e6a; border-radius: 4px; cursor: pointer;">Apply scale</button>
                 </div>
             </div>`;
         }
@@ -10211,7 +10421,7 @@ function showNPCCharacterSheet(entityId) {
         }
         // Fallback: if enemy.actions is an object (e.g. from server as parsed JSON), build actionsData directly
         if (actionsData.length === 0 && enemy.actions && typeof enemy.actions === 'object' && !Array.isArray(enemy.actions)) {
-            actionsData = Object.entries(enemy.actions).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform' && k !== '_gorgox_arena_stl_url').map(([name, val]) => ({
+            actionsData = Object.entries(enemy.actions).filter(([k]) => k && typeof k === 'string' && k !== 'sheet_attacks' && k !== '_gorg_actions_freeform' && k !== '_gorgox_arena_stl_url' && k !== '_gorgox_arena_mini_scale').map(([name, val]) => ({
                 name: name,
                 description: typeof val === 'string' ? val : (val && (val.description || val.desc || val.text)) != null ? String(val.description || val.desc || val.text) : ''
             }));
@@ -16546,6 +16756,9 @@ function buildArenaStlCharacterSheetSection(char) {
     const url = getCharacterArenaStlUrl(char);
     const label = url ? (url.split('/').pop() || url) : '(none)';
     const eid = escapeJs(String(char.id));
+    const scaleInpId = characterSheetArenaMiniScaleInputId(char.id);
+    const sc = getCharacterArenaMiniScale(char);
+    const scaleValAttr = Math.abs(sc - 1) < 1e-6 ? '' : String(sc);
     return `<div class="panel" style="padding: 12px; margin-bottom: 15px; border: 1px solid rgba(74, 158, 255, 0.35);">
         <h4 style="color: #4a9eff; margin: 0 0 6px 0;">🎴 3D arena mini (.stl / .glb)</h4>
         <p style="font-size: 12px; opacity: 0.75; margin: 0 0 8px 0;">Shown in 3D view at this character's map token (.stl or .glb).</p>
@@ -16553,6 +16766,11 @@ function buildArenaStlCharacterSheetSection(char) {
         <div style="display: flex; flex-wrap: wrap; gap: 8px;">
             <button type="button" onclick="uploadArenaStlForCharacter('${eid}')" style="padding: 6px 12px; background: #2a3f5a; color: #fff; border: 1px solid #4a9eff; border-radius: 4px; cursor: pointer;">Attach model…</button>
             <button type="button" onclick="clearArenaStlForCharacter('${eid}')" style="padding: 6px 12px; background: #3a2a2a; color: #fff; border: 1px solid #888; border-radius: 4px; cursor: pointer;" ${url ? '' : 'disabled'}>Clear</button>
+        </div>
+        <p style="font-size: 12px; opacity: 0.75; margin: 10px 0 6px 0;">3D scale multiplier (uniform; 1 = default cell fit). Use to match height across different models.</p>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px;">
+            <input type="number" id="${scaleInpId}" min="0.05" max="8" step="0.05" value="${escapeHtml(scaleValAttr)}" placeholder="1" style="width: 100px; padding: 6px; background: #222; color: #fff; border: 1px solid #555; border-radius: 4px;">
+            <button type="button" onclick="saveCharacterArenaMiniScaleFromSheet('${eid}')" style="padding: 6px 12px; background: #2a4a3a; color: #fff; border: 1px solid #4a9e6a; border-radius: 4px; cursor: pointer;">Apply scale</button>
         </div>
     </div>`;
 }

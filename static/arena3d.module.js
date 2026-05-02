@@ -27,7 +27,7 @@ let battlefieldGroup = null;
 let tokenMiniRoot = null;
 /** Combat movement / targeting / measurement overlay (map pixel space → world XZ). */
 let combatOverlayRoot = null;
-/** @type {Map<string, { mesh: THREE.Object3D | null, url: string, loading?: boolean, pendingWorld?: { wx: number, wz: number, cell: number } }>} */
+/** @type {Map<string, { mesh: THREE.Object3D | null, url: string, loading?: boolean, pendingWorld?: { wx: number, wz: number, cell: number, miniScale?: number } }>} */
 let tokenMiniById = new Map();
 /** Monotonic per-token generation so stale fetches never add a second mesh. */
 let tokenMiniLoadGen = new Map();
@@ -108,6 +108,18 @@ function applyMiniScaleForCell(root, cellWorld, maxScale) {
   const s = clamp((0.82 * cellWorld) / foot, 0.03, maxScale);
   root.scale.setScalar(s);
   plantMiniOnFloor(root);
+}
+
+/** Apply auto cell fit then optional `_gorgox_arena_mini_scale` multiplier from character / enemy sheet. */
+function applyTokenMiniAutoScale(mesh, cellWorld, maxScale, miniScaleRaw) {
+  if (!mesh) return;
+  applyMiniScaleForCell(mesh, cellWorld, maxScale);
+  const m = clamp(Number(miniScaleRaw), 0.05, 8);
+  if (!isFinite(m)) return;
+  if (Math.abs(m - 1) > 1e-6) {
+    mesh.scale.multiplyScalar(m);
+  }
+  plantMiniOnFloor(mesh);
 }
 
 /**
@@ -1099,8 +1111,14 @@ function clearTokenMiniMeshes() {
 }
 
 /**
- * @param {{ id: string, x: number, y: number, size?: number, stlUrl: string }[]} tokens
+ * @param {{ id: string, x: number, y: number, size?: number, stlUrl: string, miniScale?: number }[]} tokens
  */
+function tokenMiniEffectiveScale(raw) {
+  const m = Number(raw);
+  if (!isFinite(m) || m <= 0) return 1;
+  return clamp(m, 0.05, 8);
+}
+
 function syncTokenMinisFromSnapshot(snap) {
   if (!tokenMiniRoot || !snap) return;
   const tokens = Array.isArray(snap.tokens) ? snap.tokens : [];
@@ -1113,6 +1131,7 @@ function syncTokenMinisFromSnapshot(snap) {
     seen.add(id);
     const sz = Number(t.size);
     const tokenSize = !isNaN(sz) && sz > 0 ? sz : 1;
+    const miniScale = tokenMiniEffectiveScale(t.miniScale);
     const px = Number(t.x) * g + g / 2;
     const py = Number(t.y) * g + g / 2;
     const { wx, wz } = pixelToWorldXZ(px, py);
@@ -1128,8 +1147,7 @@ function syncTokenMinisFromSnapshot(snap) {
         rec.mesh.position.x = wx;
         rec.mesh.position.z = wz;
       }
-      rescaleTokenMiniMesh(rec.mesh, cell);
-      plantMiniOnFloor(rec.mesh);
+      rescaleTokenMiniMesh(rec.mesh, cell, miniScale);
       continue;
     }
     if (rec && rec.mesh) {
@@ -1137,7 +1155,7 @@ function syncTokenMinisFromSnapshot(snap) {
       tryDispose(rec.mesh);
       tokenMiniById.delete(id);
     }
-    loadTokenMiniStl(id, String(t.stlUrl), wx, wz, cell);
+    loadTokenMiniStl(id, String(t.stlUrl), wx, wz, cell, miniScale);
   }
 
   for (const [id, rec] of [...tokenMiniById.entries()]) {
@@ -1154,14 +1172,14 @@ function syncTokenMinisFromSnapshot(snap) {
   }
 }
 
-function rescaleTokenMiniMesh(mesh, cellWorld) {
-  applyMiniScaleForCell(mesh, cellWorld, 80);
+function rescaleTokenMiniMesh(mesh, cellWorld, miniScale) {
+  applyTokenMiniAutoScale(mesh, cellWorld, 80, miniScale);
 }
 
-function loadTokenMiniStl(tokenId, url, wx, wz, cellWorld) {
+function loadTokenMiniStl(tokenId, url, wx, wz, cellWorld, miniScale) {
   const prev = tokenMiniById.get(tokenId);
   if (prev && prev.loading && prev.url === url) {
-    prev.pendingWorld = { wx, wz, cell: cellWorld };
+    prev.pendingWorld = { wx, wz, cell: cellWorld, miniScale: tokenMiniEffectiveScale(miniScale) };
     return;
   }
 
@@ -1186,16 +1204,21 @@ function loadTokenMiniStl(tokenId, url, wx, wz, cellWorld) {
       let useWx = wx;
       let useWz = wz;
       let useCell = cellWorld;
+      let useMini = tokenMiniEffectiveScale(miniScale);
       const entry = tokenMiniById.get(tokenId);
       if (entry && entry.pendingWorld) {
         useWx = entry.pendingWorld.wx;
         useWz = entry.pendingWorld.wz;
         useCell = entry.pendingWorld.cell;
+        useMini =
+          entry.pendingWorld.miniScale != null
+            ? tokenMiniEffectiveScale(entry.pendingWorld.miniScale)
+            : useMini;
       }
       root.userData.gorgoxTokenMiniId = tokenId;
       captureMiniFootprintReference(root);
       root.position.set(useWx, 0, useWz);
-      applyMiniScaleForCell(root, useCell, 80);
+      applyTokenMiniAutoScale(root, useCell, 80, useMini);
       tokenMiniRoot.add(root);
       tokenMiniById.set(tokenId, { url, mesh: root, loading: false, loadGen: gen });
     })
@@ -1278,11 +1301,11 @@ function nudgeSelectionWorldRotation(axis, degrees) {
   applyMiniConstraints(o, { snapGrid: false });
 }
 
-// Allow app.js to force an immediate token mini refresh after attaching a model.
+// Lightweight sync from latest snapshot: token minis + combat overlay reuse the fast path unless the map/image key changed (avoids nuking floor texture every ping).
 try {
   window.arena3dSyncNow = function () {
     ensureInit();
-    syncBattlefieldFromGorgox(true);
+    syncBattlefieldFromGorgox(false);
   };
   window.arena3dRefreshBattlefieldIfOpen = function () {
     ensureInit();
