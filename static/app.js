@@ -761,6 +761,230 @@ try {
 } catch (_) {}
 window.notifyArenaTokenMovedFrom3d = notifyArenaTokenMovedFrom3d;
 
+/** DM: generate arena GLB from portrait via Meshy ([docs](https://docs.meshy.ai/api/image-to-3d)); server needs `MESHY_API_KEY`. */
+let meshyArenaKind = 'character';
+let meshyArenaSelectedId = null;
+
+function showMeshyArenaModal() {
+    if (!isDM) return;
+    meshyArenaKind = 'character';
+    meshyArenaSelectedId = null;
+    const search = document.getElementById('meshyArenaSearch');
+    if (search) search.value = '';
+    const st = document.getElementById('meshyArenaStatus');
+    if (st) st.textContent = '';
+    const confirmBtn = document.getElementById('meshyArenaConfirmBtn');
+    if (confirmBtn) confirmBtn.disabled = true;
+    updateMeshyArenaTabClasses();
+    renderMeshyArenaList();
+    const modal = document.getElementById('meshyArenaModal');
+    if (modal) modal.classList.add('active');
+}
+
+function setMeshyArenaKind(kind) {
+    if (kind !== 'character' && kind !== 'enemy') return;
+    meshyArenaKind = kind;
+    meshyArenaSelectedId = null;
+    const confirmBtn = document.getElementById('meshyArenaConfirmBtn');
+    if (confirmBtn) confirmBtn.disabled = true;
+    updateMeshyArenaTabClasses();
+    renderMeshyArenaList();
+}
+
+function updateMeshyArenaTabClasses() {
+    const c = document.getElementById('meshyArenaTabCharacters');
+    const e = document.getElementById('meshyArenaTabEnemies');
+    if (c) c.classList.toggle('meshy-arena-tab-active', meshyArenaKind === 'character');
+    if (e) e.classList.toggle('meshy-arena-tab-active', meshyArenaKind === 'enemy');
+}
+
+function meshyArenaSelectId(id) {
+    meshyArenaSelectedId = id;
+    const confirmBtn = document.getElementById('meshyArenaConfirmBtn');
+    if (confirmBtn) confirmBtn.disabled = !id;
+    renderMeshyArenaList();
+}
+
+/** Row click handler — ID stored in data-meshy-id (safe for UUIDs). */
+function meshyArenaPick(ev) {
+    const el = ev.currentTarget;
+    const id = el && el.getAttribute('data-meshy-id');
+    if (id) meshyArenaSelectId(id);
+}
+
+function renderMeshyArenaList() {
+    const container = document.getElementById('meshyArenaList');
+    if (!container) return;
+    const q = ((document.getElementById('meshyArenaSearch') || {}).value || '').trim().toLowerCase();
+    const rows = [];
+
+    if (meshyArenaKind === 'character') {
+        const list = Array.isArray(characters) ? characters.filter(function (ch) {
+            if (!ch) return false;
+            if (q && String(ch.name || '').toLowerCase().indexOf(q) === -1) return false;
+            return true;
+        }) : [];
+        list.sort(function (a, b) {
+            return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+        });
+        for (let i = 0; i < list.length; i++) {
+            const ch = list[i];
+            const id = String(ch.id);
+            const hasStl = !!getCharacterArenaStlUrl(ch);
+            const hasPortrait = !!(ch.portrait_url && String(ch.portrait_url).trim());
+            const sel = meshyArenaSelectedId === id ? ' meshy-arena-item-selected' : '';
+            const badge = hasStl ? 'Has 3D' : !hasPortrait ? 'No portrait' : 'Ready';
+            rows.push(
+                '<div class="meshy-arena-item' +
+                    sel +
+                    '" data-meshy-id="' +
+                    escapeHtml(id) +
+                    '" onclick="meshyArenaPick(event)"><span>' +
+                    escapeHtml(ch.name || 'Unnamed') +
+                    '</span><span class="meshy-arena-badge">' +
+                    escapeHtml(badge) +
+                    '</span></div>'
+            );
+        }
+        if (!list.length) {
+            rows.push('<div class="meshy-arena-item" style="cursor:default;opacity:0.75;">No characters match.</div>');
+        }
+    } else {
+        const list = Array.isArray(enemies)
+            ? enemies.filter(function (en) {
+                  if (!en || en.isCustomInstance) return false;
+                  if (q && String(en.name || '').toLowerCase().indexOf(q) === -1) return false;
+                  return true;
+              })
+            : [];
+        list.sort(function (a, b) {
+            return String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+        });
+        for (let j = 0; j < list.length; j++) {
+            const en = list[j];
+            const id = String(en.id);
+            const hasStl = !!getArenaStlUrlFromEnemyActions(en.actions);
+            const hasPortrait = !!(en.portrait_url && String(en.portrait_url).trim());
+            const sel = meshyArenaSelectedId === id ? ' meshy-arena-item-selected' : '';
+            const badge = hasStl ? 'Has 3D' : !hasPortrait ? 'No portrait' : 'Ready';
+            rows.push(
+                '<div class="meshy-arena-item' +
+                    sel +
+                    '" data-meshy-id="' +
+                    escapeHtml(id) +
+                    '" onclick="meshyArenaPick(event)"><span>' +
+                    escapeHtml(en.name || 'Unnamed') +
+                    '</span><span class="meshy-arena-badge">' +
+                    escapeHtml(badge) +
+                    '</span></div>'
+            );
+        }
+        if (!list.length) {
+            rows.push(
+                '<div class="meshy-arena-item" style="cursor:default;opacity:0.75;">No creature templates match.</div>'
+            );
+        }
+    }
+
+    container.innerHTML = rows.join('');
+}
+
+async function confirmMeshyArenaGenerate() {
+    if (!isDM || !meshyArenaSelectedId) return;
+    const id = meshyArenaSelectedId;
+    const kind = meshyArenaKind === 'enemy' ? 'enemy' : 'character';
+
+    if (kind === 'character') {
+        const char = characters.find(function (c) {
+            return c && String(c.id) === String(id);
+        });
+        if (!char) {
+            alert('Character not found.');
+            return;
+        }
+        if (getCharacterArenaStlUrl(char)) {
+            alert('This character already has a 3D arena model attached.');
+            return;
+        }
+        if (!char.portrait_url || !String(char.portrait_url).trim()) {
+            alert('Add a portrait to this character first (character sheet / portrait field).');
+            return;
+        }
+    } else {
+        const tpl = enemies.find(function (e) {
+            return e && String(e.id) === String(id);
+        });
+        if (!tpl || tpl.isCustomInstance) {
+            alert('Choose a creature template from the database.');
+            return;
+        }
+        if (getArenaStlUrlFromEnemyActions(tpl.actions)) {
+            alert('This creature template already has a 3D arena model attached.');
+            return;
+        }
+        if (!tpl.portrait_url || !String(tpl.portrait_url).trim()) {
+            alert('Add a portrait to this creature in the Enemy Database first.');
+            return;
+        }
+    }
+
+    const btn = document.getElementById('meshyArenaConfirmBtn');
+    const statusEl = document.getElementById('meshyArenaStatus');
+    if (btn) btn.disabled = true;
+    if (statusEl) {
+        statusEl.textContent =
+            'Calling Meshy (image → 3D). This often takes several minutes — please keep this browser tab open.';
+    }
+
+    try {
+        const origin =
+            typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : '';
+        const res = await fetch(origin + '/api/meshy-generate-arena-stl', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ kind: kind, id: String(id) }),
+        });
+        let j = {};
+        try {
+            j = await res.json();
+        } catch (_) {}
+        if (!res.ok) {
+            throw new Error(j.error || res.statusText || String(res.status));
+        }
+        const url = j.url;
+        if (!url) throw new Error('Server did not return a model URL');
+
+        if (kind === 'character') {
+            setCharacterArenaStlUrl(id, url);
+        } else {
+            const tpl = enemies.find(function (e) {
+                return e && String(e.id) === String(id);
+            });
+            if (!tpl) throw new Error('Enemy template missing');
+            const nextActions = upsertArenaStlInEnemyActions(tpl.actions, url);
+            const updated = Object.assign({}, tpl, { actions: nextActions });
+            sendMessage({ type: 'CreateEnemy', enemy: buildEnemyServerPayload(updated) });
+            const idx = enemies.findIndex(function (e) {
+                return e && String(e.id) === String(id);
+            });
+            if (idx !== -1) enemies[idx] = updated;
+            syncCustomEnemyInstanceActionsFromTemplate(updated.id, updated.actions);
+            addLogEntry('Meshy 3D model attached for ' + (tpl.name || 'creature'), 'info');
+            try {
+                if (typeof window.arena3dSyncNow === 'function') window.arena3dSyncNow();
+            } catch (_) {}
+        }
+        closeModal('meshyArenaModal');
+    } catch (err) {
+        console.error(err);
+        alert(err && err.message ? err.message : String(err));
+    } finally {
+        if (btn) btn.disabled = !meshyArenaSelectedId;
+        if (statusEl) statusEl.textContent = '';
+    }
+}
+
 /** DM or owner — same rules as manual sheet edit (not while picking another character). */
 function canAttachArenaStlToCharacter(char) {
     return canManuallyEditCharacterSheet(char);

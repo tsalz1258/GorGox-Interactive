@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=83">
+    <link rel="stylesheet" href="/static/style.css?v=84">
 </head>
 <body>
     <div id="app">
@@ -63,6 +63,7 @@
                             <button onclick="saveCurrentMapState()" id="saveMapStateBtn" style="background: #ffaa44; color: #000; font-weight: bold;">💾 Save Map State</button>
                             <button onclick="showMapSettings()">⚙️ Map Settings</button>
                             <button onclick="showEnemyManager()">👹 Enemy Database</button>
+                            <button type="button" onclick="showMeshyArenaModal()" style="background:#6b4cff;color:#fff;font-weight:bold;" title="Generate a GLB from the portrait via Meshy (server needs MESHY_API_KEY)">✨ Meshy 3D from portrait</button>
                             <button onclick="showCharacterManager()">👤 Characters</button>
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
                             <button onclick="showSaveLoadModal()" style="background: #4a9eff; color: white; font-weight: bold;">💾 Save/Load Game</button>
@@ -450,6 +451,27 @@
                 
                 <div class="modal-actions">
                     <button onclick="closeModal('saveLoadModal')">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Meshy: portrait → 3D arena GLB (DM) -->
+        <div id="meshyArenaModal" class="modal">
+            <div class="modal-content large">
+                <h2>✨ Meshy — 3D model from portrait</h2>
+                <p style="opacity:0.88;font-size:13px;line-height:1.45;margin-bottom:12px;">
+                    Uses your <a href="https://docs.meshy.ai/api/image-to-3d" target="_blank" rel="noopener">Meshy</a> API key on the <strong>game server</strong> (<code>MESHY_API_KEY</code> env var). Generation can take several minutes.
+                </p>
+                <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+                    <button type="button" id="meshyArenaTabCharacters" class="meshy-arena-tab meshy-arena-tab-active" onclick="setMeshyArenaKind('character')">Characters</button>
+                    <button type="button" id="meshyArenaTabEnemies" class="meshy-arena-tab" onclick="setMeshyArenaKind('enemy')">Creatures (templates)</button>
+                </div>
+                <input type="search" id="meshyArenaSearch" placeholder="Search by name…" style="width:100%;padding:8px;margin-bottom:10px;box-sizing:border-box;" oninput="renderMeshyArenaList()" />
+                <div id="meshyArenaList" class="meshy-arena-list"></div>
+                <p id="meshyArenaStatus" style="min-height:1.2em;font-size:12px;color:#aac;"></p>
+                <div class="modal-actions" style="margin-top:12px;">
+                    <button type="button" id="meshyArenaConfirmBtn" onclick="confirmMeshyArenaGenerate()" disabled>Generate &amp; attach GLB</button>
+                    <button type="button" onclick="closeModal('meshyArenaModal')">Cancel</button>
                 </div>
             </div>
         </div>
@@ -1004,7 +1026,7 @@
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=15"></script>
-    <script src="/static/app.js?v=98"></script>
+    <script src="/static/app.js?v=99"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

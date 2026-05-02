@@ -2,11 +2,12 @@ use crate::models::{ClientMessage, ServerMessage};
 use crate::game_state::GameState;
 use crate::db::Database;
 use base64::{Engine as _, engine::general_purpose};
+use serde::Deserialize;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         DefaultBodyLimit,
-        State, Path, Multipart,
+        Json, State, Path, Multipart,
     },
     response::{Response, IntoResponse},
     routing::{get, post, delete},
@@ -16,6 +17,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
@@ -174,6 +176,7 @@ pub async fn start_server(
         .route("/api/sounds/:filename", delete(delete_sound))
         .route("/static/sounds/:filename", get(get_sound_file))
         .route("/api/arena-stl", post(upload_arena_stl))
+        .route("/api/meshy-generate-arena-stl", post(meshy_generate_arena_stl))
         .nest_service("/static", tower_http::services::ServeDir::new("static"))
         // Axum's default body limit is 2MB; Multipart ignores tower's RequestBodyLimitLayer until
         // DefaultBodyLimit is raised — without this, large STL uploads can abort (browser: "Failed to fetch").
@@ -191,6 +194,7 @@ pub async fn start_server(
     info!("   POST /api/saves/:filename - Save game state");
     info!("   DELETE /api/saves/:filename - Delete saved state");
     info!("   POST /api/arena-stl - Upload .stl / .glb for 3D token minis (static/arena_stl)");
+    info!("   POST /api/meshy-generate-arena-stl - Meshy image→3D (set MESHY_API_KEY, DM flow)");
 
     // Open browser automatically
     let url = format!("http://localhost:{}", addr.port());
@@ -2938,6 +2942,192 @@ async fn upload_sound(
         "filename": safe_filename,
         "size": file_path.metadata().map(|m| m.len()).unwrap_or(0),
         "message": "Sound uploaded successfully"
+    })))
+}
+
+#[derive(Deserialize)]
+struct MeshyGenBody {
+    kind: String,
+    id: String,
+}
+
+async fn query_character_by_id(
+    dnd: &Database,
+    sw: &Database,
+    id: &str,
+) -> Option<(String, Option<String>, Option<String>)> {
+    let q = "SELECT name, portrait_url, character_data FROM characters WHERE id = ?";
+    for pool in [dnd, sw] {
+        if let Ok(Some(row)) = sqlx::query(q).bind(id).fetch_optional(pool).await {
+            let name: String = row.get(0);
+            let portrait: Option<String> = row.get(1);
+            let cd: Option<String> = row.get(2);
+            return Some((name, portrait, cd));
+        }
+    }
+    None
+}
+
+async fn query_enemy_by_id(
+    dnd: &Database,
+    sw: &Database,
+    id: &str,
+) -> Option<(String, Option<String>, String)> {
+    let q = "SELECT name, portrait_url, actions FROM enemies WHERE id = ?";
+    for pool in [dnd, sw] {
+        if let Ok(Some(row)) = sqlx::query(q).bind(id).fetch_optional(pool).await {
+            let name: String = row.get(0);
+            let portrait: Option<String> = row.get(1);
+            let actions: String = row.get(2);
+            return Some((name, portrait, actions));
+        }
+    }
+    None
+}
+
+/// Portrait → Meshy → GLB saved under `static/arena_stl`. Requires env `MESHY_API_KEY` (see [Meshy docs](https://docs.meshy.ai/api/image-to-3d)).
+async fn meshy_generate_arena_stl(
+    State((dnd_db, starwars_db, _gs, _c, _sh)): State<(
+        Database,
+        Database,
+        Arc<RwLock<GameState>>,
+        Clients,
+        broadcast::Sender<()>,
+    )>,
+    Json(body): Json<MeshyGenBody>,
+) -> Result<axum::Json<serde_json::Value>, (StatusCode, axum::Json<serde_json::Value>)> {
+    let key = std::env::var("MESHY_API_KEY").unwrap_or_default();
+    if key.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "error": "Server is not configured: set the MESHY_API_KEY environment variable (never commit API keys to the repo)."
+            })),
+        ));
+    }
+
+    let kind = body.kind.to_lowercase();
+    let id = body.id.trim().to_string();
+    if id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": "missing id" })),
+        ));
+    }
+
+    let (entry_name, portrait_opt, has_stl) = match kind.as_str() {
+        "character" | "player" => {
+            let Some((name, portrait, cd)) =
+                query_character_by_id(&dnd_db, &starwars_db, &id).await
+            else {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    axum::Json(serde_json::json!({ "error": "Character not found" })),
+                ));
+            };
+            let has = cd
+                .as_deref()
+                .and_then(crate::meshy::arena_stl_from_character_data_json)
+                .is_some();
+            (name, portrait, has)
+        }
+        "enemy" => {
+            let Some((name, portrait, actions)) =
+                query_enemy_by_id(&dnd_db, &starwars_db, &id).await
+            else {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    axum::Json(serde_json::json!({ "error": "Creature not found" })),
+                ));
+            };
+            let has = crate::meshy::arena_stl_from_enemy_actions_json(&actions).is_some();
+            (name, portrait, has)
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({ "error": "kind must be \"character\" or \"enemy\"" })),
+            ));
+        }
+    };
+
+    if has_stl {
+        return Err((
+            StatusCode::CONFLICT,
+            axum::Json(serde_json::json!({
+                "error": "This entry already has a 3D arena model attached. Remove it in the sheet first if you want to replace it."
+            })),
+        ));
+    }
+
+    let portrait = match portrait_opt {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({
+                    "error": "No portrait image — add a portrait to this character or creature first."
+                })),
+            ));
+        }
+    };
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let image_for_meshy = crate::meshy::portrait_to_meshy_image_url(&http, &portrait)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+
+    let glb = crate::meshy::image_to_3d_download_glb(&key, image_for_meshy)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                axum::Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+
+    use std::path::Path;
+    let dir = Path::new("static").join("arena_stl");
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        error!("meshy arena_stl mkdir: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({ "error": format!("Could not create arena_stl: {}", e) })),
+        ));
+    }
+
+    let unique = format!("meshy_{}.glb", Uuid::new_v4());
+    let file_path = dir.join(&unique);
+    if let Err(e) = tokio::fs::write(&file_path, &glb).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({ "error": e.to_string() })),
+        ));
+    }
+
+    let url = format!("/static/arena_stl/{}", unique);
+    info!(
+        "Meshy image→3D OK: kind={} id={} name={} → {}",
+        kind, id, entry_name, url
+    );
+
+    Ok(axum::Json(serde_json::json!({
+        "url": url,
+        "name": entry_name,
     })))
 }
 

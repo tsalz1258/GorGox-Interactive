@@ -1345,5 +1345,51 @@ body.player-action-bar-visible .main-container {
     animation: fadeIn 0.3s ease-out;
 }
 
+/* Meshy portrait → 3D modal */
+.meshy-arena-tab {
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(40, 40, 55, 0.95);
+    color: #e8e8f0;
+    cursor: pointer;
+    font-size: 13px;
+}
+.meshy-arena-tab-active {
+    background: rgba(107, 76, 255, 0.95);
+    border-color: rgba(180, 160, 255, 0.5);
+    font-weight: 600;
+}
+.meshy-arena-list {
+    max-height: min(42vh, 360px);
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.25);
+}
+.meshy-arena-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.meshy-arena-item:last-child {
+    border-bottom: none;
+}
+.meshy-arena-item:hover {
+    background: rgba(74, 158, 255, 0.12);
+}
+.meshy-arena-item-selected {
+    background: rgba(107, 76, 255, 0.28);
+}
+.meshy-arena-badge {
+    font-size: 11px;
+    opacity: 0.75;
+    white-space: nowrap;
+}
 
 
