@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v118'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v123'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -2174,12 +2174,33 @@ function handleServerMessage(message) {
                 break;
             }
             const prevMapId = currentMap ? currentMap.id : null;
+            const prevImagePath = currentMap && currentMap.image_path != null ? String(currentMap.image_path) : '';
+            const prevLoadedMapImage =
+                currentMap &&
+                currentMap.image &&
+                currentMap.image.complete &&
+                (currentMap.image.naturalWidth || 0) > 0
+                    ? currentMap.image
+                    : null;
             const newMapId = message.map.id;
             const mapIdChanged = prevMapId !== newMapId;
+            const newImagePath = message.map.image_path != null ? String(message.map.image_path) : '';
+            const skipMapImageReload =
+                !mapIdChanged &&
+                prevLoadedMapImage &&
+                prevImagePath &&
+                newImagePath &&
+                prevImagePath === newImagePath;
+            const prevMapImgGen = currentMap && currentMap._imgLoadGen != null ? currentMap._imgLoadGen : 0;
             currentMap = message.map;
             if (currentMap) {
-                currentMap.image = null;
-                currentMap._imgLoadGen = (currentMap._imgLoadGen || 0) + 1;
+                if (skipMapImageReload) {
+                    currentMap.image = prevLoadedMapImage;
+                    currentMap._imgLoadGen = prevMapImgGen;
+                } else {
+                    currentMap.image = null;
+                    currentMap._imgLoadGen = prevMapImgGen + 1;
+                }
             }
             resolvePendingMapLoad(message);
             isDragging = false;
@@ -2211,9 +2232,13 @@ function handleServerMessage(message) {
                 if (mapNameElement) mapNameElement.textContent = message.map.name;
             }
             console.log('🗺️ MapLoaded - image_path:', message.map.image_path);
-            loadMapImage(message.map.image_path, currentMap && currentMap._imgLoadGen);
+            if (!skipMapImageReload) {
+                loadMapImage(message.map.image_path, currentMap && currentMap._imgLoadGen);
+            }
             renderCanvas();
-            addLogEntry(`Map loaded: ${message.map.name}`, 'info');
+            if (mapIdChanged || !skipMapImageReload) {
+                addLogEntry(`Map loaded: ${message.map.name}`, 'info');
+            }
             break;
             
         case 'MapCleared':
@@ -2562,7 +2587,8 @@ function handleServerMessage(message) {
             }
             break;
             
-        case 'CombatStarted':
+        case 'CombatStarted': {
+            const hadActiveCombatAlready = combatState.active === true;
             console.log('⚔️ ========== COMBAT STARTED ==========');
             console.log('📋 Participants received:', message.participants);
             console.log('📊 Number of participants:', Array.isArray(message.participants) ? message.participants.length : 0);
@@ -2589,7 +2615,9 @@ function handleServerMessage(message) {
                 }
             });
 
-            combatState.currentTurn = null; // No turn set yet
+            if (!hadActiveCombatAlready) {
+                combatState.currentTurn = null; // No turn set yet (fresh combat)
+            }
             sortParticipantsByInitiative();
 
             // Update participant names, HP, AC from local data
@@ -2692,7 +2720,9 @@ function handleServerMessage(message) {
             updateCombatStatus();
             
             updatePlayerTurnControls(); // Show combat action panel for players
-            addLogEntry('⚔️ Combat has started! Rolling for initiative...', 'info');
+            if (!hadActiveCombatAlready) {
+                addLogEntry('⚔️ Combat has started! Rolling for initiative...', 'info');
+            }
             
             if (isDM) {
                 // Show DM controls
@@ -2700,31 +2730,33 @@ function handleServerMessage(message) {
                 if (dmCtrl) dmCtrl.classList.remove('hidden');
                 console.log('✅ DM combat controls shown');
                 
-                // Auto-roll for all enemies/NPCs; stagger sends so server processes each (combat v2)
-                const toRoll = combatState.participants.filter(p => (p.entity_type || '').toLowerCase() !== 'player');
-                console.log('🎲 [Combat v2] Auto-rolling for', toRoll.length, 'enemies/NPCs');
-                toRoll.forEach((p, index) => {
-                    const run = () => {
-                        let bonus = typeof p.initiative_bonus === 'number' ? p.initiative_bonus : 0;
-                        if (bonus === 0 || p.initiative_bonus === undefined) {
-                            const enemy = enemies.find(e => e.id === p.entity_id);
-                            if (enemy && enemy.initiative_bonus !== undefined) {
-                                bonus = enemy.initiative_bonus;
-                                p.initiative_bonus = bonus;
+                if (!hadActiveCombatAlready) {
+                    // Auto-roll for all enemies/NPCs; stagger sends so server processes each (combat v2)
+                    const toRoll = combatState.participants.filter(p => (p.entity_type || '').toLowerCase() !== 'player');
+                    console.log('🎲 [Combat v2] Auto-rolling for', toRoll.length, 'enemies/NPCs');
+                    toRoll.forEach((p, index) => {
+                        const run = () => {
+                            let bonus = typeof p.initiative_bonus === 'number' ? p.initiative_bonus : 0;
+                            if (bonus === 0 || p.initiative_bonus === undefined) {
+                                const enemy = enemies.find(e => e.id === p.entity_id);
+                                if (enemy && enemy.initiative_bonus !== undefined) {
+                                    bonus = enemy.initiative_bonus;
+                                    p.initiative_bonus = bonus;
+                                }
                             }
-                        }
-                        const roll = Math.floor(Math.random() * 20) + 1;
-                        const total = roll + bonus;
-                        p.initiative = total;
-                        sendMessage({ type: 'RollInitiative', entity_id: p.entity_id, roll: total, participant_id: p.id });
-                    };
-                    setTimeout(run, 500 + index * 100);
-                });
-                setTimeout(() => {
-                    updateInitiativeList();
-                    updateCombatStatus();
-                }, 500 + Math.max(0, toRoll.length) * 100 + 150);
-            } else {
+                            const roll = Math.floor(Math.random() * 20) + 1;
+                            const total = roll + bonus;
+                            p.initiative = total;
+                            sendMessage({ type: 'RollInitiative', entity_id: p.entity_id, roll: total, participant_id: p.id });
+                        };
+                        setTimeout(run, 500 + index * 100);
+                    });
+                    setTimeout(() => {
+                        updateInitiativeList();
+                        updateCombatStatus();
+                    }, 500 + Math.max(0, toRoll.length) * 100 + 150);
+                }
+            } else if (!hadActiveCombatAlready) {
                 // NON-DM PLAYER: Prompt for initiative
                 console.log('👤 ========== PLAYER INITIATIVE PROMPT ==========');
                 console.log('👤 Player name:', myPlayerName);
@@ -2773,7 +2805,17 @@ function handleServerMessage(message) {
                     alert('⚠️ No player characters in combat!\n\nAsk the DM to place your character token before starting combat.');
                 }
             }
+
+            if (
+                hadActiveCombatAlready &&
+                combatState.currentTurn &&
+                !combatState.participants.some(p => p.id === combatState.currentTurn)
+            ) {
+                combatState.currentTurn = null;
+            }
+
             break;
+        }
             
         case 'InitiativeRolled':
             console.log('🎲 ========== INITIATIVE ROLLED ==========');
@@ -3508,7 +3550,7 @@ function updateConnectionStatus(connected) {
 // Load NPCs from npc.json
 async function loadNPCs() {
     try {
-        const response = await fetch('/static/data/npc.json');
+        const response = await fetch('/static/data/npc.json?v=' + encodeURIComponent(typeof APP_UI_VERSION !== 'undefined' ? APP_UI_VERSION : String(Date.now())));
         if (!response.ok) {
             console.warn('⚠️ Could not load npc.json:', response.status);
             return;
@@ -4697,7 +4739,10 @@ function resolveEnemyNpcPortraitSrc(token) {
     const p = source.portrait_url || source.local_portrait;
     if (p) return normalizePortraitUrl(p);
     if (source.npcData && Array.isArray(npcs)) {
-        const npcIndex = npcs.findIndex(n => n && n.name === source.npcData.name);
+        const nd = source.npcData;
+        const packTok = ((nd.sw5e_token_url && String(nd.sw5e_token_url).trim()) || (nd.sw5e_portrait_url && String(nd.sw5e_portrait_url).trim())) || '';
+        if (packTok) return normalizePortraitUrl(packTok);
+        const npcIndex = npcs.findIndex(n => n && n.name === nd.name);
         if (npcIndex >= 0) return window.location.origin + '/static/enemy_portraits/' + npcIndex + '.png';
     }
     return null;
@@ -10346,7 +10391,13 @@ function buildEnemySkeletonFromNpcCatalog(npc, npcIndex) {
         speed: parseSpeed(npc.speed) || 30,
         actions: '{}',
         description: npc.raw_block || '',
-        portrait_url: '/static/enemy_portraits/' + npcIndex + '.png',
+        portrait_url: (() => {
+            const t = (npc.sw5e_token_url && String(npc.sw5e_token_url).trim()) || '';
+            const a = (!t && npc.sw5e_portrait_url && String(npc.sw5e_portrait_url).trim()) || '';
+            if (t) return t;
+            if (a) return a;
+            return '/static/enemy_portraits/' + npcIndex + '.png';
+        })(),
         style: selectedStyle,
     };
 }
@@ -10436,9 +10487,19 @@ function spawnNPC(npc) {
         isNPC: true, // CRITICAL FLAG: identifies this as an NPC instance
         npcData: npc // CRITICAL: Store full NPC data for character sheet
     };
-    // Portrait by index in npc.json order (static/enemy_portraits/0.png, 1.png, ...)
+    // Portrait / token: optional SW5e pack paths (after sync-sw5e-icons), else static/enemy_portraits by catalog index
+    let packTok = null;
+    if (npc.sw5e_token_url && typeof npc.sw5e_token_url === 'string') {
+        const u = npc.sw5e_token_url.trim();
+        if (u) packTok = u;
+    }
+    if (!packTok && npc.sw5e_portrait_url && typeof npc.sw5e_portrait_url === 'string') {
+        const v = npc.sw5e_portrait_url.trim();
+        if (v) packTok = v;
+    }
     const npcIndex = npcs.findIndex(n => n && n.name === npc.name);
-    if (npcIndex >= 0) npcEnemy.local_portrait = '/static/enemy_portraits/' + npcIndex + '.png';
+    if (packTok) npcEnemy.local_portrait = packTok;
+    else if (npcIndex >= 0) npcEnemy.local_portrait = '/static/enemy_portraits/' + npcIndex + '.png';
 
     // Check if this ID already exists (shouldn't happen, but safety check)
     const existing = enemies.find(e => e.id === instanceId);
@@ -11131,7 +11192,7 @@ function showNPCCharacterSheet(entityId) {
         </div>
         <div class="panel" style="padding: 15px; text-align: center;">
             <div style="font-size: 11px; opacity: 0.7;">SPEED</div>
-            <div style="font-size: 28px; font-weight: bold; color: #44ff44;">${enemy.speed}</div>
+            <div style="font-size: ${(npc.speed && String(npc.speed).length > 12) ? '14px' : '28px'}; font-weight: bold; color: #44ff44; line-height: 1.25; word-break: break-word;">${escapeHtml((npc.speed && String(npc.speed).trim()) ? npc.speed : ((enemy.speed != null && enemy.speed !== '') ? enemy.speed + ' ft.' : '-'))}</div>
         </div>
         <div class="panel" style="padding: 15px; text-align: center;">
             <div style="font-size: 11px; opacity: 0.7;">CR</div>
@@ -11542,7 +11603,14 @@ function showNPCCharacterSheet(entityId) {
         }
         html += `</div>`;
     }
-    
+
+    if (npc.lore && String(npc.lore).trim()) {
+        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+            <h4 style="color: #c9a227;">📜 Lore</h4>
+            <div style="white-space: pre-wrap; font-size: 12px; line-height: 1.6; opacity: 0.92;">${escapeHtml(String(npc.lore).trim())}</div>
+        </div>`;
+    }
+
     // Full raw block (collapsible)
     if (npc.raw_block) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
@@ -15947,6 +16015,7 @@ function applyMapSettings() {
     gridSize = newGridSize;
     
     if (currentMap) {
+        currentMap.grid_size = newGridSize;
         currentMap.width = newWidth;
         currentMap.height = newHeight;
     }

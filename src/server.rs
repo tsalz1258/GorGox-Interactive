@@ -2058,8 +2058,80 @@ async fn handle_client_message(
             info!("✅ Map and tokens cleared, broadcast to all clients");
         }
         
-        ClientMessage::MapSettingsChanged { grid_size, width, height } => {
-            let settings = ServerMessage::MapSettingsChanged { grid_size, width, height };
+        ClientMessage::MapSettingsChanged {
+            grid_size,
+            width,
+            height,
+        } => {
+            let is_dm = game_state
+                .read()
+                .await
+                .players
+                .get(session_id)
+                .map(|p| p.is_dm)
+                .unwrap_or(false);
+            if !is_dm {
+                warn!(
+                    "Non-DM session {} tried to change map settings; ignored.",
+                    session_id
+                );
+                return;
+            }
+            let grid_size = grid_size.clamp(5, 500);
+            let width = width.clamp(64, 32000);
+            let height = height.clamp(64, 32000);
+
+            let map_id_opt = {
+                let mut gs = game_state.write().await;
+                if let Some(ref mut m) = gs.current_map {
+                    m.grid_size = grid_size;
+                    m.width = width;
+                    m.height = height;
+                    Some(m.id.clone())
+                } else {
+                    None
+                }
+            };
+
+            if let Some(ref map_id) = map_id_opt {
+                if let Err(e) = sqlx::query(
+                    "UPDATE maps SET grid_size = ?, width = ?, height = ? WHERE id = ?",
+                )
+                .bind(grid_size)
+                .bind(width)
+                .bind(height)
+                .bind(map_id)
+                .execute(dnd_db)
+                .await
+                {
+                    warn!("Failed to persist map settings to D&D DB: {}", e);
+                }
+                if let Err(e) = sqlx::query(
+                    "UPDATE maps SET grid_size = ?, width = ?, height = ? WHERE id = ?",
+                )
+                .bind(grid_size)
+                .bind(width)
+                .bind(height)
+                .bind(map_id)
+                .execute(starwars_db)
+                .await
+                {
+                    tracing::debug!(
+                        "Star Wars DB map settings mirror skipped/failed (non-fatal): {}",
+                        e
+                    );
+                }
+                info!(
+                    "🗺️ Map settings persisted: id={} grid={} {}x{}",
+                    map_id, grid_size, width, height
+                );
+            }
+
+            let settings = ServerMessage::MapSettingsChanged {
+                grid_size,
+                width,
+                height,
+            };
             broadcast_message(clients, &settings).await;
         }
         
