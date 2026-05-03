@@ -303,6 +303,25 @@ body {
 .player-bar-attacks { min-width: 110px; }
 .player-bar-tech-powers { min-width: 100px; }
 .player-bar-force-powers { min-width: 100px; }
+.player-bar-class-kit {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+#playerBarPanelClass.active {
+    align-content: stretch;
+}
+#playerBarClassContent {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.45;
+    max-height: min(340px, calc(var(--player-action-bar-height, 100px) * 2.8));
+    overflow: auto;
+}
+@media (min-height: 720px) {
+    #playerBarClassContent {
+        max-height: min(420px, calc(var(--player-action-bar-height, 100px) * 3));
+    }
+}
 .player-bar-dice { min-width: 150px; }
 .player-bar-section .bar-abilities-grid {
     display: grid;
@@ -438,6 +457,9 @@ body {
     border-color: #66ff66;
 }
 .player-bar-section .bar-tech-power-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: clamp(4px, calc(var(--player-action-bar-height, 100px) * 0.05), 8px);
     padding: clamp(2px, calc(var(--player-action-bar-height, 100px) * 0.02), 5px) clamp(4px, calc(var(--player-action-bar-height, 100px) * 0.05), 8px);
     margin: 1px 3px 1px 0;
     font-size: clamp(8px, calc(var(--player-action-bar-height, 100px) * 0.09), 12px);
@@ -449,12 +471,36 @@ body {
     white-space: nowrap;
     transition: all 0.2s;
 }
+.player-bar-section .bar-tech-power-btn .bar-power-icon,
+.player-bar-section .bar-force-power-btn .bar-power-icon {
+    width: clamp(18px, calc(var(--player-action-bar-height, 100px) * 0.2), 28px);
+    height: clamp(18px, calc(var(--player-action-bar-height, 100px) * 0.2), 28px);
+    object-fit: contain;
+    flex-shrink: 0;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.25);
+}
+.player-bar-section .bar-tech-power-btn .bar-power-icon-fallback,
+.player-bar-section .bar-force-power-btn .bar-power-icon-fallback {
+    flex-shrink: 0;
+    width: clamp(18px, calc(var(--player-action-bar-height, 100px) * 0.2), 28px);
+    text-align: center;
+    font-size: clamp(12px, calc(var(--player-action-bar-height, 100px) * 0.14), 18px);
+    line-height: 1;
+}
+.player-bar-section .bar-tech-power-btn .bar-power-label,
+.player-bar-section .bar-force-power-btn .bar-power-label {
+    min-width: 0;
+}
 .player-bar-section .bar-tech-power-btn:hover {
     background: linear-gradient(180deg, rgba(0, 212, 255, 0.35) 0%, rgba(0, 160, 200, 0.6) 100%);
     border-color: #00d4ff;
     box-shadow: 0 0 10px rgba(0, 212, 255, 0.35);
 }
 .player-bar-section .bar-force-power-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: clamp(4px, calc(var(--player-action-bar-height, 100px) * 0.05), 8px);
     padding: clamp(2px, calc(var(--player-action-bar-height, 100px) * 0.02), 5px) clamp(4px, calc(var(--player-action-bar-height, 100px) * 0.05), 8px);
     margin: 1px 3px 1px 0;
     font-size: clamp(8px, calc(var(--player-action-bar-height, 100px) * 0.09), 12px);

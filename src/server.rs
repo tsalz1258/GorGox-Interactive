@@ -7,7 +7,7 @@ use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         DefaultBodyLimit,
-        Json, State, Path, Multipart,
+        Json, State, Path, Multipart, Query,
     },
     response::{Response, IntoResponse},
     routing::{get, post, delete},
@@ -169,6 +169,10 @@ pub async fn start_server(
         .route("/api/test", get(|| async { 
             axum::response::Json(serde_json::json!({"status": "ok", "message": "API is working"}))
         }))
+        .route("/api/compendium/sw5e/categories", get(sw5e_compendium_categories_http))
+        .route("/api/compendium/sw5e/browse", get(sw5e_compendium_browse_http))
+        .route("/api/compendium/sw5e/category-export", get(sw5e_compendium_category_export_http))
+        .route("/api/compendium/sw5e/player-kit", post(sw5e_player_kit_http))
         .route("/api/maps", get(list_maps_http))
         .route("/api/saves", get(list_saved_states))
         .route("/api/saves/:filename", get(get_saved_state))
@@ -202,6 +206,10 @@ pub async fn start_server(
     info!("   DELETE /api/saves/:filename - Delete saved state");
     info!("   POST /api/arena-stl - Upload .stl / .glb for 3D token minis (static/arena_stl)");
     info!("   POST /api/meshy-generate-arena-stl - Meshy image→3D (set MESHY_API_KEY, DM flow)");
+    info!("   GET  /api/compendium/sw5e/categories - SW5e compendium row counts by category");
+    info!("   GET  /api/compendium/sw5e/browse?category=tech_powers&offset=&limit=");
+    info!("   GET  /api/compendium/sw5e/category-export?category=tech_powers|force_powers - full slice for client caches");
+    info!("   POST /api/compendium/sw5e/player-kit - SW5e class + specialization + features for player UI");
 
     // Open browser automatically
     let url = format!("http://localhost:{}", addr.port());
@@ -530,6 +538,135 @@ async fn fetch_maps_for_list(dnd_db: &Database, starwars_db: &Database) -> Vec<c
     let mut maps: Vec<Map> = merged.into_values().collect();
     maps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     maps
+}
+
+#[derive(Deserialize)]
+struct Sw5eBrowseQuery {
+    category: String,
+    #[serde(default)]
+    offset: u64,
+    #[serde(default = "sw5e_browse_default_limit")]
+    limit: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Sw5eCategoryExportQuery {
+    category: String,
+}
+
+fn sw5e_browse_default_limit() -> u64 {
+    50
+}
+
+async fn sw5e_compendium_categories_http(
+    State((_dnd, starwars, _, _, _)): State<(
+        Database,
+        Database,
+        Arc<RwLock<GameState>>,
+        Clients,
+        broadcast::Sender<()>,
+    )>,
+) -> Result<axum::Json<serde_json::Value>, (StatusCode, String)> {
+    match crate::db::sw5e_compendium_category_counts(&starwars).await {
+        Ok(categories) => {
+            let total_rows: i64 = categories.iter().map(|c| c.count).sum();
+            Ok(axum::Json(serde_json::json!({
+                "categories": categories,
+                "total_rows": total_rows,
+            })))
+        }
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+async fn sw5e_compendium_category_export_http(
+    State((_dnd, starwars, _, _, _)): State<(
+        Database,
+        Database,
+        Arc<RwLock<GameState>>,
+        Clients,
+        broadcast::Sender<()>,
+    )>,
+    Query(q): Query<Sw5eCategoryExportQuery>,
+) -> impl IntoResponse {
+    let cat = q.category.trim();
+    if !matches!(cat, "tech_powers" | "force_powers") {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": "allowed categories: tech_powers, force_powers",
+            })),
+        )
+            .into_response();
+    }
+    match crate::db::sw5e_compendium_category_export(&starwars, cat).await {
+        Ok(rows) => axum::Json(serde_json::json!({
+            "category": cat,
+            "count": rows.len(),
+            "rows": rows,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn sw5e_compendium_browse_http(
+    State((_dnd, starwars, _, _, _)): State<(
+        Database,
+        Database,
+        Arc<RwLock<GameState>>,
+        Clients,
+        broadcast::Sender<()>,
+    )>,
+    Query(q): Query<Sw5eBrowseQuery>,
+) -> impl IntoResponse {
+    let cat_trim = q.category.trim();
+    if cat_trim.is_empty() || !crate::db::sw5e_compendium_allowed_category(cat_trim) {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({"error": "invalid or missing category"})),
+        )
+            .into_response();
+    }
+    match crate::db::sw5e_compendium_browse(&starwars, cat_trim, q.offset, q.limit).await {
+        Ok((items, total)) => axum::Json(serde_json::json!({
+            "category": cat_trim,
+            "offset": q.offset,
+            "limit": q.limit,
+            "total": total,
+            "items": items,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn sw5e_player_kit_http(
+    State((_dnd, starwars, _, _, _)): State<(
+        Database,
+        Database,
+        Arc<RwLock<GameState>>,
+        Clients,
+        broadcast::Sender<()>,
+    )>,
+    Json(body): Json<crate::db::Sw5ePlayerKitRequest>,
+) -> impl IntoResponse {
+    match crate::db::sw5e_player_kit(&starwars, &body).await {
+        Ok(v) => axum::Json(v).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn list_maps_http(

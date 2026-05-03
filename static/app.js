@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v106'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v118'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -18,7 +18,7 @@ let myPlayerName = ''; // Store our player name
 let myCharacterId = null; // Track which character this player controls
 let playerActionBarVisible = true; // Toggle for bottom action bar (players only)
 const PLAYER_ACTION_BAR_HEIGHT_MIN = 80;
-const PLAYER_ACTION_BAR_HEIGHT_MAX = 320;
+const PLAYER_ACTION_BAR_HEIGHT_MAX = 520;
 const PLAYER_ACTION_BAR_HEIGHT_DEFAULT = 100;
 let playerActionBarHeight = PLAYER_ACTION_BAR_HEIGHT_DEFAULT; // Resizable; persisted in localStorage
 let currentMap = null;
@@ -6274,6 +6274,7 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '<button type="button" class="player-bar-tab-btn active" data-tab="combat" role="tab" tabindex="-1">Combat</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="abilities" role="tab" tabindex="-1">Abilities</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="powers" role="tab" tabindex="-1">Powers</button>' +
+    '<button type="button" class="player-bar-tab-btn" data-tab="class" role="tab" tabindex="-1">Class</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="dice" role="tab" tabindex="-1">Dice</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="notes" role="tab" tabindex="-1">Notes</button>' +
     '</div>' +
@@ -6293,6 +6294,11 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '<div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>' +
     '<div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>' +
     '</div>' +
+    '<div class="player-bar-tab-panel" id="playerBarPanelClass" data-tab="class" role="tabpanel">' +
+    '<div class="player-bar-section player-bar-class-kit">' +
+    '<span class="section-label">Class kit</span>' +
+    '<div id="playerBarClassContent"></div>' +
+    '</div></div>' +
     '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
     '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
     '</div>' +
@@ -6300,6 +6306,466 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '<div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>' +
     '</div>' +
     '</div></div></div>';
+
+/** Parsed sheet JSON last used when filling the bottom action bar — Class tab refreshes read this cache. */
+var lastPlayerBarCharData = null;
+/** Last rendered class kit HTML (for large-view modal). */
+var lastRenderedSw5eClassKitHtml = '';
+
+function decodeHtmlEntitiesOnce(raw) {
+    if (raw == null) return '';
+    const s = typeof raw === 'string' ? raw : String(raw);
+    if (!s) return '';
+    try {
+        const t = document.createElement('textarea');
+        t.innerHTML = s;
+        return t.value;
+    } catch (e) {
+        return s;
+    }
+}
+
+function formatPlayerSheetDisplayName(charRow, charDataFallback) {
+    const p = decodeHtmlEntitiesOnce(charRow && charRow.player_name ? charRow.player_name : '');
+    const c = decodeHtmlEntitiesOnce(
+        (charRow && charRow.name) || (charDataFallback && charDataFallback.name) || ''
+    );
+    if (p && c && p !== c) return p + ' / ' + c;
+    return c || p || 'Hero';
+}
+
+function ensureSw5eClassKitModal() {
+    let m = document.getElementById('sw5eClassKitModal');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'sw5eClassKitModal';
+    m.style.cssText =
+        'display:none;position:fixed;inset:0;z-index:100100;background:rgba(0,0,0,.72);align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+    m.innerHTML =
+        '<div style="max-width:980px;width:100%;max-height:92vh;background:linear-gradient(180deg,#1a1410 0%,#0f0c0a 100%);border:2px solid #c9a227;border-radius:12px;box-shadow:0 12px 48px rgba(0,0,0,.6);display:flex;flex-direction:column;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(201,162,39,.35);">' +
+        '<div style="font-weight:bold;color:#e8d5a3;font-size:16px;">SW5e — class & specialization reference</div>' +
+        '<button type="button" id="sw5eClassKitModalClose" style="padding:8px 16px;border-radius:8px;border:1px solid #c9a227;background:rgba(201,162,39,.15);color:#e8d5a3;cursor:pointer;font-weight:bold;">Close</button>' +
+        '</div>' +
+        '<div id="sw5eClassKitModalBody" style="overflow:auto;padding:16px;color:#e8e0d8;font-size:13px;line-height:1.55;"></div></div>';
+    document.body.appendChild(m);
+    const close = () => {
+        m.style.display = 'none';
+    };
+    m.addEventListener('click', function (ev) {
+        if (ev.target === m) close();
+    });
+    const btn = document.getElementById('sw5eClassKitModalClose');
+    if (btn) btn.onclick = close;
+    return m;
+}
+
+function openSw5eClassKitFullscreen() {
+    const m = ensureSw5eClassKitModal();
+    const body = document.getElementById('sw5eClassKitModalBody');
+    if (body) {
+        body.innerHTML =
+            lastRenderedSw5eClassKitHtml ||
+            '<div style="opacity:.8;">Load the Class tab first.</div>';
+    }
+    m.style.display = 'flex';
+}
+
+function ensurePlayerBarHasClassTab(bar) {
+    if (!bar) return;
+    const tabBar = bar.querySelector('.player-bar-tabs');
+    if (!tabBar || tabBar.querySelector('[data-tab="class"]')) return;
+    const diceBtn = tabBar.querySelector('[data-tab="dice"]');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'player-bar-tab-btn';
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('tabindex', '-1');
+    btn.dataset.tab = 'class';
+    btn.textContent = 'Class';
+    if (diceBtn) tabBar.insertBefore(btn, diceBtn);
+    else tabBar.appendChild(btn);
+}
+
+/** SW5e: infer Foundry-ish class slug (fighter, scholar, …). */
+function inferSw5eClassSlugFromCls(cls) {
+    if (!cls || typeof cls !== 'object') return '';
+    let s = '';
+    if (cls.classIdentifier && String(cls.classIdentifier).trim()) s = String(cls.classIdentifier).trim();
+    else if (cls.class && String(cls.class).trim()) s = String(cls.class).trim();
+    else if (cls.slug && String(cls.slug).trim()) s = String(cls.slug).trim();
+    else if (cls.identifier && String(cls.identifier).trim()) s = String(cls.identifier).trim();
+    else if (cls.name && String(cls.name).trim()) {
+        s = String(cls.name).trim().split(/\s+/)[0];
+    }
+    return s.trim().toLowerCase().replace(/[^a-z0-9_-]+/gi, '');
+}
+
+function inferSw5eSpecializationFromCls(cls) {
+    if (!cls || typeof cls !== 'object') return '';
+    const tryKeys = ['subclass', 'subclassTitle', 'specialization', 'specializationTitle', 'archetypeName', 'archetype'];
+    for (let i = 0; i < tryKeys.length; i++) {
+        const v = cls[tryKeys[i]];
+        if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    if (Array.isArray(cls.archetypes) && cls.archetypes[0]) {
+        const a = cls.archetypes[0];
+        if (a && typeof a.name === 'string' && a.name.trim()) return a.name.trim();
+    }
+    if (Array.isArray(cls.archetypes) && typeof cls.archetypes[0] === 'string') return cls.archetypes[0].trim();
+    if (cls.subclasses && cls.subclasses[0]) {
+        const s = cls.subclasses[0];
+        if (typeof s === 'string') return s.trim();
+        if (s && typeof s.name === 'string') return s.name.trim();
+    }
+    if (typeof cls.name === 'string' && cls.name.trim()) {
+        const hn = cls.name.trim();
+        if (/engineering/i.test(hn)) return hn;
+    }
+    return '';
+}
+
+/** Pack icon paths normalized at import to /static/sw5e-assets/… — only trust that prefix in UI. */
+function safeSw5eCompendiumIconUrl(raw) {
+    if (!raw || typeof raw !== 'string') return '';
+    const s = raw.trim();
+    if (s.startsWith('/static/sw5e-assets/')) return s;
+    return '';
+}
+
+/** Map Foundry `systems/sw5e/…` paths to `/static/sw5e-assets/…` (mirrors scripts/import-sw5e-packs.mjs). */
+function fvttSw5ePackPathToAppUrl(p) {
+    if (!p || typeof p !== 'string') return '';
+    const s = p.trim().replace(/^\/+/, '');
+    if (!s || s.startsWith('@')) return '';
+    if (/^https?:\/\//i.test(s)) return '';
+    if (s.startsWith('systems/sw5e/')) return '/static/sw5e-assets/' + s.slice('systems/sw5e/'.length);
+    return '';
+}
+
+function firstImgSrcInPowerHtml(html) {
+    if (!html || typeof html !== 'string') return '';
+    const m = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i.exec(html);
+    return m ? m[1].trim() : '';
+}
+
+/** Best-effort app icon path from a tech/force row (full export object or flattened cache slice). */
+function deriveStarWarsPackIconAppUrl(raw) {
+    if (!raw || typeof raw !== 'object') return '';
+    const pref = typeof raw._icon_url_app === 'string' ? raw._icon_url_app.trim() : '';
+    if (pref.startsWith('/static/sw5e-assets/')) return pref;
+    const sys = raw.system && typeof raw.system === 'object' ? raw.system : null;
+    const candidates = [];
+    if (pref) candidates.push(pref);
+    if (typeof raw.img === 'string') candidates.push(raw.img);
+    if (typeof raw.icon === 'string') candidates.push(raw.icon);
+    if (sys && typeof sys.img === 'string') candidates.push(sys.img);
+    for (let i = 0; i < candidates.length; i++) {
+        const mapped = fvttSw5ePackPathToAppUrl(candidates[i]);
+        if (mapped) return mapped;
+    }
+    const htmlBits = [];
+    if (typeof raw.description === 'string') htmlBits.push(raw.description);
+    if (typeof raw.effect === 'string') htmlBits.push(raw.effect);
+    if (typeof raw.desc === 'string') htmlBits.push(raw.desc);
+    if (sys && typeof sys.description === 'object' && sys.description && typeof sys.description.value === 'string') {
+        htmlBits.push(sys.description.value);
+    }
+    for (let j = 0; j < htmlBits.length; j++) {
+        const src = firstImgSrcInPowerHtml(htmlBits[j]);
+        if (src) {
+            const mapped = fvttSw5ePackPathToAppUrl(src);
+            if (mapped) return mapped;
+        }
+    }
+    return '';
+}
+
+/** Icon URL safe for `<img src>` — uses stored `_icon_url_app` or derives from Foundry-style fields on the row. */
+function resolveDisplayedSw5ePowerIconUrl(row) {
+    const d = deriveStarWarsPackIconAppUrl(row);
+    if (d) return safeSw5eCompendiumIconUrl(d);
+    return safeSw5eCompendiumIconUrl(row && row._icon_url_app);
+}
+
+/** Best-effort species folder slug (matches speciesfeatures/<slug>/… in packs). */
+function inferSw5eSpeciesSlugForKit(charData) {
+    if (!charData || typeof charData !== 'object') return '';
+    if (typeof charData.species === 'string' && charData.species.trim()) {
+        const t = charData.species
+            .trim()
+            .replace(/\([^)]*\)/g, '')
+            .trim();
+        const first = t.split(/\s+/)[0];
+        return first.toLowerCase().replace(/[^a-z0-9_-]+/gi, '');
+    }
+    if (charData.species && typeof charData.species === 'object') {
+        if (charData.species.slug != null && String(charData.species.slug).trim())
+            return String(charData.species.slug)
+                .trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9_-]+/gi, '');
+        const nm = charData.species.name;
+        if (typeof nm === 'string' && nm.trim()) {
+            const first = nm.trim().split(/\s+/)[0];
+            return first.toLowerCase().replace(/[^a-z0-9_-]+/gi, '');
+        }
+    }
+    return '';
+}
+
+function buildSw5ePlayerKitRequestPayload(charData, myCharacterRow) {
+    const out = { class_entries: [], character_level: null, species_slug: null };
+    if (!charData) return out;
+    if (typeof myCharacterRow === 'object' && myCharacterRow && myCharacterRow.level != null && !isNaN(Number(myCharacterRow.level))) {
+        out.character_level = Number(myCharacterRow.level);
+    }
+    let sumLevels = 0;
+    const cl = charData.classes;
+    if (Array.isArray(cl)) {
+        cl.forEach(c => {
+            const lv = c && c.levels != null ? Number(c.levels) : NaN;
+            if (!isNaN(lv) && lv > 0) sumLevels += lv;
+        });
+        if (sumLevels > 0 && (out.character_level == null || out.character_level <= 0)) out.character_level = sumLevels;
+
+        const topSpec = inferSw5eSpecializationFromCls(charData);
+        cl.forEach(c => {
+            const slug = inferSw5eClassSlugFromCls(c);
+            let spec = inferSw5eSpecializationFromCls(c);
+            if (!spec && cl.length === 1 && topSpec) spec = topSpec;
+            if (slug || spec) out.class_entries.push({ slug: slug || null, specialization: spec || null });
+        });
+    }
+    const topSlug =
+        inferSw5eClassSlugFromCls(charData) ||
+        (Array.isArray(charData.classes) && charData.classes[0]
+            ? inferSw5eClassSlugFromCls(charData.classes[0])
+            : '');
+    if ((!out.class_entries || out.class_entries.length === 0) && topSlug) {
+        const sf =
+            typeof charData.subclass === 'string' && charData.subclass.trim() ? charData.subclass.trim() : '';
+        out.class_entries.push({ slug: topSlug, specialization: sf || null });
+    }
+    const sp = inferSw5eSpeciesSlugForKit(charData);
+    if (sp) out.species_slug = sp;
+    return out;
+}
+
+function truncateKitText(text, max) {
+    if (!text || typeof text !== 'string') return '';
+    const n = typeof max === 'number' ? max : 560;
+    if (text.length <= n) return text;
+    return text.slice(0, n).trimEnd() + '…';
+}
+
+function renderSw5ePlayerKitJson(data, charDisplayName) {
+    if (!data) return '';
+    const safeNm = escapeHtml(decodeHtmlEntitiesOnce(charDisplayName || ''));
+    let html =
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">' +
+        '<button type="button" tabindex="-1" onclick="openSw5eClassKitFullscreen()" style="padding:6px 12px;font-size:11px;border-radius:6px;border:1px solid #c9a227;background:rgba(201,162,39,.2);color:#e8d5a3;cursor:pointer;font-weight:bold;">Expand large view</button>' +
+        '<button type="button" tabindex="-1" onclick="refreshPlayerSw5eClassKit()" style="padding:6px 12px;font-size:11px;border-radius:6px;border:1px solid #4a9eff;background:rgba(74,158,255,0.2);color:#fff;cursor:pointer;">Reload from server</button>' +
+        '</div>';
+    html += `<div style="margin-bottom:10px;font-size:12px;color:#e8d5a3;"><strong>You:</strong> ${safeNm}${data.character_level != null ? ` — level ${escapeHtml(String(data.character_level))}` : ''}</div>`;
+
+    if (data.error === 'no_class_slugs') {
+        html += '<div style="color:#ffaa44;">Could not detect class slug from your sheet JSON.</div>';
+        return html;
+    }
+
+    if (Array.isArray(data.diagnostics) && data.diagnostics.length) {
+        html += `<div style="margin-bottom:12px;padding:10px;border-radius:8px;border:1px solid rgba(255,170,68,.45);background:rgba(60,40,10,.45);font-size:11px;line-height:1.45;">`;
+        html += `<div style="color:#ffcc88;font-weight:bold;margin-bottom:6px;">Setup / data notes</div>`;
+        data.diagnostics.forEach(line => {
+            html += `<div style="opacity:.95;margin-bottom:4px;">• ${escapeHtml(line)}</div>`;
+        });
+        html += '</div>';
+    }
+
+    if (Array.isArray(data.classes) && data.classes.length) {
+        html += `<details open class="class-kit-narrative" style="margin-bottom:12px;border:1px solid rgba(201,162,39,.35);border-radius:8px;padding:10px;background:rgba(0,0,0,.25);">`;
+        html += `<summary style="cursor:pointer;color:#c9a227;font-weight:bold;font-size:13px;">What your class is & how it plays</summary>`;
+        data.classes.forEach((c, i) => {
+            if (c && c._missing) {
+                html += `<div style="margin-top:10px;color:#ffaa44;">Missing compendium class row for <code>${escapeHtml(String(c._class_slug || ''))}</code>.</div>`;
+                return;
+            }
+            const iconU = safeSw5eCompendiumIconUrl(c._icon_url_app);
+            const title = escapeHtml(c.name || 'Class ' + (i + 1));
+            const body = truncateKitText(String(c.description || ''), 12000);
+            html += `<div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;">`;
+            if (iconU) {
+                html += `<img src="${escapeHtml(iconU)}" alt="" style="width:56px;height:56px;object-fit:contain;border-radius:6px;border:1px solid rgba(201,162,39,.35);flex-shrink:0;background:rgba(0,0,0,.2);" loading="lazy" />`;
+            }
+            html += `<div style="flex:1;min-width:0;">`;
+            html += `<div style="font-size:14px;font-weight:bold;color:#f0e6d2;margin-bottom:6px;">${title}</div>`;
+            if (body) {
+                html += `<div class="class-kit-prose" style="font-size:12px;line-height:1.55;color:#d8d0c8;white-space:pre-wrap;">${escapeHtml(body)}</div>`;
+            } else {
+                html += `<div style="opacity:.7;font-size:11px;">No narrative description was stored for this class slice — re-import packs with the latest script.</div>`;
+            }
+            html += `</div></div>`;
+        });
+        html += '</details>';
+    }
+
+    if (Array.isArray(data.specializations_you) && data.specializations_you.length) {
+        html += `<details open style="margin-bottom:10px;"><summary style="cursor:pointer;color:#4a9eff;font-weight:bold;font-size:12px;">Your specialization (sheet → compendium)</summary><div style="margin-top:6px;">`;
+        data.specializations_you.forEach(b => {
+            const hits =
+                b.hits && b.hits.length
+                    ? b.hits
+                          .map(
+                              h =>
+                                  `<div style="opacity:.95;font-size:12px;">⭐ ${escapeHtml(h.name || '')}</div>`
+                          )
+                          .join('')
+                    : '<div style="opacity:.75;font-size:11px;">No exact compendium name match — pick the correct label from the list below.</div>';
+            html += `<div style="margin-bottom:8px;border-bottom:1px dashed rgba(201,162,39,.25);padding-bottom:8px;"><div style="color:#aaa;font-size:10px;">Class slug: ${escapeHtml(String(b.class_slug || ''))}</div>${hits}</div>`;
+        });
+        html += '</div></details>';
+    }
+
+    html += `<details open style="margin-bottom:10px;"><summary style="cursor:pointer;color:#4a9eff;font-weight:bold;font-size:12px;">Specializations available in this rules import</summary><div style="margin-top:6px;max-height:220px;overflow:auto;">`;
+    const sap = data.specializations_available || {};
+    const keys = Object.keys(sap);
+    if (!keys.length) {
+        html += '<div style="opacity:.75;">No archetype rows were returned for your class slug.</div>';
+    }
+    keys.forEach(k => {
+        const arr = sap[k];
+        html += `<div style="margin-bottom:8px;"><div style="color:#b0a080;font-size:10px;text-transform:uppercase;">${escapeHtml(k)}</div>`;
+        if (Array.isArray(arr)) {
+            arr.forEach(o => {
+                html += `<div style="font-size:11px;line-height:1.35;">・${escapeHtml(o.name != null ? o.name : '')}${o.identifier ? `<span style="opacity:.55;"> (${escapeHtml(String(o.identifier))})</span>` : ''}</div>`;
+            });
+        }
+        html += '</div>';
+    });
+    html += '</div></details>';
+
+    const sfc = data.species_features_count != null ? data.species_features_count : 0;
+    html += `<details open style="margin-bottom:10px;"><summary style="cursor:pointer;color:#88ffcc;font-weight:bold;font-size:12px;">Species traits (${sfc})</summary><div style="margin-top:6px;max-height:220px;overflow:auto;">`;
+    const sfs = (data.species_features || []).slice(0, 48);
+    if (!sfs.length) {
+        html +=
+            '<div style="opacity:.75;font-size:11px;">No species features — set species on the sheet and run import (speciesfeatures_from_packs.json) + sync icons + restart server.</div>';
+    }
+    sfs.forEach(f => {
+        const desc = f.description ? truncateKitText(String(f.description), 700) : '';
+        const ic = safeSw5eCompendiumIconUrl(f._icon_url_app);
+        const sum =
+            (ic ? `<img src="${escapeHtml(ic)}" alt="" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;margin-right:6px;border-radius:3px;" loading="lazy" />` : '') +
+            escapeHtml(f.name || 'Trait');
+        html += `<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-size:11px;list-style-position:outside;">${sum}</summary>`;
+        if (desc) html += `<div style="opacity:.88;white-space:pre-wrap;margin-top:4px;font-size:11px;">${escapeHtml(desc)}</div>`;
+        html += '</details>';
+    });
+    html += '</div></details>';
+
+    const invc = data.invocations_count != null ? data.invocations_count : 0;
+    html += `<details open style="margin-bottom:10px;"><summary style="cursor:pointer;color:#dd99ff;font-weight:bold;font-size:12px;">Invocations / modifications (${invc})</summary><div style="margin-top:6px;max-height:240px;overflow:auto;">`;
+    const invs = (data.invocations || []).slice(0, 40);
+    if (!invs.length) {
+        html += '<div style="opacity:.75;font-size:11px;">No invocations matched this class/specialization — import invocations_from_packs.json when available.</div>';
+    }
+    invs.forEach(f => {
+        const desc = f.description ? truncateKitText(String(f.description), 700) : '';
+        const ic = safeSw5eCompendiumIconUrl(f._icon_url_app);
+        const sum =
+            (ic ? `<img src="${escapeHtml(ic)}" alt="" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;margin-right:6px;border-radius:3px;" loading="lazy" />` : '') +
+            escapeHtml(f.name || 'Invocation');
+        html += `<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-size:11px;">${sum}</summary>`;
+        if (desc) html += `<div style="opacity:.88;white-space:pre-wrap;margin-top:4px;font-size:11px;">${escapeHtml(desc)}</div>`;
+        html += '</details>';
+    });
+    html += '</div></details>';
+
+    html += `<details open style="margin-bottom:10px;"><summary style="cursor:pointer;color:#aa88ff;font-weight:bold;font-size:12px;">Class features (${data.class_features_count != null ? data.class_features_count : 0})</summary><div style="margin-top:6px;max-height:240px;overflow:auto;">`;
+    const cfs = (data.class_features || []).slice(0, 60);
+    if (!cfs.length) {
+        html += '<div style="opacity:.75;font-size:11px;">No rows yet — import writes classfeatures_from_packs.json.</div>';
+    }
+    cfs.forEach(f => {
+        const desc = f.description ? truncateKitText(String(f.description), 900) : '';
+        html += `<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-size:11px;">${escapeHtml(f.name || 'Feature')}</summary>`;
+        if (desc) html += `<div style="opacity:.88;white-space:pre-wrap;margin-top:4px;font-size:11px;">${escapeHtml(desc)}</div>`;
+        html += '</details>';
+    });
+    html += '</div></details>';
+
+    html += `<details open style="margin-bottom:10px;"><summary style="cursor:pointer;color:#ffaa44;font-weight:bold;font-size:12px;">Specialization features (${data.archetype_features_count != null ? data.archetype_features_count : 0})</summary><div style="margin-top:6px;max-height:240px;overflow:auto;">`;
+    const afs = (data.archetype_features || []).slice(0, 48);
+    if (!afs.length) {
+        html += '<div style="opacity:.75;font-size:11px;">No rows yet — ensure archetypefeatures slice imported.</div>';
+    }
+    afs.forEach(f => {
+        const desc = f.description ? truncateKitText(String(f.description), 900) : '';
+        html += `<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-size:11px;">${escapeHtml(f.name || '')}</summary>`;
+        if (desc) html += `<div style="opacity:.88;white-space:pre-wrap;margin-top:4px;font-size:11px;">${escapeHtml(desc)}</div>`;
+        html += '</details>';
+    });
+    html += '</div></details>';
+
+    if (Array.isArray(data.classes)) {
+        html += `<details style="margin-bottom:10px;"><summary style="cursor:pointer;color:#6dffc8;font-weight:bold;font-size:12px;">Level-up data (raw advancement JSON)</summary>`;
+        data.classes.forEach((c, i) => {
+            if (c && c._missing) return;
+            const adv = c && c.system && c.system.advancement != null ? c.system.advancement : null;
+            const txt = adv != null ? JSON.stringify(adv, null, 2) : '';
+            html += `<div style="margin-top:10px;"><div style="color:#ccc;font-weight:bold;font-size:12px;">${escapeHtml(c.name || 'Class ' + (i + 1))}</div>`;
+            if (txt && txt.length && txt !== 'null') {
+                html += `<pre style="font-size:10px;line-height:1.3;background:#0d0d14;color:#cdd;padding:8px;border-radius:6px;max-height:220px;overflow:auto;margin-top:6px;">${escapeHtml(truncateKitText(txt, 12000))}</pre>`;
+            } else {
+                html += `<div style="opacity:.65;font-size:11px;margin-top:4px;">No advancement block in this compendium snapshot.</div>`;
+            }
+        });
+        html += '</details>';
+    }
+
+    return html;
+}
+
+function refreshPlayerSw5eClassKit() {
+    if (!lastPlayerBarCharData || !myCharacterId) return;
+    const row = typeof characters !== 'undefined' ? characters.find(c => c.id === myCharacterId) : null;
+    populatePlayerSw5eClassKit(lastPlayerBarCharData, row);
+}
+
+async function populatePlayerSw5eClassKit(charData, myCharacterRow) {
+    const el = document.getElementById('playerBarClassContent');
+    if (!el) return;
+    const isSw = !!(charData && (charData.species || ((Array.isArray(charData.classes) && charData.classes.length) || charData.baseAbilityScores)));
+    if (!isSw) {
+        el.innerHTML = '<div style="opacity:.75;">Star Wars sheets show class specialization here.</div>';
+        return;
+    }
+    const payload = buildSw5ePlayerKitRequestPayload(charData, myCharacterRow);
+    if (!payload.class_entries.length) {
+        el.innerHTML = `<div style="opacity:.82;">Cannot read class slug from sheet JSON.<br>Open <strong>${escapeHtml((myCharacterRow && myCharacterRow.name) || '')}</strong> in the builder and export again.</div>`;
+        return;
+    }
+    el.innerHTML = '<div style="opacity:.8;">Loading compendium class kit…</div>';
+    try {
+        const resp = await fetch('/api/compendium/sw5e/player-kit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw new Error(data.error || resp.statusText);
+        }
+        const nm = formatPlayerSheetDisplayName(myCharacterRow, charData);
+        const html = renderSw5ePlayerKitJson(data, nm);
+        el.innerHTML = html;
+        lastRenderedSw5eClassKitHtml = html;
+    } catch (err) {
+        console.error(err);
+        el.innerHTML = '<div style="color:#ff6666;">' + escapeHtml(err.message || String(err)) + '</div>';
+    }
+}
 
 // Create the player action bar DOM and append to body (so it always exists when we need it).
 // If bar already exists from HTML but has no resize handles, inject them.
@@ -6415,6 +6881,22 @@ function switchPlayerActionBarTab(tabId) {
         });
     }
     if (tabId === 'notes') renderNotesTabContent();
+    if (tabId === 'class') {
+        const targetH = Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, Math.max(playerActionBarHeight, 360));
+        if (targetH > playerActionBarHeight) {
+            playerActionBarHeight = targetH;
+            try {
+                localStorage.setItem('playerActionBarHeight', String(playerActionBarHeight));
+            } catch (e2) {}
+        }
+        applyPlayerActionBarHeight();
+    }
+    if (tabId === 'class' && lastPlayerBarCharData && typeof populatePlayerSw5eClassKit === 'function') {
+        const mc = typeof myCharacterId !== 'undefined'
+            ? (typeof characters !== 'undefined' ? characters.find(c => c.id === myCharacterId) : null)
+            : null;
+        populatePlayerSw5eClassKit(lastPlayerBarCharData, mc);
+    }
     try { localStorage.setItem('playerActionBarTab', tabId); } catch (e) {}
 }
 
@@ -7011,6 +7493,7 @@ function populatePlayerActionBar() {
             charData = fullData.character || fullData;
         } catch (e) { return; }
     }
+    lastPlayerBarCharData = charData;
 
     const charName = charData.name || myCharacter.name || 'Character';
     const formatMod = (mod) => (mod >= 0 ? '+' + mod : '' + mod);
@@ -7034,6 +7517,11 @@ function populatePlayerActionBar() {
             '<div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>' +
             '<div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>' +
             '</div>' +
+            '<div class="player-bar-tab-panel" id="playerBarPanelClass" data-tab="class" role="tabpanel">' +
+            '<div class="player-bar-section player-bar-class-kit">' +
+            '<span class="section-label">Class kit</span>' +
+            '<div id="playerBarClassContent"></div>' +
+            '</div></div>' +
             '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
             '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
             '</div>' +
@@ -7041,13 +7529,14 @@ function populatePlayerActionBar() {
             '<div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>' +
             '</div></div>';
     }
+    ensurePlayerBarHasClassTab(bar);
     // Bind tab clicks and restore saved tab (tabBar already in scope)
     if (tabBar) {
         tabBar.querySelectorAll('.player-bar-tab-btn').forEach(btn => {
             btn.onclick = function() { switchPlayerActionBarTab(this.dataset.tab); };
         });
         const savedTab = localStorage.getItem('playerActionBarTab');
-        if (savedTab && ['combat', 'abilities', 'powers', 'dice', 'notes'].indexOf(savedTab) >= 0) {
+        if (savedTab && ['combat', 'abilities', 'powers', 'class', 'dice', 'notes'].indexOf(savedTab) >= 0) {
             switchPlayerActionBarTab(savedTab);
         }
     }
@@ -7222,7 +7711,24 @@ function populatePlayerActionBar() {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
-                html += '<button type="button" tabindex="-1" class="bar-tech-power-btn" data-power="' + escapeHtml(safeName) + '" data-char-name="' + escapeHtml(charName) + '" onmouseover="showSpellTooltip(\'' + attrPower + '\', event)" onmouseout="hideSpellTooltip()">&#9889; ' + escapeHtml(safeName) + '</button>';
+                const metaT = typeof findTechPowerInCacheGlobal === 'function' ? findTechPowerInCacheGlobal(safeName) : null;
+                const icT =
+                    metaT && typeof resolveDisplayedSw5ePowerIconUrl === 'function' ? resolveDisplayedSw5ePowerIconUrl(metaT) : '';
+                const leftT = icT
+                    ? '<img class="bar-power-icon" src="' + escapeHtml(icT) + '" alt="" loading="lazy" />'
+                    : '<span class="bar-power-icon-fallback" aria-hidden="true">&#9889;</span>';
+                html +=
+                    '<button type="button" tabindex="-1" class="bar-tech-power-btn" data-power="' +
+                    escapeHtml(safeName) +
+                    '" data-char-name="' +
+                    escapeHtml(charName) +
+                    '" onmouseover="showSpellTooltip(\'' +
+                    attrPower +
+                    '\', event)" onmouseout="hideSpellTooltip()">' +
+                    leftT +
+                    '<span class="bar-power-label">' +
+                    escapeHtml(safeName) +
+                    '</span></button>';
             });
             if (allTechPowers.length > 0) html += '</div>';
             techPowersEl.innerHTML = html;
@@ -7254,7 +7760,24 @@ function populatePlayerActionBar() {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
-                html += '<button type="button" tabindex="-1" class="bar-force-power-btn" data-power="' + escapeHtml(safeName) + '" data-char-name="' + escapeHtml(charName) + '" onmouseover="showSpellTooltip(\'' + attrPower + '\', event)" onmouseout="hideSpellTooltip()">&#9733; ' + escapeHtml(safeName) + '</button>';
+                const metaF = typeof findForcePowerInCacheGlobal === 'function' ? findForcePowerInCacheGlobal(safeName) : null;
+                const icF =
+                    metaF && typeof resolveDisplayedSw5ePowerIconUrl === 'function' ? resolveDisplayedSw5ePowerIconUrl(metaF) : '';
+                const leftF = icF
+                    ? '<img class="bar-power-icon" src="' + escapeHtml(icF) + '" alt="" loading="lazy" />'
+                    : '<span class="bar-power-icon-fallback" aria-hidden="true">&#9733;</span>';
+                html +=
+                    '<button type="button" tabindex="-1" class="bar-force-power-btn" data-power="' +
+                    escapeHtml(safeName) +
+                    '" data-char-name="' +
+                    escapeHtml(charName) +
+                    '" onmouseover="showSpellTooltip(\'' +
+                    attrPower +
+                    '\', event)" onmouseout="hideSpellTooltip()">' +
+                    leftF +
+                    '<span class="bar-power-label">' +
+                    escapeHtml(safeName) +
+                    '</span></button>';
             });
             if (allForcePowers.length > 0) html += '</div>';
             forcePowersEl.innerHTML = html;
@@ -7321,6 +7844,8 @@ function populatePlayerActionBar() {
             };
         });
     }
+
+    populatePlayerSw5eClassKit(charData, myCharacter);
 
     // Dice
     const diceEl = document.getElementById('playerBarDice');
@@ -11740,7 +12265,9 @@ function showInfoSection(section) {
         case 'conditions':
             renderConditionsSection();
             break;
-        // Future sections can be added here
+        case 'sw5e':
+            renderSw5eCompendiumSection();
+            break;
         default:
             content.innerHTML = `<div style="text-align: center; padding: 40px; opacity: 0.7;">Section "${section}" coming soon!</div>`;
     }
@@ -11860,6 +12387,142 @@ function renderConditionsSection() {
     html += `</div></div>`;
     
     content.innerHTML = html;
+}
+
+// SW5e compendium in SQLite (hydrated from static/data/sw5e_compendium at Rust server startup)
+const SW5E_INFO_PAGE = 45;
+let sw5eInfoBrowse = { cat: '', offset: 0, total: 0, loading: false, done: false };
+
+function onSw5eInfoScroll(ev) {
+    const el = ev.target;
+    if (!el || sw5eInfoBrowse.loading || sw5eInfoBrowse.done) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 140) loadMoreSw5eEntries();
+}
+
+async function loadMoreSw5eEntries() {
+    const listEl = document.getElementById('sw5eInfoList');
+    if (!listEl || !sw5eInfoBrowse.cat) return;
+    if (sw5eInfoBrowse.loading || sw5eInfoBrowse.done) return;
+    sw5eInfoBrowse.loading = true;
+    const footer = document.getElementById('sw5eInfoFooter');
+    if (footer) footer.textContent = 'Loading…';
+    try {
+        const u = new URL('/api/compendium/sw5e/browse', window.location.origin);
+        u.searchParams.set('category', sw5eInfoBrowse.cat);
+        u.searchParams.set('offset', String(sw5eInfoBrowse.offset));
+        u.searchParams.set('limit', String(SW5E_INFO_PAGE));
+        const r = await fetch(u.toString());
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || r.statusText);
+        const items = data.items || [];
+        sw5eInfoBrowse.total = data.total || 0;
+        for (const it of items) {
+            const wrap = document.createElement('details');
+            wrap.style.cssText = 'margin-bottom: 10px; border: 1px solid #444; border-radius: 6px; padding: 8px 10px; background: rgba(0,0,0,0.25);';
+            const sum = document.createElement('summary');
+            sum.style.cssText = 'cursor: pointer; font-weight: 600; color: #4a9eff; display: flex; align-items: center; gap: 8px;';
+            const j = it.json != null ? it.json : {};
+            const iconU = safeSw5eCompendiumIconUrl(j._icon_url_app);
+            if (iconU) {
+                const im = document.createElement('img');
+                im.src = iconU;
+                im.alt = '';
+                im.loading = 'lazy';
+                im.style.cssText = 'width:28px;height:28px;object-fit:contain;border-radius:4px;flex-shrink:0;border:1px solid #333;';
+                sum.appendChild(im);
+            }
+            const lab = document.createElement('span');
+            lab.textContent = it.name || it.id || 'Entry';
+            sum.appendChild(lab);
+            const pre = document.createElement('pre');
+            pre.style.cssText =
+                'margin: 10px 0 0 0; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; color: #ccc;';
+            pre.textContent = JSON.stringify(it.json != null ? it.json : {}, null, 2);
+            wrap.appendChild(sum);
+            wrap.appendChild(pre);
+            listEl.appendChild(wrap);
+        }
+        sw5eInfoBrowse.offset += items.length;
+        if (sw5eInfoBrowse.offset >= sw5eInfoBrowse.total || items.length === 0) sw5eInfoBrowse.done = true;
+        if (footer) {
+            footer.textContent = sw5eInfoBrowse.done
+                ? `Showing all ${sw5eInfoBrowse.offset} of ${sw5eInfoBrowse.total}`
+                : `Loaded ${sw5eInfoBrowse.offset} / ${sw5eInfoBrowse.total} — scroll for more`;
+        }
+    } catch (e) {
+        console.error(e);
+        if (footer) footer.textContent = 'Error: ' + (e.message || e);
+    } finally {
+        sw5eInfoBrowse.loading = false;
+    }
+}
+
+function resetSw5eInfoBrowse(cat) {
+    sw5eInfoBrowse = { cat, offset: 0, total: 0, loading: false, done: false };
+    const listEl = document.getElementById('sw5eInfoList');
+    const footer = document.getElementById('sw5eInfoFooter');
+    if (listEl) listEl.innerHTML = '';
+    if (footer) footer.textContent = cat ? 'Loading…' : '';
+    if (cat) loadMoreSw5eEntries();
+}
+
+function renderSw5eCompendiumSection() {
+    const content = document.getElementById('infoContent');
+    if (!content) return;
+    content.innerHTML = '<div style="text-align:center;padding:32px;opacity:0.8;">⏳ Loading SW5e compendium stats…</div>';
+    fetch('/api/compendium/sw5e/categories')
+        .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+        .then(({ ok, j }) => {
+            if (!ok) throw new Error(j.error || 'categories request failed');
+            const cats = j.categories || [];
+            const totalRows = j.total_rows || 0;
+            const opts = cats
+                .map(
+                    (c) =>
+                        `<option value="${c.id}">${escapeHtml(c.label)} (${escapeHtml(String(c.count))})</option>`
+                )
+                .join('');
+            const emptyHint =
+                totalRows === 0
+                    ? `<p style="color:#ffaa44;font-size:13px;margin-bottom:12px;">No rows imported yet. From the repo root, run <code style="background:#222;padding:2px 6px;border-radius:4px;">node scripts/import-sw5e-packs.mjs --packs \"…/starwars52data/sw5e/packs\"</code> then <code style="background:#222;padding:2px 6px;border-radius:4px;">node scripts/sync-sw5e-icons.mjs --packs \"…/starwars52data/sw5e/packs\"</code>, then restart the Rust server.</p>`
+                    : '';
+            content.innerHTML = `
+                <div style="margin-bottom:16px;">
+                    <h3 style="color:#4a9eff;margin-bottom:10px;">📚 SW5e compendium (database)</h3>
+                    ${emptyHint}
+                    <p style="opacity:0.85;margin-bottom:10px;font-size:13px;">Data loads from <code style="background:#222;padding:2px 6px;border-radius:4px;">static/data/sw5e_compendium/</code> when the server starts (Star Wars SQLite). Scroll the pane below to load more rows.</p>
+                    <label style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                        <span style="opacity:0.9;">Category</span>
+                        <select id="sw5eInfoCategorySelect" style="flex:1;min-width:200px;padding:8px;background:#1a1a2e;color:#eee;border:1px solid #444;border-radius:5px;">${opts}</select>
+                        <button type="button" id="sw5eInfoReloadBtn" style="padding:8px 14px;background:#4a9eff;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:bold;">↻ Reload list</button>
+                    </label>
+                    <p id="sw5eInfoMeta" style="margin-top:8px;font-size:12px;opacity:0.75;">Total rows in DB (all categories): <strong>${escapeHtml(String(totalRows))}</strong></p>
+                </div>
+                <div id="sw5eInfoScroll" onscroll="onSw5eInfoScroll(event)" style="max-height:48vh;overflow-y:auto;border:1px solid #333;border-radius:8px;padding:10px;background:#111119;">
+                    <div id="sw5eInfoList"></div>
+                </div>
+                <p id="sw5eInfoFooter" style="margin-top:10px;font-size:12px;opacity:0.8;"></p>
+            `;
+            const sel = document.getElementById('sw5eInfoCategorySelect');
+            const btn = document.getElementById('sw5eInfoReloadBtn');
+            const pickInitial = () => {
+                let v = (sel && sel.value) || '';
+                if (!v && cats.length) {
+                    const firstNonZero = cats.find((c) => c.count > 0);
+                    v = (firstNonZero && firstNonZero.id) || cats[0].id;
+                    if (sel) sel.value = v;
+                }
+                return v;
+            };
+            const run = () => resetSw5eInfoBrowse(pickInitial());
+            if (sel) sel.addEventListener('change', run);
+            if (btn) btn.addEventListener('click', run);
+            run();
+        })
+        .catch((e) => {
+            console.error(e);
+            content.innerHTML = `<div style="padding:24px;color:#f88;">Could not load SW5e compendium API: ${escapeHtml(e.message || String(e))}</div>`;
+        });
 }
 
 function showConditionTooltip(conditionName, description, event) {
@@ -13749,10 +14412,17 @@ function formatSpellTooltip(spell) {
     const school = spell.school || '';
     const color = spell.power_type === 'tech' ? '#00d4ff' : spell.power_type === 'force' ? '#ff00ff' : '#aa88ff';
     const icon = spell.power_type === 'tech' ? '⚡' : spell.power_type === 'force' ? '✨' : '✨';
-    
+    const packIcon =
+        isStarWars && typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(spell._icon_url_app) : '';
+
     let html = `
         <div style="text-align: center; margin-bottom: 10px; border-bottom: 2px solid ${color}; padding-bottom: 8px;">
-            <div style="font-size: 18px; font-weight: bold; color: ${color};">${icon} ${spell.name}</div>
+            ${
+                packIcon
+                    ? `<div style="margin-bottom:6px;"><img src="${escapeHtml(packIcon)}" alt="" style="max-width:72px;max-height:72px;object-fit:contain;border-radius:6px;border:1px solid ${color};" loading="lazy" /></div>`
+                    : ''
+            }
+            <div style="font-size: 18px; font-weight: bold; color: ${color};">${icon} ${escapeHtml(spell.name)}</div>
             <div style="font-size: 12px; opacity: 0.8;">${levelText} ${isStarWars ? powerType : school}</div>
         </div>
     `;
@@ -13791,6 +14461,10 @@ function formatSpellTooltip(spell) {
         meta.push(`<strong>Concentration:</strong> ${escapeHtml(concText)}`);
     }
     if (spell.power_type === 'force' && spell.force_alignment) meta.push(`<strong>Alignment:</strong> ${escapeHtml(spell.force_alignment)}`);
+    if (isStarWars && spell.school) meta.push(`<strong>School:</strong> ${escapeHtml(spell.school)}`);
+    if (isStarWars && spell.power_properties)
+        meta.push(`<strong>Properties:</strong> ${escapeHtml(spell.power_properties)}`);
+    if (isStarWars && spell.saving_throw) meta.push(`<strong>Save:</strong> ${escapeHtml(spell.saving_throw)}`);
     if (spell.prerequisite) meta.push(`<strong>Prerequisite:</strong> ${escapeHtml(spell.prerequisite)}`);
     if (spell.source) meta.push(`<strong>Source:</strong> ${escapeHtml(spell.source)}`);
     
@@ -17100,16 +17774,19 @@ function buildDetailedCharacterSheet(char, charData) {
                 <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
             allTechPowers.forEach(powerName => {
                 if (!powerName) return;
-                const lookup = (techPowersCache && powerName) ? techPowersCache[powerName.toLowerCase()] : null;
+                const lookup =
+                    typeof findTechPowerInCacheGlobal === 'function' ? findTechPowerInCacheGlobal(powerName) : null;
                 const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
-                    ? (lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level))
+                    ? lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level)
                     : null;
-                const baseLabel = levelDisplay
-                    ? `${powerName} (${levelDisplay})`
-                    : powerName;
-                const escapedPower = escapeHtml(baseLabel);
+                const baseLabel = levelDisplay ? `${powerName} (${levelDisplay})` : powerName;
                 const attrPower = powerName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
-                html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 6px 12px; background: rgba(0,212,255,0.12); border-radius: 4px; font-size: 12px; border: 1px solid rgba(0,212,255,0.35); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(0,212,255,0.25)'; this.style.borderColor='#00d4ff'" onmouseleave="this.style.background='rgba(0,212,255,0.12)'; this.style.borderColor='rgba(0,212,255,0.35)'">${escapedPower}</div>`;
+                const ic =
+                    lookup && typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(lookup._icon_url_app) : '';
+                const thumb = ic
+                    ? `<img src="${escapeHtml(ic)}" alt="" style="width:16px;height:16px;object-fit:contain;vertical-align:middle;margin-right:4px;border-radius:3px;" loading="lazy" />`
+                    : '';
+                html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 6px 12px; background: rgba(0,212,255,0.12); border-radius: 4px; font-size: 12px; border: 1px solid rgba(0,212,255,0.35); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(0,212,255,0.25)'; this.style.borderColor='#00d4ff'" onmouseleave="this.style.background='rgba(0,212,255,0.12)'; this.style.borderColor='rgba(0,212,255,0.35)'">${thumb}${escapeHtml(baseLabel)}</div>`;
             });
             html += `</div></div>`;
         }
@@ -17120,16 +17797,19 @@ function buildDetailedCharacterSheet(char, charData) {
                 <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
             allForcePowers.forEach(powerName => {
                 if (!powerName) return;
-                const lookup = (forcePowersCache && powerName) ? forcePowersCache[powerName.toLowerCase()] : null;
+                const lookup =
+                    typeof findForcePowerInCacheGlobal === 'function' ? findForcePowerInCacheGlobal(powerName) : null;
                 const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
-                    ? (lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level))
+                    ? lookup.level_label || (lookup.level === 0 ? 'At-will' : lookup.level)
                     : null;
-                const baseLabel = levelDisplay
-                    ? `${powerName} (${levelDisplay})`
-                    : powerName;
-                const escapedPower = baseLabel.replace(/'/g, "&apos;").replace(/"/g, "&quot;");
+                const baseLabel = levelDisplay ? `${powerName} (${levelDisplay})` : powerName;
                 const attrPower = powerName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
-                html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,0,255,0.2); border-radius: 3px; font-size: 12px; border: 1px solid rgba(255,0,255,0.4); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,0,255,0.4)'; this.style.borderColor='#ff00ff'" onmouseleave="this.style.background='rgba(255,0,255,0.2)'; this.style.borderColor='rgba(255,0,255,0.4)'">${escapedPower}</div>`;
+                const ic =
+                    lookup && typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(lookup._icon_url_app) : '';
+                const thumb = ic
+                    ? `<img src="${escapeHtml(ic)}" alt="" style="width:16px;height:16px;object-fit:contain;vertical-align:middle;margin-right:4px;border-radius:3px;" loading="lazy" />`
+                    : '';
+                html += `<div onmouseover="showSpellTooltip('${attrPower}', event)" onmouseout="hideSpellTooltip()" style="padding: 5px 10px; background: rgba(255,0,255,0.2); border-radius: 3px; font-size: 12px; border: 1px solid rgba(255,0,255,0.4); cursor: help; transition: all 0.2s;" onmouseenter="this.style.background='rgba(255,0,255,0.4)'; this.style.borderColor='#ff00ff'" onmouseleave="this.style.background='rgba(255,0,255,0.2)'; this.style.borderColor='rgba(255,0,255,0.4)'">${thumb}${escapeHtml(baseLabel)}</div>`;
             });
             html += `</div></div>`;
         }
@@ -17914,54 +18594,185 @@ function syncCharactersWithServer() {
     });
 }
 
+/** Cache row for tech / force powers (SQLite export or static JSON). */
+function normalizeStarWarsPowerForCache(raw, defaultPowerType) {
+    if (!raw || !raw.name) return null;
+    const key = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
+    const levelInfo = normalizePowerLevel(raw.level, raw.category || raw.power_type || raw.type);
+    const castingTime = raw.casting_time || raw.casting_period || raw.castingPeriod || raw.castingTime || '';
+    const description = raw.description || raw.effect || '';
+    const pt =
+        defaultPowerType === 'force'
+            ? 'force'
+            : raw.power_type === 'tech' || raw.power_type === 'force'
+              ? raw.power_type
+              : raw.power_type || raw.type || raw.classification || 'tech';
+    return {
+        key,
+        value: {
+            name: raw.name,
+            level: levelInfo.value,
+            level_label: levelInfo.label,
+            casting_time: castingTime,
+            range: raw.range || '',
+            duration: raw.duration || '',
+            concentration: raw.concentration || '',
+            components: raw.components || '',
+            prerequisite: raw.prerequisite || '',
+            source: raw.source || '',
+            force_alignment: raw.force_alignment || raw.alignment || '',
+            damage: raw.damage || '',
+            saving_throw: raw.saving_throw || '',
+            school: raw.school || '',
+            power_properties: raw.power_properties || '',
+            description,
+            desc: description ? description.replace(/\n/g, '<br>') : '',
+            higher_levels: raw.higher_levels || '',
+            power_type: pt,
+            source_url: raw.source_url || raw.url || '',
+            _icon_url_app: deriveStarWarsPackIconAppUrl(raw) || (typeof raw._icon_url_app === 'string' ? raw._icon_url_app.trim() : '') || '',
+            _fvtt_id: raw._fvtt_id || '',
+            _stable_id: raw._stable_id || '',
+            _imported_from: raw._imported_from || ''
+        }
+    };
+}
+
+function applyStarWarsPowerRowsToCache(powers, cacheObj, defaultPowerType) {
+    powers.forEach(raw => {
+        const n = normalizeStarWarsPowerForCache(raw, defaultPowerType);
+        if (n) cacheObj[n.key] = n.value;
+    });
+}
+
+function refreshUiAfterPowerCacheReload() {
+    if (currentViewingCharacter && selectedStyle === 'starwars') renderCharacterSheetContent();
+    try {
+        populatePlayerActionBar();
+    } catch (e) {}
+}
+
+/** SQLite hydrate may omit `_icon_url_app`; overlay from bundled pack JSON so action-bar icons match SW5e repo data. */
+async function mergeTechPowerIconsFromStaticCompendiumJson(cacheObj) {
+    if (!cacheObj || typeof cacheObj !== 'object') return 0;
+    try {
+        const r = await fetch('/static/data/sw5e_compendium/techpowers_from_packs.json', { cache: 'no-cache' });
+        if (!r.ok) return 0;
+        const arr = await r.json();
+        if (!Array.isArray(arr)) return 0;
+        const byName = {};
+        for (let i = 0; i < arr.length; i++) {
+            const raw = arr[i];
+            if (!raw || !raw.name) continue;
+            const k = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
+            let icon = typeof deriveStarWarsPackIconAppUrl === 'function' ? deriveStarWarsPackIconAppUrl(raw) : '';
+            if (!icon && typeof raw._icon_url_app === 'string') icon = raw._icon_url_app.trim();
+            const safe = typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(icon || '') : '';
+            if (safe) byName[k] = safe;
+        }
+        let patched = 0;
+        const keys = Object.keys(cacheObj);
+        for (let j = 0; j < keys.length; j++) {
+            const key = keys[j];
+            const row = cacheObj[key];
+            if (!row) continue;
+            const existing = typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(row._icon_url_app || '') : '';
+            if (existing) continue;
+            const nm = typeof row.name === 'string' ? row.name.toLowerCase().trim().replace(/\s+/g, ' ') : '';
+            const fill = byName[key] || (nm ? byName[nm] : '');
+            if (fill) {
+                row._icon_url_app = fill;
+                patched++;
+            }
+        }
+        if (patched > 0) console.log(`✅ Merged ${patched} tech power icon URLs from techpowers_from_packs.json`);
+        return patched;
+    } catch (e) {
+        console.warn('mergeTechPowerIconsFromStaticCompendiumJson:', e && e.message);
+        return 0;
+    }
+}
+
+async function mergeForcePowerIconsFromStaticCompendiumJson(cacheObj) {
+    if (!cacheObj || typeof cacheObj !== 'object') return 0;
+    try {
+        const r = await fetch('/static/data/sw5e_compendium/force_powers_from_packs.json', { cache: 'no-cache' });
+        if (!r.ok) return 0;
+        const arr = await r.json();
+        if (!Array.isArray(arr)) return 0;
+        const byName = {};
+        for (let i = 0; i < arr.length; i++) {
+            const raw = arr[i];
+            if (!raw || !raw.name) continue;
+            const k = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
+            let icon = typeof deriveStarWarsPackIconAppUrl === 'function' ? deriveStarWarsPackIconAppUrl(raw) : '';
+            if (!icon && typeof raw._icon_url_app === 'string') icon = raw._icon_url_app.trim();
+            const safe = typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(icon || '') : '';
+            if (safe) byName[k] = safe;
+        }
+        let patched = 0;
+        const keys = Object.keys(cacheObj);
+        for (let j = 0; j < keys.length; j++) {
+            const key = keys[j];
+            const row = cacheObj[key];
+            if (!row) continue;
+            const existing = typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(row._icon_url_app || '') : '';
+            if (existing) continue;
+            const nm = typeof row.name === 'string' ? row.name.toLowerCase().trim().replace(/\s+/g, ' ') : '';
+            const fill = byName[key] || (nm ? byName[nm] : '');
+            if (fill) {
+                row._icon_url_app = fill;
+                patched++;
+            }
+        }
+        if (patched > 0) console.log(`✅ Merged ${patched} force power icon URLs from force_powers_from_packs.json`);
+        return patched;
+    } catch (e) {
+        console.warn('mergeForcePowerIconsFromStaticCompendiumJson:', e && e.message);
+        return 0;
+    }
+}
+
 async function loadTechPowers(force = false) {
     if (techPowersLoaded && !force) return;
+    async function loadFromExport() {
+        try {
+            const u = `${window.location.origin}/api/compendium/sw5e/category-export?category=tech_powers`;
+            const r = await fetch(u, { cache: 'no-cache' });
+            if (!r.ok) return false;
+            const data = await r.json();
+            const rows = data && data.rows;
+            if (!Array.isArray(rows) || rows.length === 0) return false;
+            techPowersCache = {};
+            applyStarWarsPowerRowsToCache(rows, techPowersCache, 'tech');
+            await mergeTechPowerIconsFromStaticCompendiumJson(techPowersCache);
+            techPowersLoaded = Object.keys(techPowersCache).length > 0;
+            console.log(`✅ Loaded ${Object.keys(techPowersCache).length} tech powers from SQLite (category-export)`);
+            refreshUiAfterPowerCacheReload();
+            return techPowersLoaded;
+        } catch (e) {
+            console.warn('⚠️ Tech powers SQLite export unavailable:', e && e.message);
+            return false;
+        }
+    }
+    if (await loadFromExport()) return;
+
     const candidates = [
+        '/static/data/sw5e_compendium/techpowers_from_packs.json',
         '/data/techpowers.json',
-        '/data/tech_powers.json',
+        '/data/tech_powers.json'
     ];
     let lastError = null;
     for (const url of candidates) {
         try {
             const response = await fetch(url, { cache: 'no-cache' });
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const powers = await response.json();
             techPowersCache = {};
-            powers.forEach(raw => {
-                if (!raw || !raw.name) return;
-                // Normalize key: lowercase, trim, normalize spaces (same as lookup)
-                const key = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
-                const levelInfo = normalizePowerLevel(raw.level, raw.category || raw.power_type || raw.type);
-                const castingTime = raw.casting_time || raw.casting_period || raw.castingPeriod || raw.castingTime || '';
-                const description = raw.description || raw.effect || '';
-                const normalized = {
-                    name: raw.name,
-                    level: levelInfo.value,
-                    level_label: levelInfo.label,
-                    casting_time: castingTime,
-                    range: raw.range || '',
-                    duration: raw.duration || '',
-                    concentration: raw.concentration || '',
-                    components: raw.components || '',
-                    damage: raw.damage || '',
-                    saving_throw: raw.saving_throw || '',
-                    source: raw.source || '',
-                    description,
-                    desc: description ? description.replace(/\n/g, '<br>') : '',
-                    higher_levels: raw.higher_levels || '',
-                    power_type: raw.power_type || raw.type || raw.classification || 'tech',
-                    source_url: raw.source_url || raw.url || '',
-                };
-                techPowersCache[key] = normalized;
-            });
-            techPowersLoaded = true;
+            applyStarWarsPowerRowsToCache(powers, techPowersCache, 'tech');
+            techPowersLoaded = Object.keys(techPowersCache).length > 0;
             console.log(`✅ Loaded ${Object.keys(techPowersCache).length} tech powers from ${url}`);
-            console.log(`📋 Sample tech power keys:`, Object.keys(techPowersCache).slice(0, 5));
-            if (currentViewingCharacter && selectedStyle === 'starwars') {
-                renderCharacterSheetContent();
-            }
+            refreshUiAfterPowerCacheReload();
             return;
         } catch (err) {
             lastError = err;
@@ -17969,59 +18780,45 @@ async function loadTechPowers(force = false) {
         }
     }
     techPowersLoaded = false;
-    if (lastError) {
-        console.warn('⚠️ No tech power sources succeeded:', lastError.message || lastError);
-    }
+    if (lastError) console.warn('⚠️ No tech power sources succeeded:', lastError.message || lastError);
 }
 
 async function loadForcePowers(force = false) {
     if (forcePowersLoaded && !force) return;
-    const candidates = [
-        '/data/force_powers.json',
-    ];
+    async function loadFromExport() {
+        try {
+            const u = `${window.location.origin}/api/compendium/sw5e/category-export?category=force_powers`;
+            const r = await fetch(u, { cache: 'no-cache' });
+            if (!r.ok) return false;
+            const data = await r.json();
+            const rows = data && data.rows;
+            if (!Array.isArray(rows) || rows.length === 0) return false;
+            forcePowersCache = {};
+            applyStarWarsPowerRowsToCache(rows, forcePowersCache, 'force');
+            await mergeForcePowerIconsFromStaticCompendiumJson(forcePowersCache);
+            forcePowersLoaded = Object.keys(forcePowersCache).length > 0;
+            console.log(`✅ Loaded ${Object.keys(forcePowersCache).length} force powers from SQLite (category-export)`);
+            refreshUiAfterPowerCacheReload();
+            return forcePowersLoaded;
+        } catch (e) {
+            console.warn('⚠️ Force powers SQLite export unavailable:', e && e.message);
+            return false;
+        }
+    }
+    if (await loadFromExport()) return;
+
+    const candidates = ['/static/data/sw5e_compendium/force_powers_from_packs.json', '/data/force_powers.json'];
     let lastError = null;
     for (const url of candidates) {
         try {
             const response = await fetch(url, { cache: 'no-cache' });
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const powers = await response.json();
             forcePowersCache = {};
-            powers.forEach(raw => {
-                if (!raw || !raw.name) return;
-                // Normalize key: lowercase, trim, normalize spaces (same as lookup)
-                const key = raw.name.toLowerCase().trim().replace(/\s+/g, ' ');
-                const levelInfo = normalizePowerLevel(raw.level, raw.category || raw.power_type || raw.type);
-                const castingTime = raw.casting_time || raw.casting_period || raw.castingPeriod || raw.castingTime || '';
-                const description = raw.description || raw.effect || '';
-                const normalized = {
-                    name: raw.name,
-                    level: levelInfo.value,
-                    level_label: levelInfo.label,
-                    casting_time: castingTime,
-                    range: raw.range || '',
-                    duration: raw.duration || '',
-                    concentration: raw.concentration || '',
-                    components: raw.components || '',
-                    prerequisite: raw.prerequisite || '',
-                    source: raw.source || '',
-                    force_alignment: raw.force_alignment || raw.alignment || '',
-                    description,
-                    desc: description ? description.replace(/\n/g, '<br>') : '',
-                    higher_levels: raw.higher_levels || '',
-                    damage: raw.damage || '',
-                    saving_throw: raw.saving_throw || '',
-                    power_type: 'force',
-                    source_url: raw.source_url || raw.url || '',
-                };
-                forcePowersCache[key] = normalized;
-            });
-            forcePowersLoaded = true;
+            applyStarWarsPowerRowsToCache(powers, forcePowersCache, 'force');
+            forcePowersLoaded = Object.keys(forcePowersCache).length > 0;
             console.log(`✅ Loaded ${Object.keys(forcePowersCache).length} force powers from ${url}`);
-            if (currentViewingCharacter && selectedStyle === 'starwars') {
-                renderCharacterSheetContent();
-            }
+            refreshUiAfterPowerCacheReload();
             return;
         } catch (err) {
             lastError = err;
@@ -18029,9 +18826,7 @@ async function loadForcePowers(force = false) {
         }
     }
     forcePowersLoaded = false;
-    if (lastError) {
-        console.warn('⚠️ No force power sources succeeded:', lastError.message || lastError);
-    }
+    if (lastError) console.warn('⚠️ No force power sources succeeded:', lastError.message || lastError);
 }
 
 // ==================== EQUIPMENT & ITEMS LOADING ====================
@@ -18631,6 +19426,12 @@ function adjustTooltipPosition(tooltip, event) {
 
 function formatTechPowerTooltip(power) {
     const lines = [];
+    const packIcon = typeof safeSw5eCompendiumIconUrl === 'function' ? safeSw5eCompendiumIconUrl(power._icon_url_app) : '';
+    if (packIcon) {
+        lines.push(
+            `<div style="text-align:center;margin-bottom:6px;"><img src="${escapeHtml(packIcon)}" alt="" style="max-width:72px;max-height:72px;object-fit:contain;border-radius:6px;border:1px solid rgba(0,212,255,.35);" loading="lazy" /></div>`
+        );
+    }
     lines.push(`<div style="font-size: 16px; font-weight: bold; color: #00d4ff;">⚡ ${escapeHtml(power.name)}</div>`);
     const rawLevelLabel = power.level_label || power.level;
     if (rawLevelLabel !== undefined && rawLevelLabel !== null && rawLevelLabel !== '') {
@@ -18653,6 +19454,9 @@ function formatTechPowerTooltip(power) {
     if (power.duration) meta.push(`<strong>Duration:</strong> ${escapeHtml(power.duration)}`);
     if (power.concentration) meta.push(`<strong>Concentration:</strong> ${escapeHtml(power.concentration)}`);
     if (power.components) meta.push(`<strong>Components:</strong> ${escapeHtml(power.components)}`);
+    if (power.school) meta.push(`<strong>School:</strong> ${escapeHtml(power.school)}`);
+    if (power.power_properties) meta.push(`<strong>Properties:</strong> ${escapeHtml(power.power_properties)}`);
+    if (power.prerequisite) meta.push(`<strong>Prerequisite:</strong> ${escapeHtml(power.prerequisite)}`);
     if (power.saving_throw) meta.push(`<strong>Save:</strong> ${escapeHtml(power.saving_throw)}`);
     if (power.damage) meta.push(`<strong>Damage:</strong> ${escapeHtml(power.damage)}`);
     if (meta.length > 0) {

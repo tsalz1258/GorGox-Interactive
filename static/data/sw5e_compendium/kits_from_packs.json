@@ -1,0 +1,1296 @@
+[
+  {
+    "_stable_id": "kit:misc:alchemists-kit",
+    "_fvtt_id": "9DWrsRqwXfHN47Nk",
+    "name": "Alchemist's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/alchemists-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 2,
+      "price": {
+        "value": 500,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "alchemistskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "formula": "",
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "weaponType": "",
+      "properties": {}
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/AlchemistSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:archaeologist-kit",
+    "_fvtt_id": "WrJhpfymps4yRBdk",
+    "name": "Archaeologist kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/archaeologist-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 4,
+      "price": {
+        "value": 125,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "archaeologistkit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/ArchaeologistKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:artillerists-kit",
+    "_fvtt_id": "jJ1CiyKVXOlyjn8h",
+    "name": "Artillerist's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/artillerists-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 275,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "artilleristskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/ArtilleristSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:bioanalysis-kit",
+    "_fvtt_id": "fWoNUuZCNLG8W67s",
+    "name": "Bioanalysis kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/bioanalysis-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 3,
+      "price": {
+        "value": 50,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "bioanalysiskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/BioanalysisKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:biochemists-kit",
+    "_fvtt_id": "pq0o4lUKg8Nl08yf",
+    "name": "Biochemist's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/biochemists-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 8,
+      "price": {
+        "value": 500,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "biochemistskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/BiochemistSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:brewers-kit",
+    "_fvtt_id": "OAt131yAvZYPlUmO",
+    "name": "Brewer's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/brewers-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 9,
+      "price": {
+        "value": 200,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "brewerskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/BrewerSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:chefs-kit",
+    "_fvtt_id": "BnhGtUc9G7issUcW",
+    "name": "Chef's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/chefs-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 8,
+      "price": {
+        "value": 70,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "chefskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/ChefSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:demolitions-kit",
+    "_fvtt_id": "gyhyVW4PEUWLpZTL",
+    "name": "Demolitions kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/demolitions-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 4,
+      "price": {
+        "value": 400,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "demolitionskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:disguise-kit",
+    "_fvtt_id": "ChmVrypurts3VY7i",
+    "name": "Disguise kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/disguise-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 3,
+      "price": {
+        "value": 250,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "disguisekit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DisguiseKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:forgery-kit",
+    "_fvtt_id": "ksrKs7yvm7X7CMxA",
+    "name": "Forgery kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/forgery-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 5,
+      "price": {
+        "value": 150,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "forgerykit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/ForgeryKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:mechanics-kit",
+    "_fvtt_id": "NubaMVVv3vNwbtuj",
+    "name": "Mechanic's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/mechanics-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 650,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "mechanicskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/MechanicSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:munitions-kit",
+    "_fvtt_id": "VJL0ue7Bpl3s0MHx",
+    "name": "Munitions kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/munitions-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 425,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "munitionskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/MunitionsKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:poisoners-kit",
+    "_fvtt_id": "ofea5VziX4jBg5So",
+    "name": "Poisoner's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/poisoners-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 2,
+      "price": {
+        "value": 500,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "poisonerskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/PoisonerSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:scavenging-kit",
+    "_fvtt_id": "NVxy5wBSpJcHxPEm",
+    "name": "Scavenging kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/scavenging-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 4,
+      "price": {
+        "value": 75,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "scavengingkit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/ScavengingKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:security-kit",
+    "_fvtt_id": "nqf9reJDGplVaeac",
+    "name": "Security kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/security-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 3,
+      "price": {
+        "value": 650,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "securitykit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/SecurityKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:slicers-kit",
+    "_fvtt_id": "Yonb0zHFV9asPJHq",
+    "name": "Slicer's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/slicers-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 6,
+      "price": {
+        "value": 800,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "slicerskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/SlicerSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:spicers-kit",
+    "_fvtt_id": "NlppEcEGpDVDyPiH",
+    "name": "Spicer's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/spicers-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 4,
+      "price": {
+        "value": 700,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "spicerskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/SpicerSKit.webp"
+  },
+  {
+    "_stable_id": "kit:misc:trappers-kit",
+    "_fvtt_id": "cIfzetKEwhczahBr",
+    "name": "Trapper's kit",
+    "type": "tool",
+    "_kits_group": "",
+    "_imported_from": "kits/trappers-kit.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 300,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "specialist",
+      "baseItem": "trapperskit",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "formula": "",
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "weaponType": "",
+      "properties": {}
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/TrapperSKit.webp"
+  }
+]

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gorgox Interactive (v83)</title>
+    <title>Gorgox Interactive (v113)</title>
     <!-- Required for Three.js examples/jsm/* (OrbitControls, etc.) which import bare "three" -->
     <script type="importmap">
     {
@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=84">
+    <link rel="stylesheet" href="/static/style.css?v=113">
 </head>
 <body>
     <div id="app">
@@ -747,7 +747,7 @@
                 <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; border-bottom: 2px solid #444; padding-bottom: 15px;">
                     <button id="infoBtnConnection" onclick="showInfoSection('connection')" style="background: #4a9eff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#5ab0ff'" onmouseout="this.style.background='#4a9eff'">🔗 Connection</button>
                     <button id="infoBtnConditions" onclick="showInfoSection('conditions')" style="background: #4a9eff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#5ab0ff'" onmouseout="this.style.background='#4a9eff'">⚡ Conditions</button>
-                    <!-- Future info buttons can be added here -->
+                    <button id="infoBtnSw5e" onclick="showInfoSection('sw5e')" style="background: #4a9eff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#5ab0ff'" onmouseout="this.style.background='#4a9eff'">📚 SW5e data</button>
                 </div>
                 
                 <!-- Info Content Area -->
@@ -1029,7 +1029,7 @@
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=17"></script>
-    <script src="/static/app.js?v=99"></script>
+    <script src="/static/app.js?v=118"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

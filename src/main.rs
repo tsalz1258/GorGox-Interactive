@@ -68,6 +68,10 @@ async fn main() -> Result<()> {
     let starwars_db = db::init_db_with_style("starwars").await?;
     tracing::info!("Databases initialized");
 
+    if let Err(e) = db::hydrate_sw5e_compendium_from_disk(&starwars_db).await {
+        tracing::warn!("⚠️ SW5e compendium import from static JSON failed (non-fatal): {}", e);
+    }
+
     // Initialize game state
     let initial_game_state = game_state::GameState::new();
 

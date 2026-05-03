@@ -1,0 +1,1153 @@
+[
+  {
+    "_stable_id": "imp:misc:armormechs-implements",
+    "_fvtt_id": "sjsX3NYk7eZ4udlw",
+    "name": "Armormech's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/armormechs-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 8,
+      "price": {
+        "value": 200,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "armormechsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:armstechs-implements",
+    "_fvtt_id": "Mrwh3CEneCPnPP1T",
+    "name": "Armstech's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/armstechs-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 9,
+      "price": {
+        "value": 250,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "armstechsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:artificers-implements",
+    "_fvtt_id": "w7lWDrGgZeYbwiSH",
+    "name": "Artificer's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/artificers-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 5,
+      "price": {
+        "value": 300,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "artificersimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:artists-implements",
+    "_fvtt_id": "OXlKtbL29bLUluf2",
+    "name": "Artist's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/artists-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 5,
+      "price": {
+        "value": 100,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "artistsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:astrotechs-implements",
+    "_fvtt_id": "RlQ4zlWA7EdohcEh",
+    "name": "Astrotech's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/astrotechs-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 400,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "astrotechsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:audiotechs-implements",
+    "_fvtt_id": "VNto9t3diElKRHWG",
+    "name": "Audiotech's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/audiotechs-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 550,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "audiotechsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:biotechs-implements",
+    "_fvtt_id": "QTg2sCpSdPfyUoCq",
+    "name": "Biotech's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/biotechs-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 6,
+      "price": {
+        "value": 450,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "biotechsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:constructors-implements",
+    "_fvtt_id": "5HKxptQKBFED544u",
+    "name": "Constructor's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/constructors-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 7,
+      "price": {
+        "value": 100,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "constructorsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:cybertechs-implements",
+    "_fvtt_id": "9w7V1PCf2aD4caVP",
+    "name": "Cybertech's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/cybertechs-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 500,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "cybertechsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:gadgeteers-implements",
+    "_fvtt_id": "GJrYc9KQ22o7qTlz",
+    "name": "Gadgeteer's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/gadgeteers-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 7,
+      "price": {
+        "value": 350,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "gadgeteersimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:geneticists-implements",
+    "_fvtt_id": "80xuLufR1m7kpNRs",
+    "name": "Geneticist's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/geneticists-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 900,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "geneticistsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:jewelers-implements",
+    "_fvtt_id": "EYpkyPlywQaH9Ivy",
+    "name": "Jeweler's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/jewelers-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 250,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "jewelersimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:surveyors-implements",
+    "_fvtt_id": "SvureMOX5qo6LqGt",
+    "name": "Surveyor's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/surveyors-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 6,
+      "price": {
+        "value": 500,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "surveyorsimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:synthweavers-implements",
+    "_fvtt_id": "uP1rZHmbOmg8BUaX",
+    "name": "Synthweaver's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/synthweavers-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 2,
+      "price": {
+        "value": 250,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "synthweaversimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:tinkers-implements",
+    "_fvtt_id": "IkmQFQjGc4xq0Czd",
+    "name": "Tinker's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/tinkers-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "PHB",
+      "quantity": 1,
+      "weight": 0,
+      "price": {
+        "value": 500,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "tinkersimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "properties": {},
+      "equiped": false,
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "formula": "",
+      "weaponType": ""
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  },
+  {
+    "_stable_id": "imp:misc:writers-implements",
+    "_fvtt_id": "tkJEw4ZB5EbFJHPG",
+    "name": "Writer's implements",
+    "type": "tool",
+    "_implements_group": "",
+    "_imported_from": "implements/writers-implements.json",
+    "description": "",
+    "system": {
+      "description": {
+        "value": null,
+        "chat": "",
+        "unidentified": ""
+      },
+      "requirements": "",
+      "source": "WH",
+      "quantity": 1,
+      "weight": 3,
+      "price": {
+        "value": 200,
+        "denomination": "gc"
+      },
+      "attunement": 0,
+      "equipped": false,
+      "rarity": "",
+      "identified": true,
+      "isCargo": false,
+      "toolType": "artisan",
+      "baseItem": "writersimplements",
+      "ability": "int",
+      "chatFlavor": "",
+      "proficient": null,
+      "bonus": "",
+      "activation": {
+        "type": "action",
+        "cost": 1,
+        "condition": ""
+      },
+      "duration": {
+        "value": null,
+        "units": ""
+      },
+      "target": {},
+      "range": {},
+      "uses": {
+        "value": null,
+        "max": null,
+        "per": null
+      },
+      "consume": {},
+      "actionType": "",
+      "attackBonus": 0,
+      "critical": null,
+      "damage": {
+        "parts": [],
+        "versatile": ""
+      },
+      "formula": "",
+      "save": {},
+      "armor": {},
+      "hp": {
+        "value": 0,
+        "max": 0,
+        "dt": null,
+        "conditions": ""
+      },
+      "weaponType": "",
+      "properties": {}
+    },
+    "_icon_url_app": "/static/sw5e-assets/packs/Icons/Kit/DemolitionsKit.webp"
+  }
+]
