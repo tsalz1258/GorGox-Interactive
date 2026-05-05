@@ -1438,4 +1438,72 @@ body.player-action-bar-visible .main-container {
     white-space: nowrap;
 }
 
+/* Meshy generation progress (indeterminate — server holds connection until Meshy finishes) */
+.meshy-sidebar-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+}
+.meshy-progress-wrap {
+    width: 100%;
+}
+.meshy-progress-wrap-modal {
+    margin-top: 10px;
+}
+.meshy-progress-track {
+    width: 100%;
+    height: 8px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    border: 1px solid rgba(107, 76, 255, 0.25);
+}
+.meshy-progress-indeterminate {
+    height: 100%;
+    width: 42%;
+    border-radius: 6px;
+    background: linear-gradient(90deg, rgba(107, 76, 255, 0.5), #a78bfa, rgba(107, 76, 255, 0.65));
+    animation: meshy-progress-slide 1.1s ease-in-out infinite;
+    box-shadow: 0 0 12px rgba(167, 139, 250, 0.35);
+}
+@keyframes meshy-progress-slide {
+    0% {
+        transform: translateX(-120%);
+    }
+    100% {
+        transform: translateX(280%);
+    }
+}
+.meshy-progress-caption {
+    font-size: 11px;
+    margin: 8px 0 0 0;
+    opacity: 0.82;
+    color: #c8cce8;
+    line-height: 1.35;
+}
+#meshySidebarOpenBtn.meshy-sidebar-open-busy {
+    opacity: 0.88;
+    cursor: progress;
+}
+
+.meshy-progress-indet-visible {
+    display: block;
+}
+.meshy-progress-meter {
+    width: 100%;
+    height: 10px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(107, 76, 255, 0.35);
+    background: rgba(0, 0, 0, 0.35);
+    accent-color: #a78bfa;
+}
+.meshy-progress-pct-line {
+    font-size: 11px;
+    margin-top: 4px;
+    opacity: 0.88;
+    color: #c8cce8;
+    font-variant-numeric: tabular-nums;
+}
 

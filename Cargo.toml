@@ -30,6 +30,8 @@ anyhow = "1.0"
 thiserror = "1.0"
 base64 = "0.21"
 futures-util = "0.3"
+bytes = "1.5"
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Logging
 tracing = "0.1"

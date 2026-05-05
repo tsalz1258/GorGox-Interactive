@@ -3,6 +3,7 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::Value;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 
 const MESHY_API_BASE: &str = "https://api.meshy.ai";
 
@@ -68,8 +69,24 @@ pub async fn portrait_to_meshy_image_url(
     Ok(format!("data:{};base64,{}", mime, enc))
 }
 
+fn meshy_progress_to_u8(v: &Value) -> Option<u8> {
+    if let Some(u) = v.as_u64() {
+        return Some((u.min(100)) as u8);
+    }
+    if let Some(i) = v.as_i64() {
+        return Some(i.clamp(0, 100) as u8);
+    }
+    v.as_f64()
+        .map(|f| f.round().clamp(0.0, 100.0) as u8)
+}
+
 /// POST image-to-3d, poll until `SUCCEEDED`, download GLB bytes.
-pub async fn image_to_3d_download_glb(api_key: &str, image_url: String) -> Result<Vec<u8>, String> {
+/// Optional `progress_tx` receives Meshy-reported completion percent (0–100) during polling.
+pub async fn image_to_3d_download_glb(
+    api_key: &str,
+    image_url: String,
+    progress_tx: Option<UnboundedSender<u8>>,
+) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .build()
@@ -106,10 +123,16 @@ pub async fn image_to_3d_download_glb(api_key: &str, image_url: String) -> Resul
         )
     })?;
 
+    if let Some(tx) = &progress_tx {
+        let _ = tx.send(0);
+    }
+
     let poll_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
+
+    let mut last_sent_progress: Option<u8> = None;
 
     for attempt in 0..120 {
         if attempt > 0 {
@@ -129,8 +152,20 @@ pub async fn image_to_3d_download_glb(api_key: &str, image_url: String) -> Resul
             .and_then(|s| s.as_str())
             .unwrap_or("UNKNOWN");
 
+        if let Some(pr) = gv.get("progress").and_then(meshy_progress_to_u8) {
+            if last_sent_progress != Some(pr) {
+                last_sent_progress = Some(pr);
+                if let Some(tx) = &progress_tx {
+                    let _ = tx.send(pr);
+                }
+            }
+        }
+
         match st {
             "SUCCEEDED" => {
+                if let Some(tx) = &progress_tx {
+                    let _ = tx.send(100);
+                }
                 let glb_url = gv
                     .get("model_urls")
                     .and_then(|m| m.get("glb"))
@@ -154,7 +189,7 @@ pub async fn image_to_3d_download_glb(api_key: &str, image_url: String) -> Resul
                 return Err(format!("Meshy task {}: {}", st, msg));
             }
             "PENDING" | "IN_PROGRESS" => {
-                if let Some(pr) = gv.get("progress").and_then(|x| x.as_i64()) {
+                if let Some(pr) = gv.get("progress").and_then(meshy_progress_to_u8) {
                     tracing::info!("Meshy task {} progress {}%", task_id, pr);
                 }
                 continue;

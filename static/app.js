@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v123'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v133'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -821,6 +821,69 @@ window.notifyArenaTokenMovedFrom3d = notifyArenaTokenMovedFrom3d;
 /** DM: generate arena GLB from portrait via Meshy ([docs](https://docs.meshy.ai/api/image-to-3d)); server needs `MESHY_API_KEY`. */
 let meshyArenaKind = 'character';
 let meshyArenaSelectedId = null;
+/** True while POST /api/meshy-generate-arena-stl is in flight (indeterminate progress UI). */
+let meshyGenerationBusy = false;
+
+function updateMeshyProgressUi() {
+    const show = meshyGenerationBusy;
+    const sidebar = document.getElementById('meshySidebarProgressWrap');
+    const modal = document.getElementById('meshyArenaProgressWrap');
+    const btn = document.getElementById('meshySidebarOpenBtn');
+    if (sidebar) {
+        sidebar.style.display = show ? 'block' : 'none';
+        sidebar.setAttribute('aria-hidden', show ? 'false' : 'true');
+    }
+    if (modal) {
+        modal.style.display = show ? 'block' : 'none';
+        modal.setAttribute('aria-hidden', show ? 'false' : 'true');
+    }
+    if (btn) btn.classList.toggle('meshy-sidebar-open-busy', show);
+}
+
+function setMeshyGenerationBusy(busy) {
+    meshyGenerationBusy = !!busy;
+    updateMeshyProgressUi();
+}
+
+/** Before run / after run: indeterminate bar visible, native meter hidden. */
+function resetMeshyProgressDisplay() {
+    ['meshySidebarProgressIndet', 'meshyArenaProgressIndet'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = '';
+    });
+    ['meshySidebarProgressMeter', 'meshyArenaProgressMeter'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.display = 'none';
+            el.value = 0;
+        }
+    });
+    ['meshySidebarProgressPct', 'meshyArenaProgressPct'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '';
+    });
+}
+
+/** Meshy poll reports 0–100 while generating (final response uses JSON lines stream). */
+function setMeshyProgressPercent(pct) {
+    const n = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+    ['meshySidebarProgressIndet', 'meshyArenaProgressIndet'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+    ['meshySidebarProgressMeter', 'meshyArenaProgressMeter'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.display = 'block';
+            el.value = n;
+        }
+    });
+    const t = n + '%';
+    ['meshySidebarProgressPct', 'meshyArenaProgressPct'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = t;
+    });
+}
 
 /** DB enemy row usable as a Meshy target (templates only — not spawned instances). */
 function isMeshyEnemyDbTemplate(en) {
@@ -853,6 +916,8 @@ function showMeshyArenaModal() {
     if (confirmBtn) confirmBtn.disabled = true;
     updateMeshyArenaTabClasses();
     renderMeshyArenaList();
+    updateMeshyProgressUi();
+    if (!meshyGenerationBusy) resetMeshyProgressDisplay();
     const modal = document.getElementById('meshyArenaModal');
     if (modal) modal.classList.add('active');
 }
@@ -1067,25 +1132,67 @@ async function confirmMeshyArenaGenerate() {
         statusEl.textContent =
             'Calling Meshy (image → 3D). This often takes several minutes — please keep this browser tab open.';
     }
+    setMeshyGenerationBusy(true);
+    resetMeshyProgressDisplay();
 
     try {
         const origin =
             typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : '';
         const res = await fetch(origin + '/api/meshy-generate-arena-stl', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/x-ndjson, application/json',
+            },
             credentials: 'same-origin',
             body: JSON.stringify({ kind: fetchKind, id: String(fetchId) }),
         });
-        let j = {};
-        try {
-            j = await res.json();
-        } catch (_) {}
         if (!res.ok) {
+            let j = {};
+            try {
+                j = await res.json();
+            } catch (_) {}
             throw new Error(j.error || res.statusText || String(res.status));
         }
-        const url = j.url;
-        if (!url) throw new Error('Server did not return a model URL');
+
+        const ct = ((res.headers && res.headers.get('content-type')) || '').toLowerCase();
+        let url = '';
+
+        if (ct.indexOf('ndjson') !== -1 || ct.indexOf('x-ndjson') !== -1) {
+            const reader = res.body && res.body.getReader ? res.body.getReader() : null;
+            if (!reader) throw new Error('Streaming response not readable');
+            const dec = new TextDecoder();
+            let buf = '';
+            while (true) {
+                const chunk = await reader.read();
+                if (chunk.done) break;
+                buf += dec.decode(chunk.value, { stream: true });
+                let nl;
+                while ((nl = buf.indexOf('\n')) >= 0) {
+                    const line = buf.slice(0, nl).trim();
+                    buf = buf.slice(nl + 1);
+                    if (!line) continue;
+                    let row;
+                    try {
+                        row = JSON.parse(line);
+                    } catch (_) {
+                        continue;
+                    }
+                    if (row.error) throw new Error(String(row.error));
+                    if (row.progress != null) setMeshyProgressPercent(row.progress);
+                    if (row.url) url = String(row.url).trim();
+                }
+            }
+            if (!url) throw new Error('Server stream ended without a model URL');
+            setMeshyProgressPercent(100);
+        } else {
+            let j = {};
+            try {
+                j = await res.json();
+            } catch (_) {}
+            url = j.url ? String(j.url).trim() : '';
+            if (!url) throw new Error('Server did not return a model URL');
+        }
 
         if (kind === 'character') {
             setCharacterArenaStlUrl(id, url);
@@ -1103,6 +1210,7 @@ async function confirmMeshyArenaGenerate() {
                 });
                 if (ixE !== -1) enemies[ixE] = updatedA;
                 syncCustomEnemyInstanceActionsFromTemplate(updatedA.id, updatedA.actions);
+                syncNpcInstancesArenaActionsFromTemplate(updatedA);
                 addLogEntry('Meshy 3D model attached for ' + (tplExisting.name || 'creature'), 'info');
             } else {
                 const sk = buildEnemySkeletonFromNpcCatalog(npcA, ix2);
@@ -1110,6 +1218,7 @@ async function confirmMeshyArenaGenerate() {
                 sk.actions = upsertArenaStlInEnemyActions('{}', url);
                 sendMessage({ type: 'CreateEnemy', enemy: buildEnemyServerPayload(sk) });
                 enemies.push(sk);
+                syncNpcInstancesArenaActionsFromTemplate(sk);
                 addLogEntry('Meshy 3D model attached — added Enemy DB template: ' + (sk.name || 'creature'), 'info');
             }
             try {
@@ -1131,6 +1240,7 @@ async function confirmMeshyArenaGenerate() {
             });
             if (idx !== -1) enemies[idx] = updated;
             syncCustomEnemyInstanceActionsFromTemplate(updated.id, updated.actions);
+            syncNpcInstancesArenaActionsFromTemplate(updated);
             addLogEntry('Meshy 3D model attached for ' + (tpl.name || 'creature'), 'info');
             try {
                 if (typeof window.arena3dSyncNow === 'function') window.arena3dSyncNow();
@@ -1141,6 +1251,8 @@ async function confirmMeshyArenaGenerate() {
         console.error(err);
         alert(err && err.message ? err.message : String(err));
     } finally {
+        setMeshyGenerationBusy(false);
+        resetMeshyProgressDisplay();
         if (btn) btn.disabled = !meshyArenaSelectedId;
         if (statusEl) statusEl.textContent = '';
     }
@@ -1227,6 +1339,18 @@ function getArenaMiniScaleFromEnemyActions(actionsStr) {
     return 1;
 }
 
+/** Like getArenaMiniScaleFromEnemyActions but returns null if the key is absent (so callers can try the next source). */
+function getArenaMiniScaleFromEnemyActionsIfSet(actionsStr) {
+    if (actionsStr == null) return null;
+    try {
+        const o = typeof actionsStr === 'string' ? JSON.parse(actionsStr) : actionsStr;
+        if (o && typeof o === 'object' && !Array.isArray(o) && o._gorgox_arena_mini_scale != null) {
+            return normalizeArenaMiniScaleNumber(o._gorgox_arena_mini_scale);
+        }
+    } catch (_) {}
+    return null;
+}
+
 /** Merge `_gorgox_arena_mini_scale` into enemy actions JSON. Empty / invalid scaleRaw ⇒ default 1 (key removed). */
 function upsertArenaMiniScaleInEnemyActions(actionsStr, scaleRaw) {
     const s = typeof actionsStr === 'string' ? actionsStr.trim() : '';
@@ -1252,9 +1376,12 @@ function resolveTokenStlUrlForArena3d(token) {
         return c ? getCharacterArenaStlUrl(c) : '';
     }
     if (et === 'Enemy' || et === 'NPC') {
-        const e = enemies.find((x) => x && String(x.id) === String(token.entity_id));
-        const tpl = e && e.isCustomInstance ? getEnemyTemplateForCustomInstance(e) : e;
-        return tpl ? getArenaStlUrlFromEnemyActions(tpl.actions) : '';
+        const sources = collectEnemyActionSourcesForArena3d(token);
+        for (const src of sources) {
+            const u = getArenaStlUrlFromEnemyActions(src && src.actions);
+            if (u) return u;
+        }
+        return '';
     }
     return '';
 }
@@ -1267,9 +1394,12 @@ function resolveTokenArenaMiniScaleForArena3d(token) {
         return c ? getCharacterArenaMiniScale(c) : 1;
     }
     if (et === 'Enemy' || et === 'NPC') {
-        const e = enemies.find((x) => x && String(x.id) === String(token.entity_id));
-        const tpl = e && e.isCustomInstance ? getEnemyTemplateForCustomInstance(e) : e;
-        return tpl ? getArenaMiniScaleFromEnemyActions(tpl.actions) : 1;
+        const sources = collectEnemyActionSourcesForArena3d(token);
+        for (const src of sources) {
+            const m = getArenaMiniScaleFromEnemyActionsIfSet(src && src.actions);
+            if (m != null) return m;
+        }
+        return 1;
     }
     return 1;
 }
@@ -1878,17 +2008,87 @@ function enemyActionsHasSheetAttacks(actionsStr) {
     }
 }
 
+/** Ensure Meshy `_gorgox_*` keys survive server/instance picks that omit them (sheet_attacks wins elsewhere). */
+function mergeGorgoxArenaMetaFromTemplate(mergedActions, templateActions) {
+    if (!templateActions || typeof templateActions !== 'string' || !templateActions.trim()) return mergedActions;
+    const base = typeof mergedActions === 'string' ? mergedActions : JSON.stringify(mergedActions || {});
+    let o;
+    let t;
+    try {
+        o = base.trim() ? JSON.parse(base) : {};
+    } catch (_) {
+        return mergedActions;
+    }
+    try {
+        t = JSON.parse(templateActions);
+    } catch (_) {
+        return mergedActions;
+    }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return mergedActions;
+    if (!t || typeof t !== 'object' || Array.isArray(t)) return mergedActions;
+    const stlT = t._gorgox_arena_stl_url != null ? String(t._gorgox_arena_stl_url).trim() : '';
+    const stlO = o._gorgox_arena_stl_url != null ? String(o._gorgox_arena_stl_url).trim() : '';
+    let changed = false;
+    if (stlT && !stlO) {
+        o._gorgox_arena_stl_url = t._gorgox_arena_stl_url;
+        changed = true;
+    }
+    if (o._gorgox_arena_mini_scale == null && t._gorgox_arena_mini_scale != null) {
+        o._gorgox_arena_mini_scale = t._gorgox_arena_mini_scale;
+        changed = true;
+    }
+    if (!changed) return mergedActions;
+    return JSON.stringify(o);
+}
+
+/** NPC map tokens keep catalog `actions`; copy Meshy fields from the name-matched DB template onto those instances. */
+function syncNpcInstancesArenaActionsFromTemplate(templateRow) {
+    if (!templateRow || !templateRow.name) return;
+    const url = getArenaStlUrlFromEnemyActions(templateRow.actions);
+    if (!url) return;
+    const base = String(templateRow.name || '').trim().toLowerCase();
+    if (!base) return;
+    enemies = enemies.map(function (row) {
+        if (!row || !row.isNPC || !row.npcData) return row;
+        const n = String(row.npcData.name || '').trim().toLowerCase();
+        if (n !== base) return row;
+        const merged = mergeGorgoxArenaMetaFromTemplate(row.actions || '{}', templateRow.actions);
+        return Object.assign({}, row, { actions: merged });
+    });
+}
+
 /** Pick instance actions: prefer DB payload when it has sheet attacks; else keep local pre-echo copy (CreateEnemy vs Spawn race). */
 function resolveSpawnedInstanceActions(actionsFromServer, tpl, prev) {
     const serverS = typeof actionsFromServer === 'string' ? actionsFromServer.trim() : '';
     const tplS = tpl && typeof tpl.actions === 'string' ? tpl.actions.trim() : '';
     const prevS = prev && typeof prev.actions === 'string' ? prev.actions.trim() : '';
-    if (serverS && enemyActionsHasSheetAttacks(serverS)) return actionsFromServer;
-    if (prevS && enemyActionsHasSheetAttacks(prevS)) return prev.actions;
-    if (serverS) return actionsFromServer;
-    if (tplS) return tpl.actions;
-    if (prevS) return prev.actions;
-    return '{}';
+    let out;
+    if (serverS && enemyActionsHasSheetAttacks(serverS)) out = actionsFromServer;
+    else if (prevS && enemyActionsHasSheetAttacks(prevS)) out = prev.actions;
+    else if (serverS) out = actionsFromServer;
+    else if (tplS) out = tpl.actions;
+    else if (prevS) out = prev.actions;
+    else out = '{}';
+    if (tpl && tpl.actions) {
+        out = mergeGorgoxArenaMetaFromTemplate(out, tpl.actions);
+    }
+    return out;
+}
+
+/** Template row first (Meshy URL lives on DB template), then the instance row (spawned token entity_id). */
+function collectEnemyActionSourcesForArena3d(token) {
+    const e = enemies.find((x) => x && String(x.id) === String(token.entity_id));
+    if (!e) return [];
+    const sources = [];
+    if (e.isCustomInstance) {
+        const t = getEnemyTemplateForCustomInstance(e);
+        if (t) sources.push(t);
+    } else if (e.isNPC && e.npcData) {
+        const m = findEnemyDbTemplateMatchingNpcName(e.npcData.name);
+        if (m) sources.push(m);
+    }
+    sources.push(e);
+    return sources;
 }
 
 /** Add/remove sheet attacks: always edit the DB template, even when the sheet was opened from a numbered token. */
@@ -2506,7 +2706,7 @@ function handleServerMessage(message) {
             
             const prevTokensById = new Map(tokens.map(pt => [pt.id, pt]));
             // Merge server tokens with preserved sizes
-            const mergedServer = serverTokens.map(t => {
+            let mergedServer = serverTokens.map(t => {
                 const prev = prevTokensById.get(t.id);
                 const mergedBase = {
                     ...t,
@@ -2538,6 +2738,28 @@ function handleServerMessage(message) {
                     return { ...mergedBase, size: calculatedSize };
                 }
             });
+            // Pending-token reconcile: MoveToken used pending:* ids before the server assigned real token rows — flush position using real id.
+            for (const pt of prevTokensSnapshot) {
+                if (!pt || typeof pt.id !== 'string' || !pt.id.startsWith('pending:')) continue;
+                const idx = mergedServer.findIndex(function (st) {
+                    return st && st.entity_id === pt.entity_id && st.entity_type === pt.entity_type;
+                });
+                if (idx === -1) continue;
+                const st = mergedServer[idx];
+                const sx = Number(st.x);
+                const sy = Number(st.y);
+                const px = Number(pt.x);
+                const py = Number(pt.y);
+                if (sx !== px || sy !== py) {
+                    mergedServer[idx] = Object.assign({}, st, { x: px, y: py });
+                    sendMessage({
+                        type: 'MoveToken',
+                        token_id: st.id,
+                        x: px,
+                        y: py,
+                    });
+                }
+            }
             // Keep optimistic placements until the server list includes that entity (avoids a flash if another TokenUpdate arrives first).
             const keepPending = prevTokensSnapshot.filter(pt =>
                 pt && typeof pt.id === 'string' && pt.id.startsWith('pending:') &&

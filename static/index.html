@@ -63,7 +63,14 @@
                             <button onclick="saveCurrentMapState()" id="saveMapStateBtn" style="background: #ffaa44; color: #000; font-weight: bold;">💾 Save Map State</button>
                             <button onclick="showMapSettings()">⚙️ Map Settings</button>
                             <button onclick="showEnemyManager()">👹 Enemy Database</button>
-                            <button type="button" onclick="showMeshyArenaModal()" style="background:#6b4cff;color:#fff;font-weight:bold;" title="Generate a GLB from the portrait via Meshy (server needs MESHY_API_KEY)">✨ Meshy 3D from portrait</button>
+                            <div class="meshy-sidebar-stack">
+                                <button type="button" id="meshySidebarOpenBtn" onclick="showMeshyArenaModal()" style="background:#6b4cff;color:#fff;font-weight:bold;width:100%;" title="Generate a GLB from the portrait via Meshy (server needs MESHY_API_KEY)">✨ Meshy 3D from portrait</button>
+                                <div id="meshySidebarProgressWrap" class="meshy-progress-wrap" style="display:none;" aria-hidden="true" role="status">
+                                    <div id="meshySidebarProgressIndet" class="meshy-progress-track meshy-progress-indet-visible" aria-label="Meshy generation in progress"><div class="meshy-progress-indeterminate"></div></div>
+                                    <progress id="meshySidebarProgressMeter" class="meshy-progress-meter" max="100" value="0" style="display:none;"></progress>
+                                    <div id="meshySidebarProgressPct" class="meshy-progress-pct-line"></div>
+                                </div>
+                            </div>
                             <button onclick="showCharacterManager()">👤 Characters</button>
                             <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
                             <button onclick="showSaveLoadModal()" style="background: #4a9eff; color: white; font-weight: bold;">💾 Save/Load Game</button>
@@ -472,6 +479,12 @@
                 <input type="search" id="meshyArenaSearch" placeholder="Search by name…" style="width:100%;padding:8px;margin-bottom:10px;box-sizing:border-box;" oninput="renderMeshyArenaList()" />
                 <div id="meshyArenaList" class="meshy-arena-list"></div>
                 <p id="meshyArenaStatus" style="min-height:1.2em;font-size:12px;color:#aac;"></p>
+                <div id="meshyArenaProgressWrap" class="meshy-progress-wrap meshy-progress-wrap-modal" style="display:none;" aria-hidden="true" role="status">
+                    <div id="meshyArenaProgressIndet" class="meshy-progress-track meshy-progress-indet-visible" aria-label="Meshy generation in progress"><div class="meshy-progress-indeterminate"></div></div>
+                    <progress id="meshyArenaProgressMeter" class="meshy-progress-meter" max="100" value="0" style="display:none;"></progress>
+                    <div id="meshyArenaProgressPct" class="meshy-progress-pct-line"></div>
+                    <p class="meshy-progress-caption">Generating 3D model — this often takes several minutes. Keep this tab open.</p>
+                </div>
                 <div class="modal-actions" style="margin-top:12px;">
                     <button type="button" id="meshyArenaConfirmBtn" onclick="confirmMeshyArenaGenerate()" disabled>Generate &amp; attach GLB</button>
                     <button type="button" onclick="closeModal('meshyArenaModal')">Cancel</button>
@@ -1028,8 +1041,8 @@
     <input type="file" id="arenaStlHiddenFilePicker" accept=".stl,.glb,model/stl,model/gltf-binary,application/sla,application/vnd.ms-pki.stl" style="display: none;" aria-hidden="true">
 
     <script src="/static/data/armstech_data.js?v=68"></script>
-    <script src="/static/arena3d-boot.js?v=17"></script>
-    <script src="/static/app.js?v=123"></script>
+    <script src="/static/arena3d-boot.js?v=20"></script>
+    <script src="/static/app.js?v=133"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {

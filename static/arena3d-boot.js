@@ -3,7 +3,7 @@
  * never hits ReferenceError. The real Three.js code loads on first use via dynamic import().
  */
 (function () {
-  var MODULE_URL = "/static/arena3d.module.js?v=28";
+  var MODULE_URL = "/static/arena3d.module.js?v=31";
   var loadPromise = null;
   var api = null;
 
@@ -104,6 +104,22 @@
       })
       .catch(function () {});
   };
+
+  /**
+   * Refresh token minis from the latest battlefield snapshot. Defined here so app.js can call it
+   * after Meshy / arena STL attach before the 3D module has ever been imported (otherwise sync was a no-op).
+   */
+  function arena3dSyncNowBridge() {
+    loadModule()
+      .then(function () {
+        var fn = window.arena3dSyncNow;
+        if (typeof fn === "function" && fn !== arena3dSyncNowBridge) {
+          fn();
+        }
+      })
+      .catch(function () {});
+  }
+  window.arena3dSyncNow = arena3dSyncNowBridge;
 
   console.log("[arena3d] boot loaded — toggle3DArena:", typeof window.toggle3DArena);
 })();

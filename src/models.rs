@@ -25,6 +25,10 @@ pub struct Character {
     pub portrait_url: Option<String>, // Character portrait image (base64 or URL)
 }
 
+fn default_enemy_style_str() -> String {
+    "dnd".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Enemy {
     pub id: String,
@@ -45,6 +49,9 @@ pub struct Enemy {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub portrait_url: Option<String>, // Enemy portrait image (base64 or URL)
+    /// Which database this template belongs to (`dnd` vs `starwars`).
+    #[serde(default = "default_enemy_style_str")]
+    pub style: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

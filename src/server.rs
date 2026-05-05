@@ -4,6 +4,7 @@ use crate::db::Database;
 use base64::{Engine as _, engine::general_purpose};
 use serde::Deserialize;
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         DefaultBodyLimit,
@@ -14,7 +15,10 @@ use axum::{
     http::{StatusCode, header},
     Router,
 };
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -205,7 +209,7 @@ pub async fn start_server(
     info!("   POST /api/saves/:filename - Save game state");
     info!("   DELETE /api/saves/:filename - Delete saved state");
     info!("   POST /api/arena-stl - Upload .stl / .glb for 3D token minis (static/arena_stl)");
-    info!("   POST /api/meshy-generate-arena-stl - Meshy image→3D (set MESHY_API_KEY, DM flow)");
+    info!("   POST /api/meshy-generate-arena-stl - Meshy image→3D, NDJSON progress stream → static/arena_stl/<name>_<uuid>.glb");
     info!("   GET  /api/compendium/sw5e/categories - SW5e compendium row counts by category");
     info!("   GET  /api/compendium/sw5e/browse?category=tech_powers&offset=&limit=");
     info!("   GET  /api/compendium/sw5e/category-export?category=tech_powers|force_powers - full slice for client caches");
@@ -359,29 +363,49 @@ async fn handle_socket(
     info!("Client {} disconnected", session_id_clone);
 }
 
-async fn enemy_template_portrait_url(dnd_db: &Database, template_id: &str) -> Option<String> {
-    let Ok(Some(row)) = sqlx::query("SELECT portrait_url FROM enemies WHERE id = ?")
-        .bind(template_id)
-        .fetch_optional(dnd_db)
-        .await
-    else {
-        return None;
-    };
-    row.try_get::<Option<String>, _>("portrait_url")
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
+async fn enemy_template_portrait_url(
+    dnd_db: &Database,
+    starwars_db: &Database,
+    template_id: &str,
+) -> Option<String> {
+    for pool in [dnd_db, starwars_db] {
+        let Ok(Some(row)) = sqlx::query("SELECT portrait_url FROM enemies WHERE id = ?")
+            .bind(template_id)
+            .fetch_optional(pool)
+            .await
+        else {
+            continue;
+        };
+        if let Some(u) = row
+            .try_get::<Option<String>, _>("portrait_url")
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+        {
+            return Some(u);
+        }
+    }
+    None
 }
 
-async fn enemy_template_actions_json(dnd_db: &Database, template_id: &str) -> Option<String> {
-    let Ok(Some(row)) = sqlx::query("SELECT actions FROM enemies WHERE id = ?")
-        .bind(template_id)
-        .fetch_optional(dnd_db)
-        .await
-    else {
-        return None;
-    };
-    row.try_get::<String, _>("actions").ok()
+async fn enemy_template_actions_json(
+    dnd_db: &Database,
+    starwars_db: &Database,
+    template_id: &str,
+) -> Option<String> {
+    for pool in [dnd_db, starwars_db] {
+        let Ok(Some(row)) = sqlx::query("SELECT actions FROM enemies WHERE id = ?")
+            .bind(template_id)
+            .fetch_optional(pool)
+            .await
+        else {
+            continue;
+        };
+        if let Ok(a) = row.try_get::<String, _>("actions") {
+            return Some(a);
+        }
+    }
+    None
 }
 
 /// Fill in token.display_name and token.image_url (portrait) from enemy_instances or DB so players see names and pictures.
@@ -389,6 +413,7 @@ async fn enrich_tokens_with_display_names(
     mut tokens: Vec<crate::models::Token>,
     game_state: &Arc<RwLock<GameState>>,
     dnd_db: &Database,
+    starwars_db: &Database,
 ) -> Vec<crate::models::Token> {
     use crate::models::TokenType;
     let gs = game_state.read().await;
@@ -417,7 +442,9 @@ async fn enrich_tokens_with_display_names(
     }
     drop(gs);
     for (i, template_id) in need_portrait {
-        if let Some(url) = enemy_template_portrait_url(dnd_db, &template_id).await {
+        if let Some(url) =
+            enemy_template_portrait_url(dnd_db, starwars_db, &template_id).await
+        {
             tokens[i].image_url = Some(url);
         }
     }
@@ -426,25 +453,87 @@ async fn enrich_tokens_with_display_names(
             continue;
         }
         if matches!(t.entity_type, TokenType::Enemy | TokenType::NPC) {
-            if let Ok(Some(row)) = sqlx::query("SELECT name, portrait_url FROM enemies WHERE id = ?")
-                .bind(&t.entity_id)
-                .fetch_optional(dnd_db)
-                .await
-            {
-                if let Ok(n) = row.try_get::<String, _>("name") {
-                    t.display_name = Some(n);
-                }
-                if t.image_url.is_none() {
-                    if let Ok(Some(url)) = row.try_get::<Option<String>, _>("portrait_url") {
-                        if !url.trim().is_empty() {
-                            t.image_url = Some(url);
+            let mut filled = false;
+            for pool in [dnd_db, starwars_db] {
+                if let Ok(Some(row)) =
+                    sqlx::query("SELECT name, portrait_url FROM enemies WHERE id = ?")
+                        .bind(&t.entity_id)
+                        .fetch_optional(pool)
+                        .await
+                {
+                    filled = true;
+                    if let Ok(n) = row.try_get::<String, _>("name") {
+                        t.display_name = Some(n);
+                    }
+                    if t.image_url.is_none() {
+                        if let Ok(Some(url)) = row.try_get::<Option<String>, _>("portrait_url") {
+                            if !url.trim().is_empty() {
+                                t.image_url = Some(url);
+                            }
                         }
                     }
+                    break;
                 }
+            }
+            if !filled {
+                continue;
             }
         }
     }
     tokens
+}
+
+/// Enemy templates are stored in `dnd_db` or `starwars_db` depending on `style`. Merge for full lists.
+async fn fetch_enemies_merged(dnd_db: &Database, starwars_db: &Database) -> Vec<crate::models::Enemy> {
+    use crate::models::Enemy;
+    use sqlx::Row;
+    use std::collections::HashSet;
+
+    let sql = "SELECT id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url, style FROM enemies";
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for pool in [dnd_db, starwars_db] {
+        let Ok(rows) = sqlx::query(sql).fetch_all(pool).await else {
+            continue;
+        };
+        for row in rows {
+            let Ok(id) = row.try_get::<String, _>("id") else {
+                continue;
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let style: String = row
+                .try_get::<String, _>("style")
+                .unwrap_or_else(|_| "dnd".to_string());
+            let Some(enemy) = (|| {
+                Some(Enemy {
+                    id,
+                    name: row.try_get("name").ok()?,
+                    creature_type: row.try_get("creature_type").ok()?,
+                    challenge_rating: row.try_get("challenge_rating").ok()?,
+                    max_hp: row.try_get("max_hp").ok()?,
+                    armor_class: row.try_get("armor_class").ok()?,
+                    initiative_bonus: row.try_get("initiative_bonus").ok()?,
+                    strength: row.try_get("strength").ok()?,
+                    dexterity: row.try_get("dexterity").ok()?,
+                    constitution: row.try_get("constitution").ok()?,
+                    intelligence: row.try_get("intelligence").ok()?,
+                    wisdom: row.try_get("wisdom").ok()?,
+                    charisma: row.try_get("charisma").ok()?,
+                    speed: row.try_get("speed").ok()?,
+                    actions: row.try_get("actions").ok()?,
+                    description: row.try_get("description").ok()?,
+                    portrait_url: row.try_get("portrait_url").ok()?,
+                    style,
+                })
+            })() else {
+                continue;
+            };
+            out.push(enemy);
+        }
+    }
+    out
 }
 
 /// Compact rows for `MapList` / GET /api/maps — never ship full `map_state` (breaks WebSocket JSON size).
@@ -691,7 +780,7 @@ async fn handle_client_message(
     starwars_db: &Database,
     shutdown_tx: &broadcast::Sender<()>,
 ) {
-    use crate::models::{CombatParticipant, Character, Enemy, Map};
+    use crate::models::{CombatParticipant, Character, Map};
     use uuid::Uuid;
     match msg {
         ClientMessage::Connect { player_name, is_dm, style: _ } => {
@@ -754,15 +843,16 @@ async fn handle_client_message(
             drop(gs);
             
             if let Some(tokens) = tokens_to_send {
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens: tokens.clone() };
                 send_to_client(clients, session_id, &token_update).await;
                 info!("📤 Sent {} tokens to new player", tokens.len());
             }
             
             for inst in enemy_instances_join {
-                let portrait_url = enemy_template_portrait_url(dnd_db, &inst.enemy_id).await;
-                let actions = enemy_template_actions_json(dnd_db, &inst.enemy_id).await;
+                let portrait_url =
+                    enemy_template_portrait_url(dnd_db, starwars_db, &inst.enemy_id).await;
+                let actions = enemy_template_actions_json(dnd_db, starwars_db, &inst.enemy_id).await;
                 let msg = ServerMessage::EnemyInstanceSpawned {
                     instance_id: inst.id.clone(),
                     enemy_id: inst.enemy_id.clone(),
@@ -846,7 +936,7 @@ async fn handle_client_message(
             
             // Broadcast token update to all clients
             let tokens = game_state.read().await.tokens.clone();
-            let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+            let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
             let token_update = ServerMessage::TokenUpdate { tokens };
             broadcast_message(clients, &token_update).await;
         }
@@ -860,7 +950,7 @@ async fn handle_client_message(
             if moved {
                 info!("📍 Token {} moved to ({}, {})", token_id, x, y);
                 let tokens = game_state.read().await.tokens.clone();
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             } else {
@@ -871,7 +961,7 @@ async fn handle_client_message(
         ClientMessage::RemoveToken { token_id } => {
             if game_state.write().await.remove_token(&token_id) {
                 let tokens = game_state.read().await.tokens.clone();
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             }
@@ -897,7 +987,7 @@ async fn handle_client_message(
                 
                 // Broadcast updated tokens to all clients
                 let tokens = game_state.read().await.tokens.clone();
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             }
@@ -928,7 +1018,7 @@ async fn handle_client_message(
                 drop(gs);
 
                 let tokens = game_state.read().await.tokens.clone();
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             }
@@ -1334,7 +1424,7 @@ async fn handle_client_message(
                 gs.combat.active);
             drop(gs);
             if let Some(tokens) = tokens_to_send {
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 send_to_client(clients, session_id, &token_update).await;
             }
@@ -1984,7 +2074,7 @@ async fn handle_client_message(
                 broadcast_message(clients, &vp_msg).await;
                 
                 let tokens = game_state.read().await.tokens.clone();
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db).await;
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
                 
@@ -2518,7 +2608,15 @@ async fn handle_client_message(
                 info!("Ignoring CreateEnemy for instance-style name (not adding to DB): {:?}", name_trim);
                 return;
             }
-            let db = dnd_db; // Use appropriate DB based on style
+            let style_norm = match enemy.style.trim() {
+                "starwars" => "starwars",
+                _ => "dnd",
+            };
+            let db = if style_norm == "starwars" {
+                starwars_db
+            } else {
+                dnd_db
+            };
             if let Err(e) = sqlx::query(
                 "INSERT OR REPLACE INTO enemies (id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url, style) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
@@ -2539,57 +2637,36 @@ async fn handle_client_message(
             .bind(&enemy.actions)
             .bind(&enemy.description)
             .bind(enemy.portrait_url.as_ref())
-            .bind("dnd") // Default style
+            .bind(style_norm)
             .execute(db)
             .await
             {
                 error!("Failed to create enemy: {}", e);
             } else {
-                // Keep all clients' enemy templates in sync (DM-added sheet attacks, etc.)
-                if let Ok(rows) = sqlx::query(
-                    "SELECT id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url FROM enemies"
-                )
-                .fetch_all(dnd_db)
-                .await
-                {
-                    use crate::models::Enemy;
-                    let enemies: Vec<Enemy> = rows.into_iter().filter_map(|row| {
-                        Some(Enemy {
-                            id: row.try_get("id").ok()?,
-                            name: row.try_get("name").ok()?,
-                            creature_type: row.try_get("creature_type").ok()?,
-                            challenge_rating: row.try_get("challenge_rating").ok()?,
-                            max_hp: row.try_get("max_hp").ok()?,
-                            armor_class: row.try_get("armor_class").ok()?,
-                            initiative_bonus: row.try_get("initiative_bonus").ok()?,
-                            strength: row.try_get("strength").ok()?,
-                            dexterity: row.try_get("dexterity").ok()?,
-                            constitution: row.try_get("constitution").ok()?,
-                            intelligence: row.try_get("intelligence").ok()?,
-                            wisdom: row.try_get("wisdom").ok()?,
-                            charisma: row.try_get("charisma").ok()?,
-                            speed: row.try_get("speed").ok()?,
-                            actions: row.try_get("actions").ok()?,
-                            description: row.try_get("description").ok()?,
-                            portrait_url: row.try_get("portrait_url").ok()?,
-                        })
-                    }).collect();
-                    let enemy_list = ServerMessage::EnemyList { enemies };
-                    broadcast_message(clients, &enemy_list).await;
-                }
+                let enemies = fetch_enemies_merged(dnd_db, starwars_db).await;
+                let enemy_list = ServerMessage::EnemyList { enemies };
+                broadcast_message(clients, &enemy_list).await;
             }
         }
         
         ClientMessage::SpawnEnemy { enemy_id, instance_id, name } => {
             use crate::models::EnemyInstance;
-            // Load enemy template from database - query row by row since tuple is too large
-            if let Ok(Some(row)) = sqlx::query(
-                "SELECT id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url FROM enemies WHERE id = ?"
-            )
-            .bind(&enemy_id)
-            .fetch_optional(dnd_db)
-            .await
-            {
+            let sql = "SELECT id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url FROM enemies WHERE id = ?";
+            let mut row_opt = sqlx::query(sql)
+                .bind(&enemy_id)
+                .fetch_optional(dnd_db)
+                .await
+                .ok()
+                .flatten();
+            if row_opt.is_none() {
+                row_opt = sqlx::query(sql)
+                    .bind(&enemy_id)
+                    .fetch_optional(starwars_db)
+                    .await
+                    .ok()
+                    .flatten();
+            }
+            if let Some(row) = row_opt {
                 let enemy_name: String = row.try_get("name").unwrap_or_default();
                 let max_hp: i32 = row.try_get("max_hp").unwrap_or(0);
                 let armor_class: i32 = row.try_get("armor_class").unwrap_or(10);
@@ -2623,45 +2700,20 @@ async fn handle_client_message(
         }
         
         ClientMessage::ListEnemies => {
-            if let Ok(rows) = sqlx::query(
-                "SELECT id, name, creature_type, challenge_rating, max_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, actions, description, portrait_url FROM enemies"
-            )
-            .fetch_all(dnd_db)
-            .await
-            {
-                let enemies: Vec<Enemy> = rows.into_iter().filter_map(|row| {
-                    Some(Enemy {
-                        id: row.try_get("id").ok()?,
-                        name: row.try_get("name").ok()?,
-                        creature_type: row.try_get("creature_type").ok()?,
-                        challenge_rating: row.try_get("challenge_rating").ok()?,
-                        max_hp: row.try_get("max_hp").ok()?,
-                        armor_class: row.try_get("armor_class").ok()?,
-                        initiative_bonus: row.try_get("initiative_bonus").ok()?,
-                        strength: row.try_get("strength").ok()?,
-                        dexterity: row.try_get("dexterity").ok()?,
-                        constitution: row.try_get("constitution").ok()?,
-                        intelligence: row.try_get("intelligence").ok()?,
-                        wisdom: row.try_get("wisdom").ok()?,
-                        charisma: row.try_get("charisma").ok()?,
-                        speed: row.try_get("speed").ok()?,
-                        actions: row.try_get("actions").ok()?,
-                        description: row.try_get("description").ok()?,
-                        portrait_url: row.try_get("portrait_url").ok()?,
-                    })
-                }).collect();
-                let enemy_list = ServerMessage::EnemyList { enemies };
-                broadcast_message(clients, &enemy_list).await;
-            }
+            let enemies = fetch_enemies_merged(dnd_db, starwars_db).await;
+            let enemy_list = ServerMessage::EnemyList { enemies };
+            broadcast_message(clients, &enemy_list).await;
         }
         
         ClientMessage::DeleteEnemy { enemy_id } => {
-            if let Err(e) = sqlx::query("DELETE FROM enemies WHERE id = ?")
-                .bind(&enemy_id)
-                .execute(dnd_db)
-                .await
-            {
-                error!("Failed to delete enemy: {}", e);
+            for pool in [dnd_db, starwars_db] {
+                if let Err(e) = sqlx::query("DELETE FROM enemies WHERE id = ?")
+                    .bind(&enemy_id)
+                    .execute(pool)
+                    .await
+                {
+                    error!("Failed to delete enemy from a database: {}", e);
+                }
             }
         }
         
@@ -3272,7 +3324,33 @@ async fn meshy_npc_catalog_entry(
     Ok((name, portrait_web))
 }
 
+/// Safe fragment for `static/arena_stl/<name>_<uuid>.glb` (Windows + web paths).
+fn sanitize_token_name_for_arena_file(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c if c.is_control() => '_',
+            _ => c,
+        })
+        .collect();
+    let trimmed = s.trim().trim_matches('.');
+    let mut out: String = trimmed.chars().take(120).collect();
+    out = out.trim().to_string();
+    if out.is_empty() {
+        "token".to_string()
+    } else {
+        out
+    }
+}
+
+fn unique_arena_glb_filename_for_token(entry_name: &str) -> String {
+    let base = sanitize_token_name_for_arena_file(entry_name);
+    format!("{}_{}.glb", base, Uuid::new_v4())
+}
+
 /// Portrait → Meshy → GLB saved under `static/arena_stl`. Requires env `MESHY_API_KEY` (see [Meshy docs](https://docs.meshy.ai/api/image-to-3d)).
+/// Streams newline-delimited JSON: `{"progress":N}` lines, then `{"url":"...","name":"...","filename":"..."}` or `{"error":"..."}`.
 async fn meshy_generate_arena_stl(
     State((dnd_db, starwars_db, _gs, _c, _sh)): State<(
         Database,
@@ -3282,7 +3360,7 @@ async fn meshy_generate_arena_stl(
         broadcast::Sender<()>,
     )>,
     Json(body): Json<MeshyGenBody>,
-) -> Result<axum::Json<serde_json::Value>, (StatusCode, axum::Json<serde_json::Value>)> {
+) -> Result<Response, (StatusCode, axum::Json<serde_json::Value>)> {
     let key = std::env::var("MESHY_API_KEY").unwrap_or_default();
     if key.is_empty() {
         return Err((
@@ -3393,44 +3471,86 @@ async fn meshy_generate_arena_stl(
             )
         })?;
 
-    let glb = crate::meshy::image_to_3d_download_glb(&key, image_for_meshy)
-        .await
+    use std::path::Path;
+
+    let entry_for_file = entry_name.clone();
+    let key_meshy = key.clone();
+    let image_meshy = image_for_meshy;
+    let kind_log = kind.clone();
+    let id_log = id.clone();
+
+    let (tx_body, rx_body) = mpsc::channel::<Bytes>(32);
+
+    tokio::spawn(async move {
+        let (prog_tx, mut prog_rx) = mpsc::unbounded_channel::<u8>();
+        let meshy_handle = tokio::spawn(async move {
+            crate::meshy::image_to_3d_download_glb(&key_meshy, image_meshy, Some(prog_tx)).await
+        });
+
+        while let Some(p) = prog_rx.recv().await {
+            let line = format!("{{\"progress\":{}}}\n", p);
+            if tx_body.send(Bytes::from(line)).await.is_err() {
+                return;
+            }
+        }
+
+        let glb = match meshy_handle.await {
+            Ok(Ok(b)) => b,
+            Ok(Err(e)) => {
+                let line = serde_json::json!({ "error": e }).to_string() + "\n";
+                let _ = tx_body.send(Bytes::from(line)).await;
+                return;
+            }
+            Err(e) => {
+                let line = serde_json::json!({ "error": format!("Meshy task ended: {}", e) }).to_string() + "\n";
+                let _ = tx_body.send(Bytes::from(line)).await;
+                return;
+            }
+        };
+
+        let dir = Path::new("static").join("arena_stl");
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            error!("meshy arena_stl mkdir: {}", e);
+            let line = serde_json::json!({ "error": format!("Could not create arena_stl: {}", e) }).to_string() + "\n";
+            let _ = tx_body.send(Bytes::from(line)).await;
+            return;
+        }
+
+        let unique = unique_arena_glb_filename_for_token(&entry_for_file);
+        let file_path = dir.join(&unique);
+        if let Err(e) = tokio::fs::write(&file_path, &glb).await {
+            let line = serde_json::json!({ "error": e.to_string() }).to_string() + "\n";
+            let _ = tx_body.send(Bytes::from(line)).await;
+            return;
+        }
+
+        let url = format!("/static/arena_stl/{}", unique);
+        info!(
+            "Meshy image→3D OK: kind={} id={} name={} → {}",
+            kind_log, id_log, entry_for_file, url
+        );
+        let payload = serde_json::json!({
+            "url": url,
+            "name": entry_for_file,
+            "filename": unique,
+        });
+        let _ = tx_body.send(Bytes::from(payload.to_string() + "\n")).await;
+    });
+
+    let stream = ReceiverStream::new(rx_body).map(|chunk| Ok::<_, std::convert::Infallible>(chunk));
+
+    Response::builder()
+        .header(
+            header::CONTENT_TYPE,
+            "application/x-ndjson; charset=utf-8",
+        )
+        .body(Body::from_stream(stream))
         .map_err(|e| {
             (
-                StatusCode::BAD_GATEWAY,
-                axum::Json(serde_json::json!({ "error": e })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": e.to_string() })),
             )
-        })?;
-
-    use std::path::Path;
-    let dir = Path::new("static").join("arena_stl");
-    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
-        error!("meshy arena_stl mkdir: {}", e);
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(serde_json::json!({ "error": format!("Could not create arena_stl: {}", e) })),
-        ));
-    }
-
-    let unique = format!("meshy_{}.glb", Uuid::new_v4());
-    let file_path = dir.join(&unique);
-    if let Err(e) = tokio::fs::write(&file_path, &glb).await {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(serde_json::json!({ "error": e.to_string() })),
-        ));
-    }
-
-    let url = format!("/static/arena_stl/{}", unique);
-    info!(
-        "Meshy image→3D OK: kind={} id={} name={} → {}",
-        kind, id, entry_name, url
-    );
-
-    Ok(axum::Json(serde_json::json!({
-        "url": url,
-        "name": entry_name,
-    })))
+        })
 }
 
 /// STL / GLB uploads for 3D arena token minis — served via `/static/arena_stl/...`.
