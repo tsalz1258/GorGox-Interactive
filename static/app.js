@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v133'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v134'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -2284,14 +2284,20 @@ function handleServerMessage(message) {
                 const shutdownSection = document.getElementById('dmShutdownSection');
                 if (shutdownSection) shutdownSection.classList.remove('hidden');
                 updatePlayerConnectionLink();
-                document.getElementById('playerControls').classList.add('hidden');
+                const playerChrome = document.getElementById('playerSidebarChrome');
+                if (playerChrome) playerChrome.classList.add('hidden');
+                const adminMenu = document.getElementById('adminMenu');
+                if (adminMenu) adminMenu.classList.remove('hidden');
                 syncPlayerViewportCheckbox();
                 console.log('DM MODE ACTIVATED - Full controls enabled, NO character selection');
             } else {
                 // Players: allow one auto-open of character select this session; then only button opens it
                 hasAutoShownCharacterSelectThisSession = false;
                 myCharacterId = null;
-                document.getElementById('playerControls').classList.remove('hidden');
+                const playerChrome = document.getElementById('playerSidebarChrome');
+                if (playerChrome) playerChrome.classList.remove('hidden');
+                const adminMenu = document.getElementById('adminMenu');
+                if (adminMenu) adminMenu.classList.add('hidden');
                 updatePlayerActionBarVisibility();
                 setTimeout(() => { updatePlayerActionBarVisibility(); updateActionBarButtonLabel(); }, 400);
                 setTimeout(() => {
@@ -2427,10 +2433,7 @@ function handleServerMessage(message) {
             if (message.player_map_viewport != null && typeof message.player_map_viewport === 'object') {
                 applyPlayerMapViewportFromServer(message.player_map_viewport);
             }
-            if (message.map.name) {
-                const mapNameElement = document.getElementById('currentMapName');
-                if (mapNameElement) mapNameElement.textContent = message.map.name;
-            }
+            updateCampaignTitle();
             console.log('🗺️ MapLoaded - image_path:', message.map.image_path);
             if (!skipMapImageReload) {
                 loadMapImage(message.map.image_path, currentMap && currentMap._imgLoadGen);
@@ -2463,10 +2466,7 @@ function handleServerMessage(message) {
             syncPlayerViewportCheckbox();
             
             // Update UI
-            const mapNameElement = document.getElementById('currentMapName');
-            if (mapNameElement) {
-                mapNameElement.textContent = 'No map loaded';
-            }
+            updateCampaignTitle();
             updateTokenInfo();
             
             // Clear canvas completely - EXACT SAME as clearCurrentMap()
@@ -5756,6 +5756,38 @@ function resetZoom() {
     zoom = 1.0;
     panX = 0;
     panY = 0;
+    renderCanvas();
+}
+
+function fitMapToViewport() {
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const vw = rect.width;
+    const vh = rect.height;
+    const mapW = currentMap && currentMap.width ? currentMap.width : canvas.width;
+    const mapH = currentMap && currentMap.height ? currentMap.height : canvas.height;
+    if (!mapW || !mapH || !vw || !vh) return;
+    const zx = vw / mapW;
+    const zy = vh / mapH;
+    let z = Math.min(zx, zy);
+    z = Math.max(0.5, Math.min(3, z));
+    zoom = z;
+    panX = (vw - z * mapW) / 2;
+    panY = (vh - z * mapH) / 2;
+    renderCanvas();
+}
+
+function centerOnSelectedToken() {
+    if (!canvas || !selectedToken) return;
+    const g =
+        typeof gridSize === 'number' && gridSize > 0 && !isNaN(gridSize) ? gridSize : 50;
+    const cx = selectedToken.x * g + g / 2;
+    const cy = selectedToken.y * g + g / 2;
+    const rect = canvas.getBoundingClientRect();
+    const vw = rect.width;
+    const vh = rect.height;
+    panX = vw / 2 - zoom * cx;
+    panY = vh / 2 - zoom * cy;
     renderCanvas();
 }
 
@@ -9253,17 +9285,20 @@ function updateInitiativeList() {
 function updateCombatStatus() {
     const status = document.getElementById('combatStatus');
     const turnDisplay = document.getElementById('currentTurnDisplay');
-    
+    const dmToggleCombatBtn = document.getElementById('dmToggleCombatBtn');
+
     if (combatState.active) {
         status.innerHTML = '<span style="color: #ff4444; font-weight: bold;">⚔️ COMBAT ACTIVE</span>';
         if (turnDisplay) {
             turnDisplay.style.display = 'block';
         }
+        if (dmToggleCombatBtn) dmToggleCombatBtn.textContent = '⚔️ End Combat';
     } else {
         status.innerHTML = 'No active combat';
         if (turnDisplay) {
             turnDisplay.style.display = 'none';
         }
+        if (dmToggleCombatBtn) dmToggleCombatBtn.textContent = '⚔️ Start Combat';
     }
 }
 
@@ -10145,10 +10180,7 @@ function clearCurrentMap() {
     syncPlayerViewportCheckbox();
 
     // Update UI
-    const mapNameElement = document.getElementById('currentMapName');
-    if (mapNameElement) {
-        mapNameElement.textContent = 'No map loaded';
-    }
+    updateCampaignTitle();
     updateTokenInfo();
 
     // Clear canvas completely
@@ -14100,8 +14132,69 @@ function restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLef
     setTimeout(restore, 300);
 }
 
+function getLogPaneIdForAddLogEntry(message, type) {
+    const t = type || 'info';
+    if (t === 'damage' || t === 'healing' || t === 'heal') return 'rollsLog';
+    return 'systemLog';
+}
+
+function updateCampaignTitle() {
+    const el = document.getElementById('campaignTitle');
+    const name = currentMap && currentMap.name ? currentMap.name : null;
+    const label = name || 'No map loaded';
+    if (el) el.textContent = label;
+    const legacy = document.getElementById('currentMapName');
+    if (legacy) legacy.textContent = label;
+}
+
+function initLogTabs() {
+    const tabs = document.querySelectorAll('.vtt-log-tab[data-log-tab]');
+    if (!tabs.length) return;
+    tabs.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const name = btn.getAttribute('data-log-tab');
+            tabs.forEach((b) => {
+                const on = b === btn;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+            });
+            document.querySelectorAll('.vtt-log-pane[data-log-pane]').forEach((pane) => {
+                const on = pane.getAttribute('data-log-pane') === name;
+                pane.classList.toggle('active', on);
+                if (on) pane.removeAttribute('hidden');
+                else pane.setAttribute('hidden', '');
+            });
+        });
+    });
+}
+
+function toggleLeftSidebarCollapsed() {
+    const m = document.getElementById('mainInterface');
+    if (!m) return;
+    m.classList.toggle('sidebar-left-collapsed');
+    try {
+        localStorage.setItem(
+            'vttSidebarLeftCollapsed',
+            m.classList.contains('sidebar-left-collapsed') ? '1' : '0'
+        );
+    } catch (e) {}
+}
+
+function toggleRightSidebarCollapsed() {
+    const m = document.getElementById('mainInterface');
+    if (!m) return;
+    m.classList.toggle('sidebar-right-collapsed');
+    try {
+        localStorage.setItem(
+            'vttSidebarRightCollapsed',
+            m.classList.contains('sidebar-right-collapsed') ? '1' : '0'
+        );
+    } catch (e) {}
+}
+
 function addLogEntry(message, type = 'info') {
-    const log = document.getElementById('rollsLog');
+    const paneId = getLogPaneIdForAddLogEntry(message, type);
+    const log = document.getElementById(paneId);
     if (!log) return;
     var rightSidebar = document.querySelector('.sidebar.right');
     var leftSidebar = document.querySelector('.sidebar.left');
@@ -14134,7 +14227,7 @@ function addLogEntry(message, type = 'info') {
     const formattedMessage = formatLogMessage(message);
     entry.innerHTML = `<span style="opacity: 0.7; font-size: 11px; margin-right: 8px;">[${timestamp}]</span> ${formattedMessage}`;
     
-    const placeholder = log.querySelector('div[style*="opacity: 0.5"]');
+    const placeholder = log.querySelector('.log-empty-placeholder');
     if (placeholder) placeholder.remove();
     log.appendChild(entry);
     restoreWindowScroll(savedX, savedY, savedSidebarScroll, savedSidebarLeftScroll, savedDocTop, savedDocLeft);
@@ -14155,7 +14248,7 @@ function addRollEntry(message, isNat20 = false, isNat1 = false) {
     }
     
     // Remove placeholder message if it exists
-    const placeholder = log.querySelector('div[style*="opacity: 0.5"]');
+    const placeholder = log.querySelector('.log-empty-placeholder');
     if (placeholder) {
         placeholder.remove();
     }
@@ -18528,28 +18621,49 @@ function getCurrentCharacterData() {
 function applyTheme(style) {
     console.log('🎨 Applying theme:', style);
     const root = document.documentElement;
-    
+    const v = typeof APP_UI_VERSION !== 'undefined' ? APP_UI_VERSION : 'v29';
+    const brandEl = document.getElementById('topBarBrand');
+    const badgeEl = document.getElementById('appVersionBadge');
+    const styleBadgeEl = document.getElementById('styleBadge');
+
     if (style === 'starwars') {
-        // Star Wars theme - sci-fi blue/white
         root.style.setProperty('--primary-color', '#4a9eff');
         root.style.setProperty('--secondary-color', '#ff6b35');
         root.style.setProperty('--accent-color', '#00d4ff');
         root.style.setProperty('--bg-color', '#0a0a1a');
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #1a1a3a 0%, #0a0a2a 100%)');
-        
-        // Update header (use APP_UI_VERSION so version stays current)
-        var v = (typeof APP_UI_VERSION !== 'undefined') ? APP_UI_VERSION : 'v29';
-        document.querySelector('h1').innerHTML = '⭐ Gorgox Interactive <span id="appVersionBadge" style="background: #4a9eff; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">STAR WARS ' + v + '</span>';
+
+        if (brandEl) brandEl.textContent = '⭐ Gorgox Interactive';
+        if (badgeEl) {
+            badgeEl.textContent = v;
+            badgeEl.style.background = '#4a9eff';
+            badgeEl.style.color = '#fff';
+        }
+        if (styleBadgeEl) {
+            styleBadgeEl.textContent = 'STAR WARS 5E';
+            styleBadgeEl.style.borderColor = 'rgba(0, 212, 255, 0.55)';
+            styleBadgeEl.style.color = '#00d4ff';
+            styleBadgeEl.style.background = 'rgba(0, 212, 255, 0.12)';
+        }
     } else {
-        // D&D theme - traditional fantasy green/gold
         root.style.setProperty('--primary-color', '#4CAF50');
         root.style.setProperty('--secondary-color', '#ff8800');
         root.style.setProperty('--accent-color', '#aa88ff');
         root.style.setProperty('--bg-color', '#1a1a1a');
         root.style.setProperty('--panel-bg', 'linear-gradient(135deg, #2a2a4a 0%, #1a1a3a 100%)');
-        
-        var v = (typeof APP_UI_VERSION !== 'undefined') ? APP_UI_VERSION : 'v29';
-        document.querySelector('h1').innerHTML = '🎲 Gorgox Interactive <span id="appVersionBadge" style="background: #ffaa00; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;">' + v + '</span>';
+
+        if (brandEl) brandEl.textContent = '🎲 Gorgox Interactive';
+        if (badgeEl) {
+            badgeEl.textContent = v;
+            badgeEl.style.background = '#ffaa00';
+            badgeEl.style.color = '#1a1510';
+        }
+        if (styleBadgeEl) {
+            styleBadgeEl.textContent = 'D&D 5E';
+            styleBadgeEl.style.borderColor = 'rgba(201, 162, 39, 0.55)';
+            styleBadgeEl.style.color = '#c9a227';
+            styleBadgeEl.style.background = 'rgba(201, 162, 39, 0.12)';
+        }
     }
 }
 
@@ -18562,6 +18676,20 @@ window.addEventListener('DOMContentLoaded', () => {
             styleSelector.value = savedStyle;
             selectedStyle = savedStyle;
         }
+    }
+    applyTheme(selectedStyle);
+    initLogTabs();
+    updateCampaignTitle();
+    const mi = document.getElementById('mainInterface');
+    if (mi) {
+        try {
+            if (localStorage.getItem('vttSidebarLeftCollapsed') === '1') {
+                mi.classList.add('sidebar-left-collapsed');
+            }
+            if (localStorage.getItem('vttSidebarRightCollapsed') === '1') {
+                mi.classList.add('sidebar-right-collapsed');
+            }
+        } catch (e) {}
     }
 });
 
@@ -20523,6 +20651,7 @@ async function loadGameStateFromData(gameState, sourceName) {
         // Update UI
         updateInitiativeList();
         updateCombatStatus();
+        updateCampaignTitle();
         
         if (gameState.playerMapViewport) {
             applyPlayerMapViewportFromServer(gameState.playerMapViewport);

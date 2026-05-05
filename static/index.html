@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gorgox Interactive (v113)</title>
+    <title>Gorgox Interactive (v134)</title>
     <!-- Required for Three.js examples/jsm/* (OrbitControls, etc.) which import bare "three" -->
     <script type="importmap">
     {
@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=113">
+    <link rel="stylesheet" href="/static/style.css?v=134">
 </head>
 <body>
     <div id="app">
@@ -37,28 +37,60 @@
 
         <!-- Main Interface -->
         <div id="mainInterface" class="hidden">
-            <!-- Header -->
-    <header>
-        <h1>🎲 Gorgox Interactive <span id="appVersionBadge" style="background: #4CAF50; color: white; padding: 3px 8px; border-radius: 3px; font-size: 12px;" title="UI version – refresh if you don’t see latest features">v83</span></h1>
-        <button onclick="showSpellTooltip('Fireball', {clientX: 300, clientY: 300})" style="background: #aa88ff; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🧪 Test Tooltip</button>
-        <button onclick="populateCombatActionPanel()" style="background: #ff4444; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🔧 MANUAL POPULATE</button>
-        <button onclick="console.log('CHARACTERS:', characters); console.log('MY CHARACTER ID:', myCharacterId);" style="background: #00ff00; color: black; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">🐛 DEBUG DATA</button>
-                <div id="currentTurnDisplay" style="font-size: 18px; font-weight: bold; color: #ffaa44; padding: 10px 20px; background: rgba(255,170,68,0.2); border-radius: 10px; display: none;">
-                    Current Turn: <span id="currentTurnName">-</span>
+            <header class="vtt-top-bar">
+                <div class="vtt-top-bar-left">
+                    <button type="button" id="sidebarLeftToggle" class="vtt-sidebar-fab" onclick="toggleLeftSidebarCollapsed()" title="Collapse or expand left sidebar">⟨</button>
+                    <h1 class="vtt-brand-heading">
+                        <span id="topBarBrand">🎲 Gorgox Interactive</span>
+                        <span id="appVersionBadge" class="vtt-badge-version" title="UI version – refresh if you don’t see latest features">v134</span>
+                        <span id="styleBadge" class="vtt-style-badge">D&amp;D 5E</span>
+                    </h1>
                 </div>
-                <div style="display: flex; gap: 15px; align-items: center;">
-                    <div id="playerInfo"></div>
+                <div class="vtt-top-bar-center">
+                    <div id="campaignTitle" class="vtt-campaign-title">No map loaded</div>
+                    <div id="currentTurnDisplay" class="vtt-current-turn-pill">
+                        Current Turn: <span id="currentTurnName">-</span>
+                    </div>
+                </div>
+                <div class="vtt-top-bar-right">
+                    <div id="playerInfo" class="vtt-player-info"></div>
                     <div id="connectionStatus">Disconnected</div>
+                    <div id="adminMenu" class="vtt-admin-menu hidden">
+                        <details class="vtt-admin-details">
+                            <summary class="vtt-admin-summary">DM</summary>
+                            <div class="vtt-admin-panel">
+                                <button type="button" onclick="showSpellTooltip('Fireball', {clientX: 300, clientY: 300})" class="vtt-admin-debug-btn">🧪 Test Tooltip</button>
+                                <button type="button" onclick="populateCombatActionPanel()" class="vtt-admin-debug-btn">🔧 MANUAL POPULATE</button>
+                                <button type="button" onclick="console.log('CHARACTERS:', characters); console.log('MY CHARACTER ID:', myCharacterId);" class="vtt-admin-debug-btn">🐛 DEBUG DATA</button>
+                            </div>
+                        </details>
+                    </div>
+                    <button type="button" id="sidebarRightToggle" class="vtt-sidebar-fab" onclick="toggleRightSidebarCollapsed()" title="Collapse or expand right sidebar">⟩</button>
                 </div>
             </header>
 
             <!-- Main Content -->
             <div class="main-container">
                 <!-- Left Sidebar - Controls -->
-                <aside class="sidebar left">
-                    <div class="panel">
-                        <h3>Controls</h3>
-                        <div id="dmControls" class="hidden">
+                <aside class="sidebar left" id="sidebarLeft">
+                    <div id="playerSidebarChrome">
+                        <div class="panel vtt-card">
+                            <h3 class="vtt-card-title">Character</h3>
+                            <div id="playerControls">
+                                <button onclick="showCharacterSelect()">Select Character</button>
+                                <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
+                                <button type="button" id="armstechPlayerBtn" onclick="openArmstechTracker()" style="display:none;background:#2a4a3a;color:#a8f0c8;font-weight:bold;border:1px solid #44aa66;">🔧 Armstech</button>
+                                <button id="playerActionBarToggleBtn" onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold;" title="Toggle the action bar at the bottom (On/Off)">📊 Action Bar (On)</button>
+                            </div>
+                        </div>
+                        <div class="panel vtt-card">
+                            <h3 class="vtt-card-title">Tools</h3>
+                            <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
+                            <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
+                            <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
+                        </div>
+                    </div>
+                    <div id="dmControls" class="panel vtt-card hidden">
                             <button onclick="showMapUpload()">📍 Upload Map</button>
                             <button onclick="saveCurrentMapState()" id="saveMapStateBtn" style="background: #ffaa44; color: #000; font-weight: bold;">💾 Save Map State</button>
                             <button onclick="showMapSettings()">⚙️ Map Settings</button>
@@ -81,7 +113,7 @@
                             <button type="button" onclick="showPlaceObjectModal()" style="background:#6a6a6a;color:#fff;font-weight:bold;">📦 Place Object</button>
                             <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
                             <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
-                            <button onclick="toggleCombat()">⚔️ Toggle Combat</button>
+                            <button type="button" id="dmToggleCombatBtn" onclick="toggleCombat()">⚔️ Start Combat</button>
                             <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.12);">
                                 <div style="font-size:11px;font-weight:bold;color:#aa88ff;margin-bottom:6px;">👁️ Player map (anti-metagame)</div>
                                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px;">
@@ -92,16 +124,6 @@
                                 <p style="font-size:10px;opacity:0.7;margin:0;line-height:1.35;">You always see the full map. Turn on, then use the tool to drag the cyan window. Players get fog outside it.</p>
                             </div>
                         </div>
-                        <div id="playerControls">
-                            <button onclick="showCharacterSelect()">Select Character</button>
-                            <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
-                            <button type="button" id="armstechPlayerBtn" onclick="openArmstechTracker()" style="display:none;background:#2a4a3a;color:#a8f0c8;font-weight:bold;border:1px solid #44aa66;">🔧 Armstech</button>
-                            <button id="playerActionBarToggleBtn" onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold;" title="Toggle the action bar at the bottom (On/Off)">📊 Action Bar (On)</button>
-                            <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
-                            <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
-                            <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
-                        </div>
-                    </div>
 
                     <!-- Combat Tracker -->
                     <div class="panel" id="combatPanel">
@@ -169,6 +191,7 @@
 
                 <!-- Center - Map View -->
                 <main class="map-container">
+                    <div class="map-view-stack">
                     <canvas id="mapCanvas" width="1200" height="800"></canvas>
 
                     <!-- 3D Arena (experimental) -->
@@ -207,16 +230,19 @@
                         <div id="arena3dDropHint" class="arena3d-drop-hint hidden">Drop .stl or .glb here</div>
                     </div>
 
-                    <div id="mapControls">
-                        <button onclick="zoomIn()">🔍+</button>
-                        <button onclick="zoomOut()">🔍-</button>
-                        <button onclick="resetZoom()">Reset</button>
+                    <div id="mapControls" class="map-floating-controls" aria-label="Map zoom and view">
+                        <button type="button" onclick="zoomIn()">🔍+</button>
+                        <button type="button" onclick="zoomOut()">🔍-</button>
+                        <button type="button" onclick="resetZoom()">Reset</button>
+                        <button type="button" onclick="fitMapToViewport()" title="Fit the whole map in the view">⤢ Fit</button>
+                        <button type="button" onclick="centerOnSelectedToken()" title="Center on the selected token">◎ Center</button>
                         <button type="button" onclick="toggle3DArena()" title="Experimental 3D arena">🧊 3D Arena</button>
+                    </div>
                     </div>
                 </main>
 
                 <!-- Right Sidebar - Info -->
-                <aside class="sidebar right">
+                <aside class="sidebar right" id="sidebarRight">
                     <!-- Token Info -->
                     <div class="panel">
                         <h3>Selected Token</h3>
@@ -229,14 +255,29 @@
                         </div>
                     </div>
 
-                    <!-- Rolls Log -->
-                    <div class="panel" id="rollsLogPanel" style="background: linear-gradient(135deg, rgba(170, 136, 255, 0.2) 0%, rgba(74, 158, 255, 0.15) 100%); border: 2px solid rgba(170, 136, 255, 0.5); box-shadow: 0 4px 20px rgba(170, 136, 255, 0.3);">
-                        <h3 style="font-size: 20px; color: #aa88ff; text-shadow: 0 0 10px rgba(170, 136, 255, 0.8); margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
-                            <span style="font-size: 28px;">🎲</span>
-                            <span>Rolls Log</span>
-                        </h3>
-                        <div id="rollsLog" style="background: linear-gradient(135deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.3) 100%); padding: 15px; border-radius: 8px; max-height: 500px; overflow-y: auto; font-size: 16px; min-height: 100px; border: 1px solid rgba(170, 136, 255, 0.3); box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);">
-                            <div style="opacity: 0.5; font-size: 14px; text-align: center; padding: 20px; font-style: italic;">Rolls will appear here...</div>
+                    <!-- Session log (Rolls / Chat / System) -->
+                    <div class="panel vtt-log-panel" id="rollsLogPanel">
+                        <div class="vtt-log-tabs" role="tablist">
+                            <button type="button" class="vtt-log-tab active" data-log-tab="rolls" role="tab" aria-selected="true">Rolls</button>
+                            <button type="button" class="vtt-log-tab" data-log-tab="chat" role="tab" aria-selected="false">Chat</button>
+                            <button type="button" class="vtt-log-tab" data-log-tab="system" role="tab" aria-selected="false">System</button>
+                        </div>
+                        <div class="vtt-log-panes">
+                            <div class="vtt-log-pane active" data-log-pane="rolls" role="tabpanel">
+                                <div id="rollsLog" class="vtt-log-scroll">
+                                    <div class="log-empty-placeholder">Rolls will appear here…</div>
+                                </div>
+                            </div>
+                            <div class="vtt-log-pane" data-log-pane="chat" role="tabpanel" hidden>
+                                <div id="chatLog" class="vtt-log-scroll">
+                                    <div class="log-empty-placeholder">In-character and table chat will appear here when the server supports it. Until then, use voice or your group’s chat.</div>
+                                </div>
+                            </div>
+                            <div class="vtt-log-pane" data-log-pane="system" role="tabpanel" hidden>
+                                <div id="systemLog" class="vtt-log-scroll">
+                                    <div class="log-empty-placeholder">Connection, maps, and session notices appear here…</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -1042,7 +1083,7 @@
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=20"></script>
-    <script src="/static/app.js?v=133"></script>
+    <script src="/static/app.js?v=134"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {
