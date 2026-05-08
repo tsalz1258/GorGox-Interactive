@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v134'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v149'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -16,7 +16,14 @@ let isDM = false; // THIS NEVER CHANGES AFTER CONNECTION
 let serverIsDm = null;
 let myPlayerName = ''; // Store our player name
 let myCharacterId = null; // Track which character this player controls
-let playerActionBarVisible = true; // Toggle for bottom action bar (players only)
+let playerActionBarVisible = true; // Toggle for bottom action bar (players)
+let dmActionBarEnabled = (function () {
+    try {
+        return localStorage.getItem('dmActionBarEnabled') !== '0';
+    } catch (e) {
+        return true;
+    }
+})(); // DM: show/hide token action bar when it blocks the map
 const PLAYER_ACTION_BAR_HEIGHT_MIN = 80;
 const PLAYER_ACTION_BAR_HEIGHT_MAX = 520;
 const PLAYER_ACTION_BAR_HEIGHT_DEFAULT = 100;
@@ -24,6 +31,16 @@ let playerActionBarHeight = PLAYER_ACTION_BAR_HEIGHT_DEFAULT; // Resizable; pers
 let currentMap = null;
 let tokens = [];
 let characters = [];
+/** Expose PC list so ES modules (e.g. SW5E builder / level-up) read the live array — see window.characters getter below. */
+
+Object.defineProperty(window, 'characters', {
+    enumerable: true,
+    configurable: true,
+    get() {
+        return characters;
+    }
+});
+
 let enemies = [];
 let npcs = []; // NPCs loaded from npc.json
 let selectedToken = null;
@@ -1848,6 +1865,11 @@ function convertStarWarsBuilderJsonToGameCharacter(charData, options) {
     return { character, storedCharData: charData };
 }
 
+if (typeof window !== 'undefined') {
+    window.convertStarWarsBuilderJsonToGameCharacter = convertStarWarsBuilderJsonToGameCharacter;
+    window.buildCharacterUpdatePayload = buildCharacterUpdatePayload;
+}
+
 /** Split enemy.actions into core text/object (for editor + action list) and DM-added sheet_attacks[]. */
 function parseEnemyActionsSplit(enemy) {
     if (!enemy) {
@@ -2223,6 +2245,146 @@ function normalizePowerLevel(rawLevel, category) {
     return { value, label };
 }
 
+/** Resolve SW5e tech/force power tier for filtering: tier 0 = at-will, 1–9 = level; unknown if absent from cache + sheet details. */
+function resolvePowerTierForUi(powerName, kind, charData) {
+    charData = charData || {};
+    var lookupFn = kind === 'force' ? findForcePowerInCacheGlobal : findTechPowerInCacheGlobal;
+    if (typeof lookupFn === 'function') {
+        var lu = lookupFn(powerName);
+        if (lu && typeof lu.level === 'number' && !isNaN(lu.level)) {
+            return { tier: lu.level, unknown: false };
+        }
+    }
+    function normName(s) {
+        return String(s || '')
+            .trim()
+            .toLowerCase();
+    }
+    var target = normName(powerName);
+    function scan(arr) {
+        if (!Array.isArray(arr)) return null;
+        var i;
+        for (i = 0; i < arr.length; i++) {
+            var d = arr[i];
+            if (!d || !d.name) continue;
+            if (normName(d.name) !== target) continue;
+            var v = d.level;
+            if (v !== undefined && v !== null) {
+                if (typeof v === 'string' && /^\d+$/.test(String(v).trim())) v = parseInt(v, 10);
+                if (typeof v === 'number' && !isNaN(v)) return { tier: v, unknown: false };
+            }
+            return { tier: null, unknown: true };
+        }
+        return null;
+    }
+    var kindDetails = kind === 'force' ? charData.forcePowerDetails : charData.techPowerDetails;
+    var r = scan(kindDetails);
+    if (r) return r;
+    var classes = charData.classes || [];
+    var c;
+    for (c = 0; c < classes.length; c++) {
+        var cls = classes[c];
+        if (!cls) continue;
+        var cd = kind === 'force' ? cls.forcePowerDetails : cls.techPowerDetails;
+        r = scan(cd);
+        if (r) return r;
+    }
+    return { tier: null, unknown: true };
+}
+
+function powerTierPassesFilter(meta, filterKey) {
+    if (!filterKey || filterKey === 'all') return true;
+    if (filterKey === 'unknown') return meta.unknown === true;
+    var want = parseInt(filterKey, 10);
+    if (isNaN(want)) return true;
+    if (meta.unknown) return false;
+    return meta.tier === want;
+}
+
+function getStoredPowerLevelFilter(scope, kind) {
+    try {
+        return localStorage.getItem('powerLvlFilter_' + scope + '_' + kind) || 'all';
+    } catch (e) {
+        return 'all';
+    }
+}
+
+function setStoredPowerLevelFilter(scope, kind, val) {
+    try {
+        localStorage.setItem('powerLvlFilter_' + scope + '_' + kind, val);
+    } catch (e) {}
+}
+
+function orderedTierKeysForPowerList(names, kind, charData) {
+    var seen = {};
+    names.forEach(function (n) {
+        var m = resolvePowerTierForUi(n, kind, charData);
+        if (m.unknown) seen.unknown = true;
+        else seen[m.tier] = true;
+    });
+    var out = [];
+    if (seen[0]) out.push('0');
+    var L;
+    for (L = 1; L <= 9; L++) {
+        if (seen[L]) out.push(String(L));
+    }
+    if (seen.unknown) out.push('unknown');
+    return out;
+}
+
+function tierFilterLabelForBar(tk) {
+    if (tk === 'unknown') return '?';
+    if (tk === '0') return 'AW';
+    return 'L' + tk;
+}
+
+function tierFilterLabelForSheet(tk) {
+    if (tk === 'unknown') return 'Unknown';
+    if (tk === '0') return 'At-will';
+    return 'Level ' + tk;
+}
+
+function buildPowerLevelFilterRowHtml(scope, kind, activeFilter, tierKeys, compactLabels) {
+    var parts =
+        '<div class="bar-power-filter-row" role="group" aria-label="Filter powers by level">';
+    function chip(key, label) {
+        var ac = activeFilter === key ? ' bar-power-filter-btn--active' : '';
+        return (
+            '<button type="button" class="bar-power-filter-btn' +
+            ac +
+            '" data-pwr-filter-scope="' +
+            escapeHtml(scope) +
+            '" data-pwr-filter-kind="' +
+            escapeHtml(kind) +
+            '" data-pwr-tier="' +
+            escapeHtml(key) +
+            '">' +
+            escapeHtml(label) +
+            '</button>'
+        );
+    }
+    parts += chip('all', 'All');
+    tierKeys.forEach(function (tk) {
+        var lab = compactLabels ? tierFilterLabelForBar(tk) : tierFilterLabelForSheet(tk);
+        parts += chip(tk, lab);
+    });
+    parts += '</div>';
+    return parts;
+}
+
+function wirePowerLevelFilterButtons(scopeEl, rerenderFn) {
+    if (!scopeEl || typeof rerenderFn !== 'function') return;
+    scopeEl.querySelectorAll('.bar-power-filter-btn').forEach(function (btn) {
+        btn.onclick = function () {
+            var sc = this.getAttribute('data-pwr-filter-scope');
+            var kd = this.getAttribute('data-pwr-filter-kind');
+            var tier = this.getAttribute('data-pwr-tier');
+            if (sc && kd && tier != null && tier !== '') setStoredPowerLevelFilter(sc, kd, tier);
+            rerenderFn();
+        };
+    });
+}
+
 function handleServerMessage(message) {
     console.log('Received:', message);
     
@@ -2309,10 +2471,10 @@ function handleServerMessage(message) {
                 }, 600);
             }
             
-            // Show refresh button when connected
-            const refreshBtn = document.getElementById('refreshButton');
-            if (refreshBtn) {
-                refreshBtn.classList.remove('hidden');
+            // Show top-bar Sync + 3D quick actions when connected
+            const topQuick = document.getElementById('topBarQuickActions');
+            if (topQuick) {
+                topQuick.classList.remove('hidden');
             }
             
             document.getElementById('playerInfo').textContent = 
@@ -3156,6 +3318,7 @@ function handleServerMessage(message) {
             updateInitiativeList();
             updatePlayerTurnControls();
             updateCurrentTurnDisplay(message.participant_name || (turnParticipant ? turnParticipant.name : 'Unknown'));
+            if (typeof populatePlayerActionBar === 'function') populatePlayerActionBar();
             addLogEntry(`⚔️ ${message.participant_name || (turnParticipant ? turnParticipant.name : 'Unknown')}'s turn`, 'info');
             renderCanvas(); // Redraw to show movement range
             break;
@@ -3173,6 +3336,7 @@ function handleServerMessage(message) {
             const playerCombatEl = document.getElementById('playerCombatControls');
             if (dmCombatEl) dmCombatEl.classList.add('hidden');
             if (playerCombatEl) playerCombatEl.classList.add('hidden');
+            if (typeof populatePlayerActionBar === 'function') populatePlayerActionBar();
             renderCanvas(); // Redraw to clear movement range
             break;
             
@@ -3306,16 +3470,19 @@ function handleServerMessage(message) {
                 selectedToken = damagedToken;
                 updateInitiativeList();
                 updateTokenInfo();
+                refreshSelectedDmEnemyActionBar();
                 
                 // Restore previous selection after animation completes (1.5s + buffer)
                 setTimeout(() => {
                     selectedToken = previousSelection;
                     updateTokenInfo();
+                    refreshSelectedDmEnemyActionBar();
                 }, 1600);
             } else {
                 // Token is already selected - just update normally (matches dealDamage() pattern)
                 updateInitiativeList();
                 updateTokenInfo();
+                refreshSelectedDmEnemyActionBar();
             }
             
             renderCanvas();
@@ -3401,6 +3568,7 @@ function handleServerMessage(message) {
             // Force UI update to reflect new HP
             // ALWAYS update UI for any healing - ensure players see their HP update
             updateTokenInfo();
+            refreshSelectedDmEnemyActionBar();
             updateInitiativeList();
             renderCanvas();
             
@@ -4936,6 +5104,53 @@ function normalizePortraitUrl(src) {
     return s;
 }
 
+/** Foundry SW5e item paths → GorGox static (matches scripts/sync-npc-catalog-from-packs.mjs). */
+function resolveSw5eAssetUrl(p) {
+    if (p == null || typeof p !== 'string') return '';
+    const s = p.trim();
+    if (!s) return '';
+    if (/^(https?:|data:|blob:)/i.test(s)) return s;
+    if (s.startsWith('/static/')) return s;
+    if (s.startsWith('systems/sw5e/')) return '/static/sw5e-assets/' + s.slice('systems/sw5e/'.length);
+    return s;
+}
+
+/**
+ * Spawned NPCs keep an `npcData` snapshot; catalog gains new SW5e pack fields when you run sync.
+ * Merge live `npcs[]` row by canonical name so the DM bar always gets imgs + structured actions.
+ */
+function getNpcDataMergedForDmBar(enemy) {
+    if (!enemy || !enemy.npcData) return null;
+    const base = enemy.npcData;
+    if (typeof npcs === 'undefined' || !Array.isArray(npcs) || npcs.length === 0) return base;
+    const catalogName = String(base.name || '').trim();
+    if (!catalogName) return base;
+    let fresh = null;
+    for (let i = 0; i < npcs.length; i++) {
+        if (npcs[i] && String(npcs[i].name || '').trim() === catalogName) {
+            fresh = npcs[i];
+            break;
+        }
+    }
+    if (!fresh) return base;
+    const out = Object.assign({}, base);
+    const keys = [
+        'sw5e_action_items',
+        'sw5e_bonus_action_items',
+        'sw5e_reaction_items',
+        'sw5e_trait_items',
+        'sw5e_legendary_items',
+        'sw5e_portrait_url',
+        'sw5e_token_url',
+        'bonus_actions',
+    ];
+    for (let k = 0; k < keys.length; k++) {
+        const key = keys[k];
+        if (fresh[key] !== undefined && fresh[key] !== null) out[key] = fresh[key];
+    }
+    return out;
+}
+
 function normalizeArenaModelUrl(src) {
     if (src == null) return '';
     const s = String(src).trim();
@@ -5955,11 +6170,6 @@ function updateTokenInfo() {
                 info += `<div class="token-stat"><span>WIS:</span><span>${enemy.wisdom}</span></div>`;
                 info += `<div class="token-stat"><span>CHA:</span><span>${enemy.charisma}</span></div>`;
                 
-                if (enemy.description) {
-                    info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                    info += `<p style="font-size: 11px; margin-top: 8px; white-space: pre-wrap;">${escapeHtml(enemy.description)}</p>`;
-                }
-                
                 // Add button to view full character sheet (NPC or custom enemy, DM only)
                 if (isDM) {
                     info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
@@ -6033,6 +6243,10 @@ function updateTokenInfo() {
         actionsDiv.classList.remove('hidden');
     } else {
         actionsDiv.classList.add('hidden');
+    }
+
+    if (typeof updatePlayerActionBarVisibility === 'function') {
+        updatePlayerActionBarVisibility();
     }
 }
 
@@ -6579,11 +6793,16 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '</div>' +
     '<div class="player-bar-inner">' +
     '<div class="player-bar-tab-panels">' +
-    '<div class="player-bar-tab-panel active" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">' +
-    '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
-    '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
-    '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
-    '</div>' +
+    '<div class="player-bar-tab-panel active vtt-combat-tab-shell" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">' +
+    '<div id="playerBarNameHp" class="vtt-ab-header-wrap"></div>' +
+    '<div class="vtt-ab-body">' +
+    '<div class="vtt-ab-fight-row" id="playerBarFightRow"></div>' +
+    '<div class="vtt-ab-special-row" id="playerBarSpecialRow"></div>' +
+    '<div class="vtt-ab-lower3">' +
+    '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Bonus actions</span><div id="playerBarBonusCol" class="vtt-ab-chip-col"></div></div>' +
+    '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Reactions</span><div id="playerBarReactionCol" class="vtt-ab-chip-col"></div></div>' +
+    '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Inventory</span><div id="playerBarInventoryCol" class="vtt-ab-chip-col"></div></div>' +
+    '</div></div></div>' +
     '<div class="player-bar-tab-panel" id="playerBarPanelAbilities" data-tab="abilities" role="tabpanel">' +
     '<div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>' +
     '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
@@ -7714,33 +7933,49 @@ function campaignNotesSaveQuest(silent) {
     if (!silent) renderNotesTabContent();
 }
 
-// Toggle the action bar on/off (called by the gold Action Bar button)
+// Toggle the action bar on/off (players + DM when enemy token bar would show)
 function togglePlayerActionBar() {
-    if (isDM) return;
-    playerActionBarVisible = !playerActionBarVisible;
+    if (isDM) {
+        dmActionBarEnabled = !dmActionBarEnabled;
+        try {
+            localStorage.setItem('dmActionBarEnabled', dmActionBarEnabled ? '1' : '0');
+        } catch (e) {}
+    } else {
+        playerActionBarVisible = !playerActionBarVisible;
+    }
     updatePlayerActionBarVisibility();
     updateActionBarButtonLabel();
 }
 
-// Update the Action Bar button text to show current state (On/Off)
+// Update Action Bar button text (player vs DM buttons track different prefs)
 function updateActionBarButtonLabel() {
-    const btn = document.getElementById('playerActionBarToggleBtn');
-    if (!btn) return;
-    btn.textContent = playerActionBarVisible ? '📊 Action Bar (On)' : '📊 Action Bar (Off)';
+    document.querySelectorAll('[data-action-bar-toggle]').forEach(function (btn) {
+        var isDmBtn = btn.id === 'dmActionBarToggleBtn';
+        var on = isDmBtn ? dmActionBarEnabled : playerActionBarVisible;
+        btn.textContent = on ? '📊 Action Bar (On)' : '📊 Action Bar (Off)';
+    });
 }
 
-// Show/hide the horizontal player action bar (players only). Bar spans full width of screen at bottom.
+// Show/hide the bottom action bar: players (toggle), or DM when an enemy token is selected.
 function updatePlayerActionBarVisibility() {
     const bar = ensurePlayerActionBarExists();
-    const shouldShow = !isDM && playerActionBarVisible;
+    const dmEnemyBar =
+        isDM && dmActionBarEnabled && selectedToken && selectedToken.entity_type === 'Enemy';
+    const playerBar = !isDM && playerActionBarVisible;
+    const shouldShow = playerBar || dmEnemyBar;
     if (shouldShow) {
         bar.classList.remove('hidden');
+        bar.classList.toggle('player-action-bar--dm-enemy', !!dmEnemyBar);
         applyPlayerActionBarHeight();
-        bar.style.cssText = 'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;height:' + playerActionBarHeight + 'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#1a1510 0%,#0f0c08 50%,#0a0806 100%)!important;border-top:3px solid #c9a227!important;border-left:3px solid #c9a227!important;';
+        bar.style.cssText =
+            'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;height:' +
+            playerActionBarHeight +
+            'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#070b14 0%,#050814 45%,#03050c 100%)!important;border-top:3px solid rgba(74,158,255,0.55)!important;border-left:3px solid rgba(201,162,39,0.45)!important;box-shadow:0 -8px 40px rgba(0,0,0,.55)!important;';
         document.body.classList.add('player-action-bar-visible');
         populatePlayerActionBar();
     } else {
         bar.classList.add('hidden');
+        bar.classList.remove('player-action-bar--dm-enemy');
         bar.style.cssText = 'display:none!important;visibility:hidden!important;';
         document.body.classList.remove('player-action-bar-visible');
     }
@@ -7748,10 +7983,1097 @@ function updatePlayerActionBarVisibility() {
     updateArmstechPlayerButtonVisibility();
 }
 
+/** Sci-fi header strip for the bottom action bar (portrait, vitals, economy pips, End Turn). */
+function buildSciFiActionBarHeaderHtml(opts) {
+    var ph = opts.placeholderGlyph || '\u2694';
+    var port = '';
+    if (opts.portraitUrl) {
+        port =
+            '<div class="vtt-ab-portrait vtt-ab-portrait--lit"><img src="' +
+            escapeHtml(opts.portraitUrl) +
+            '" alt="" loading="lazy"></div>';
+    } else {
+        port = '<div class="vtt-ab-portrait"><span class="vtt-ab-portrait-ph">' + ph + '</span></div>';
+    }
+    var end = '';
+    if (opts.showEndTurn) {
+        end =
+            '<button type="button" class="vtt-ab-end-turn" onclick="' +
+            (opts.endTurnIsDmNext ? 'nextTurn()' : 'endMyTurn()') +
+            '">End Turn</button>';
+    }
+    var sheet = opts.sheetButtonHtml || '';
+    var inv = opts.inventoryButtonHtml || '';
+    var aux = opts.auxHtml || '';
+    return (
+        '<div class="vtt-ab-header-inner">' +
+        port +
+        '<div class="vtt-ab-identity">' +
+        '<div class="vtt-ab-name">' +
+        escapeHtml(opts.name) +
+        '</div>' +
+        '<div class="vtt-ab-sub">' +
+        escapeHtml(opts.subtitle || '') +
+        '</div>' +
+        aux +
+        '</div>' +
+        '<div class="vtt-ab-header-right">' +
+        '<div class="vtt-ab-vitals">' +
+        '<div class="vtt-ab-stat vtt-ab-stat--hp" title="Hit points"><span class="vtt-ab-stat-ic" aria-hidden="true">\u2665</span><span class="vtt-ab-stat-val">' +
+        opts.currentHP +
+        '/' +
+        opts.maxHP +
+        '</span><span class="vtt-ab-stat-lbl">HP</span></div>' +
+        '<div class="vtt-ab-stat vtt-ab-stat--ac" title="Armor class"><span class="vtt-ab-stat-ic" aria-hidden="true">\u{1F6E1}</span><span class="vtt-ab-stat-val">' +
+        opts.ac +
+        '</span><span class="vtt-ab-stat-lbl">AC</span></div>' +
+        '<div class="vtt-ab-stat vtt-ab-stat--spd" title="Speed"><span class="vtt-ab-stat-ic" aria-hidden="true">\u2316</span><span class="vtt-ab-stat-val">' +
+        opts.speed +
+        ' ft</span><span class="vtt-ab-stat-lbl">SPD</span></div>' +
+        '</div>' +
+        '<div class="vtt-ab-economy">' +
+        '<div class="vtt-ab-pip" title="Action"><span class="vtt-ab-pip-lbl">Act</span><span class="vtt-ab-pip-n">1</span></div>' +
+        '<div class="vtt-ab-pip" title="Bonus action"><span class="vtt-ab-pip-lbl">Bon</span><span class="vtt-ab-pip-n">1</span></div>' +
+        '<div class="vtt-ab-pip" title="Reaction"><span class="vtt-ab-pip-lbl">Re</span><span class="vtt-ab-pip-n">1</span></div>' +
+        '</div>' +
+        '<div class="vtt-ab-endturn-wrap">' +
+        end +
+        '<div class="vtt-ab-bar-actions">' +
+        sheet +
+        inv +
+        '</div>' +
+        '</div>' +
+        '</div></div>'
+    );
+}
+
+function wireBarAttackButtons(scopeEl, fallbackCharName) {
+    if (!scopeEl) return;
+    scopeEl.querySelectorAll('.bar-attack-btn').forEach(function (btn) {
+        btn.onclick = function () {
+            var rangeInput = (this.dataset.range || '').trim() ? this.dataset.range : null;
+            requestAttackTarget(
+                this.dataset.weapon,
+                parseInt(this.dataset.tohit, 10),
+                this.dataset.damage,
+                this.dataset.type,
+                this.dataset.name || fallbackCharName,
+                rangeInput
+            );
+        };
+    });
+}
+
+function dmEnemyPickText() {
+    for (var i = 0; i < arguments.length; i++) {
+        var v = arguments[i];
+        if (v == null || v === '') continue;
+        var s = String(v).trim();
+        if (s !== '') return s;
+    }
+    return '';
+}
+
+function setSpellTooltipReadableMode(on) {
+    var tooltip = document.getElementById('spellTooltip');
+    if (!tooltip) return;
+    if (on) tooltip.classList.add('spell-tooltip--readable');
+    else tooltip.classList.remove('spell-tooltip--readable');
+}
+
+function isNoiseStatblockName(name, desc) {
+    var n = (name || '').trim();
+    var d = (desc || '').trim();
+    if (!n) return true;
+    if (/^Reach\b/i.test(n) && d.length < 48) return true;
+    if (/^Range\b/i.test(n) && d.length < 36) return true;
+    if (/^Targets?\b/i.test(n) && d.length < 20) return true;
+    return false;
+}
+
+/** When regex stat-block splitter fails, chunk by paragraphs (SW5e / homebrew prose). */
+function splitNamedStatblockParagraphChunks(text) {
+    var t = String(text || '').trim();
+    if (!t) return [];
+    var paras = t.split(/\n\s*\n+/);
+    var out = [];
+    for (var pi = 0; pi < paras.length; pi++) {
+        var p = paras[pi].trim().replace(/\r/g, '');
+        if (!p) continue;
+        var lines = p
+            .split(/\n/)
+            .map(function (x) {
+                return x.trim();
+            })
+            .filter(Boolean);
+        if (!lines.length) continue;
+        var first = lines[0];
+        var restJoined = lines.slice(1).join('\n').trim();
+        var m = first.match(/^([^\.]{3,140})\.(?:\s*(.*))?$/);
+        var name,
+            desc = '';
+        if (m && m[1]) {
+            name = m[1].trim();
+            desc = ((m[2] || '') + (restJoined ? '\n' + restJoined : '')).trim();
+        } else if (lines.length >= 2) {
+            name = first.replace(/\.$/, '').trim();
+            desc = lines.slice(1).join('\n').trim();
+        } else {
+            name = 'Action';
+            desc = first;
+        }
+        if (!isNoiseStatblockName(name, desc)) out.push({ name: name, description: desc });
+    }
+    return out.length ? out : [{ name: 'Actions', description: t }];
+}
+
+/** Wire readable tooltips onto fight-row tiles (saves + weapons replace native title= previews). */
+function wireDmEnemyFightRowTooltips(fightEl /* , creatureName */) {
+    if (!fightEl || fightEl.dataset.dmEnemyFightTipsWired === '1') return;
+    fightEl.dataset.dmEnemyFightTipsWired = '1';
+    fightEl.querySelectorAll('.dm-enemy-save-btn').forEach(function (btn) {
+        btn.removeAttribute('title');
+        btn.addEventListener('mouseenter', function (ev) {
+            var raw = btn.getAttribute('data-dm-tip') || '';
+            var desc = raw ? decodeURIComponent(raw) : '';
+            var nm = btn.dataset.label || 'Saving throw';
+            var dc = btn.dataset.saveDc || '';
+            var st = String(btn.dataset.saveType || 'dex').toUpperCase().slice(0, 4);
+            var dmg = btn.dataset.damage || '';
+            var dt = btn.dataset.dmgType || '';
+            var lines = [];
+            if (dc) lines.push('DC ' + dc + ' ' + st + ' saving throw');
+            if (dmg) lines.push('Damage on a failed save: ' + dmg + (dt ? ' ' + dt : ''));
+            if (desc) {
+                lines.push('\u2014');
+                lines.push(desc);
+            }
+            showNamedBlockTooltip(nm, 'Saving throw', lines.filter(Boolean).join('\n'), ev);
+        });
+        btn.addEventListener('mouseleave', function () {
+            hideSpellTooltip();
+        });
+    });
+    fightEl.querySelectorAll('.bar-attack-btn').forEach(function (btn) {
+        btn.removeAttribute('title');
+        btn.addEventListener('mouseenter', function (ev) {
+            var raw = btn.getAttribute('data-dm-tip') || '';
+            var desc = raw ? decodeURIComponent(raw) : '';
+            var w = btn.dataset.weapon || 'Weapon';
+            var mod = parseInt(btn.dataset.tohit, 10);
+            var dmg = btn.dataset.damage || '';
+            var typ = btn.dataset.type || '';
+            var rng = btn.dataset.range || '';
+            var lines = [];
+            if (!isNaN(mod)) lines.push('To hit: ' + (mod >= 0 ? '+' + mod : String(mod)));
+            if (dmg) lines.push('Damage: ' + dmg + (typ ? ' (' + typ + ')' : ''));
+            if (rng && String(rng).trim()) lines.push('Reach / range hint: ' + String(rng).trim() + ' ft');
+            if (desc) {
+                lines.push('\u2014');
+                lines.push(desc);
+            }
+            showNamedBlockTooltip(w, 'Weapon attack', lines.filter(Boolean).join('\n'), ev);
+        });
+        btn.addEventListener('mouseleave', function () {
+            hideSpellTooltip();
+        });
+    });
+    fightEl.querySelectorAll('.dm-enemy-misc-btn').forEach(function (btn) {
+        btn.removeAttribute('title');
+        btn.addEventListener('mouseenter', function (ev) {
+            var raw = btn.getAttribute('data-dm-tip') || '';
+            var desc = raw ? decodeURIComponent(raw) : '';
+            var lab = btn.dataset.dmLabel || 'Action';
+            showNamedBlockTooltip(lab, 'Action', desc || 'No description stored.', ev);
+        });
+        btn.addEventListener('mouseleave', function () {
+            hideSpellTooltip();
+        });
+    });
+}
+
+function dedupeDmEnemyAttackRows(rows) {
+    var seen = {};
+    var out = [];
+    (rows || []).forEach(function (r) {
+        var key = (
+            (r.name || '') +
+            '|' +
+            (r.toHit != null ? r.toHit : '') +
+            '|' +
+            (r.damage || '') +
+            '|' +
+            (r.type || '')
+        ).toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        out.push(r);
+    });
+    return out;
+}
+
+/** Same merge as NPC/custom sheet: parsed weapon/save attacks + DM sheet attacks. */
+function mergeEnemyAttackRowsForDmBar(enemy) {
+    var rows = [];
+    if (!enemy) return rows;
+    if (enemy.npcData) {
+        var npc = getNpcDataMergedForDmBar(enemy);
+        var sheetHits = [];
+        getEnemySheetAttacksList(enemy).forEach(function (sa) {
+            sheetHits.push({
+                type: 'weapon',
+                name: sa.name,
+                toHit: sa.to_hit,
+                damage: sa.damage,
+                damageType: sa.type || 'kinetic',
+                description: '',
+                range: sa.range || ''
+            });
+        });
+
+        var fromPack = [];
+        if (Array.isArray(npc.sw5e_action_items) && npc.sw5e_action_items.length) {
+            npc.sw5e_action_items.forEach(function (si) {
+                var nm = si && si.name ? String(si.name).trim() : 'Action';
+                var chunk = nm + ' . ' + ((si && si.description) ? String(si.description).trim() : '');
+                var imgSi = resolveSw5eAssetUrl(si && si.img ? String(si.img).trim() : '');
+                parseAttacksFromActions(chunk).forEach(function (p) {
+                    fromPack.push(Object.assign({}, p, { img: imgSi }));
+                });
+            });
+        }
+
+        if (fromPack.length) {
+            return dedupeDmEnemyAttackRows(fromPack.concat(sheetHits));
+        }
+
+        if (npc.actions && String(npc.actions).trim()) {
+            rows = rows.concat(parseAttacksFromActions(npc.actions));
+        }
+        return dedupeDmEnemyAttackRows(rows.concat(sheetHits));
+    }
+    var actionsData = parseCustomEnemyActions(enemy);
+    if (actionsData.length === 0 && enemy.isCustomInstance && enemy.name) {
+        var baseName = enemy.name.replace(/\s+\d+$/, '').trim();
+        var template = enemies.find(function (e) {
+            return (
+                !e.isCustomInstance &&
+                e.name &&
+                (e.name === baseName || e.name.replace(/\s+\d+$/, '').trim() === baseName)
+            );
+        });
+        if (template) actionsData = parseCustomEnemyActions(template);
+    }
+    if (
+        actionsData.length === 0 &&
+        enemy.actions &&
+        typeof enemy.actions === 'object' &&
+        !Array.isArray(enemy.actions)
+    ) {
+        actionsData = Object.entries(enemy.actions)
+            .filter(function (kv) {
+                var k = kv[0];
+                return (
+                    k &&
+                    typeof k === 'string' &&
+                    k !== 'sheet_attacks' &&
+                    k !== '_gorg_actions_freeform' &&
+                    k !== '_gorgox_arena_stl_url' &&
+                    k !== '_gorgox_arena_mini_scale'
+                );
+            })
+            .map(function (kv) {
+                var val = kv[1];
+                return {
+                    name: kv[0],
+                    description:
+                        typeof val === 'string'
+                            ? val
+                            : val && (val.description || val.desc || val.text) != null
+                              ? String(val.description || val.desc || val.text)
+                              : ''
+                };
+            });
+    }
+    var customAttacks = [];
+    if (actionsData.length > 0) {
+        actionsData.forEach(function (a) {
+            var oneActionText = (a.name || 'Action') + '. ' + (a.description || '');
+            customAttacks = customAttacks.concat(parseAttacksFromActions(oneActionText));
+        });
+    }
+    getEnemySheetAttacksList(enemy).forEach(function (sa) {
+        customAttacks.push({
+            type: 'weapon',
+            name: sa.name,
+            toHit: sa.to_hit,
+            damage: sa.damage,
+            damageType: sa.type || 'kinetic',
+            description: '',
+            range: sa.range || ''
+        });
+    });
+    return dedupeDmEnemyAttackRows(customAttacks);
+}
+
+/** Split stat-block prose into Name / description chunks (traits, reactions, bonus actions). */
+function splitNamedStatblockChunks(text) {
+    if (!text || !String(text).trim()) return [];
+    var t = String(text).trim();
+    var blocks = [];
+    var re =
+        /([A-Z][A-Za-z0-9''\-\s]{2,55}?)\s*\.\s*([\s\S]*?)(?=\n\s*[A-Z][a-z][A-Za-z0-9''\-\s]{1,50}\s*\.|\s*[A-Z][a-z]+\s+[A-Z][a-z]+\s*\.|$)/g;
+    var m;
+    while ((m = re.exec(t)) !== null) {
+        var desc = (m[2] || '').trim();
+        if ((m[1] || '').length >= 2 && desc.length >= 2) {
+            blocks.push({ name: m[1].trim(), description: desc });
+        }
+    }
+    if (blocks.length === 0 && t.length > 0) {
+        blocks.push({ name: 'Feature', description: t });
+    }
+    blocks = blocks.filter(function (b) {
+        return b && b.name && !isNoiseStatblockName(b.name, b.description);
+    });
+    var usePara =
+        blocks.length === 0 || (blocks.length <= 2 && t.length > 260 && /\n\s*\n/.test(t));
+    if (usePara) {
+        var para = splitNamedStatblockParagraphChunks(t);
+        if (blocks.length === 0 || para.length > blocks.length) blocks = para;
+    }
+    if (blocks.length === 0 && t.length > 0) {
+        blocks.push({ name: 'Feature', description: t });
+    }
+    return blocks;
+}
+
+function extractBetweenHeaders(raw, startRe, endRes) {
+    if (!raw) return '';
+    var m = raw.match(startRe);
+    if (!m || m.index === undefined) return '';
+    var start = m.index + m[0].length;
+    var tail = raw.slice(start);
+    var cut = tail.length;
+    for (var i = 0; i < endRes.length; i++) {
+        var em = tail.match(endRes[i]);
+        if (em && em.index !== undefined && em.index < cut) {
+            cut = em.index;
+        }
+    }
+    return raw.slice(start, start + cut).trim();
+}
+
+/** Roll dice or log from a named stat-block chunk (bonus / reaction / trait). */
+function rollDmEnemyNamedChunk(creatureName, blockName, description) {
+    var desc = description || '';
+    var diceMatch = desc.match(/(\d+)d(\d+)([+-]\d+)?/i);
+    if (diceMatch) {
+        var result = rollDice(diceMatch[0]);
+        addLogEntry(
+            creatureName + ' — ' + blockName + ': ' + diceMatch[0] + ' \u2192 ' + result.breakdown + ' = ' + result.total,
+            'damage'
+        );
+    } else {
+        addLogEntry(
+            creatureName + ' — ' + blockName + (desc ? ': ' + desc.substring(0, 160) + (desc.length > 160 ? '...' : '') : ''),
+            'info'
+        );
+    }
+}
+
+function wireDmEnemySaveAttackTiles(scopeEl, creatureName) {
+    if (!scopeEl) return;
+    scopeEl.querySelectorAll('.dm-enemy-save-btn').forEach(function (btn) {
+        btn.onclick = function () {
+            var dc = parseInt(this.dataset.saveDc, 10);
+            var st = (this.dataset.saveType || 'dex').toLowerCase();
+            var dmg = this.dataset.damage || '';
+            var dmgType = this.dataset.dmgType || '';
+            var nm = this.dataset.label || 'Save';
+            if (dmg) {
+                var dmgResult = rollDice(dmg);
+                addLogEntry(
+                    nm +
+                        ': DC ' +
+                        dc +
+                        ' ' +
+                        st.toUpperCase() +
+                        ' save — damage roll ' +
+                        dmg +
+                        ' \u2192 ' +
+                        dmgResult.breakdown +
+                        ' = ' +
+                        dmgResult.total +
+                        ' ' +
+                        dmgType,
+                    'damage'
+                );
+            } else {
+                addLogEntry(nm + ': DC ' + dc + ' ' + st.toUpperCase() + ' saving throw', 'info');
+            }
+        };
+    });
+}
+
+function refreshSelectedDmEnemyActionBar() {
+    if (isDM && selectedToken && selectedToken.entity_type === 'Enemy') {
+        populateDmEnemyActionBar(selectedToken);
+    }
+}
+
+/** DM: bottom bar mirrors sheet data — merged attacks, bonus / reactions / traits, clickable rolls. */
+function populateDmEnemyActionBar(token) {
+    var bar = document.getElementById('playerActionBar');
+    var tabBar = bar ? bar.querySelector('.player-bar-tabs') : null;
+    if (tabBar) tabBar.style.display = 'none';
+    var inner = bar ? bar.querySelector('.player-bar-inner') : null;
+    if (!inner) return;
+    var enemy = enemies.find(function (e) {
+        return e && String(e.id) === String(token.entity_id);
+    });
+    if (!enemy) {
+        inner.innerHTML =
+            '<div class="player-bar-empty-state"><p class="player-bar-empty-text">Enemy data not loaded yet.</p></div>';
+        return;
+    }
+    var attackRows = mergeEnemyAttackRowsForDmBar(enemy);
+    var participant = combatState.participants.find(function (p) {
+        return p.id === token.id;
+    });
+    var maxHP = enemy.max_hp != null ? enemy.max_hp : 10;
+    var currentHP =
+        participant && participant.current_hp != null
+            ? participant.current_hp
+            : enemy.current_hp != null
+              ? enemy.current_hp
+              : maxHP;
+    var ac = enemy.armor_class != null ? enemy.armor_class : 10;
+    var speedFt = enemy.speed != null ? enemy.speed : 30;
+    var creatureName = enemy.name || 'Creature';
+    var sub =
+        (enemy.creature_type || 'Enemy') +
+        (enemy.challenge_rating != null ? ' \u00b7 CR ' + enemy.challenge_rating : '');
+    var portraitRaw = enemy.portrait_url || enemy.local_portrait || '';
+    var portraitUrl = '';
+    try {
+        portraitUrl = normalizePortraitUrl(portraitRaw) || '';
+    } catch (e1) {}
+    var myTurn = combatState.active && combatState.currentTurn === token.id;
+    var sheetBtn =
+        '<button type="button" class="vtt-ab-sheet-mini" onclick="showNPCCharacterSheet(\'' +
+        String(token.entity_id).replace(/'/g, "\\'") +
+        '\')">View</button>';
+    var headerHtml = buildSciFiActionBarHeaderHtml({
+        name: creatureName,
+        subtitle: sub,
+        portraitUrl: portraitUrl,
+        currentHP: currentHP,
+        maxHP: maxHP,
+        ac: ac,
+        speed: speedFt,
+        showEndTurn: myTurn,
+        endTurnIsDmNext: true,
+        sheetButtonHtml: sheetBtn
+    });
+    inner.innerHTML =
+        '<div class="player-bar-tab-panels">' +
+        '<div class="player-bar-tab-panel active vtt-combat-tab-shell" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">' +
+        '<div id="playerBarNameHp" class="vtt-ab-header-wrap">' +
+        headerHtml +
+        '</div>' +
+        '<div class="vtt-ab-body">' +
+        '<div class="vtt-ab-fight-row dm-enemy-fight-row" id="playerBarFightRow"></div>' +
+        '<div class="vtt-ab-special-row dm-enemy-special-row" id="playerBarSpecialRow"></div>' +
+        '<div class="vtt-ab-lower3">' +
+        '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Bonus actions</span><div id="playerBarBonusCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div></div>' +
+        '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Reactions</span><div id="playerBarReactionCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div></div>' +
+        '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Traits / features</span><div id="playerBarInventoryCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div></div>' +
+        '</div></div></div></div>';
+
+    var fight = document.getElementById('playerBarFightRow');
+    var fh =
+        '<button type="button" class="vtt-tile vtt-tile--move"><span class="vtt-tile-ic">\u{1F463}</span><span class="vtt-tile-t">Move</span><span class="vtt-tile-sub">' +
+        speedFt +
+        ' ft</span></button>';
+    attackRows.forEach(function (atk) {
+        var nm = atk.name || 'Attack';
+        var rangeAttr = escapeHtml(attackRangeToDataAttr(atk.range));
+        var rangeTitle = attackRangeToDataAttr(atk.range);
+        var titleAttr = rangeTitle ? escapeHtml('Range: ' + rangeTitle + ' ft') : '';
+        var dmTipAttr =
+            atk.description != null && String(atk.description).trim() !== ''
+                ? ' data-dm-tip="' + encodeURIComponent(String(atk.description)) + '"'
+                : '';
+        var packImg = resolveSw5eAssetUrl(atk.img && String(atk.img).trim() ? String(atk.img).trim() : '');
+        var thumbCls = packImg !== '' ? ' vtt-tile--has-thumb' : '';
+        if (atk.type === 'weapon' && atk.toHit !== null && atk.toHit !== undefined) {
+            var wBody =
+                packImg !== ''
+                    ? '<img class="vtt-tile-thumb" src="' +
+                      escapeHtml(packImg) +
+                      '" alt="" loading="lazy"><span class="vtt-tile-stack"><span class="vtt-tile-t">' +
+                      escapeHtml(nm) +
+                      '</span><span class="vtt-tile-sub">Attack</span></span>'
+                    : '<span class="vtt-tile-ic">\u{1F3AF}</span><span class="vtt-tile-t">' +
+                      escapeHtml(nm) +
+                      '</span><span class="vtt-tile-sub">Attack</span>';
+            fh +=
+                '<button type="button" tabindex="-1" class="vtt-tile vtt-tile--attack bar-attack-btn' +
+                thumbCls +
+                '" data-weapon="' +
+                escapeHtml(nm) +
+                '" data-tohit="' +
+                atk.toHit +
+                '" data-damage="' +
+                escapeHtml(atk.damage || '') +
+                '" data-type="' +
+                escapeHtml(atk.damageType || atk.type || 'damage') +
+                '" data-name="' +
+                escapeHtml(creatureName) +
+                '" data-range="' +
+                rangeAttr +
+                '"' +
+                dmTipAttr +
+                (titleAttr ? ' aria-label="' + titleAttr + '"' : '') +
+                '>' +
+                wBody +
+                '</button>';
+        } else if (atk.type === 'saving_throw' && atk.saveDC) {
+            var sSub =
+                'DC ' +
+                atk.saveDC +
+                ' ' +
+                String(atk.saveType || 'save').toUpperCase().slice(0, 3);
+            var sBody =
+                packImg !== ''
+                    ? '<img class="vtt-tile-thumb" src="' +
+                      escapeHtml(packImg) +
+                      '" alt="" loading="lazy"><span class="vtt-tile-stack"><span class="vtt-tile-t">' +
+                      escapeHtml(nm) +
+                      '</span><span class="vtt-tile-sub">' +
+                      escapeHtml(sSub) +
+                      '</span></span>'
+                    : '<span class="vtt-tile-ic">\u{1F6E1}</span><span class="vtt-tile-t">' +
+                      escapeHtml(nm) +
+                      '</span><span class="vtt-tile-sub">' +
+                      escapeHtml(sSub) +
+                      '</span>';
+            fh +=
+                '<button type="button" class="vtt-tile vtt-tile--save dm-enemy-save-btn' +
+                thumbCls +
+                '" data-label="' +
+                escapeHtml(nm) +
+                '" data-save-dc="' +
+                atk.saveDC +
+                '" data-save-type="' +
+                escapeHtml(atk.saveType || 'dex') +
+                '" data-damage="' +
+                escapeHtml(atk.damage || '') +
+                '" data-dmg-type="' +
+                escapeHtml(atk.damageType || '') +
+                '"' +
+                dmTipAttr +
+                '>' +
+                sBody +
+                '</button>';
+        } else {
+            var mBody =
+                packImg !== ''
+                    ? '<img class="vtt-tile-thumb" src="' +
+                      escapeHtml(packImg) +
+                      '" alt="" loading="lazy"><span class="vtt-tile-stack"><span class="vtt-tile-t">' +
+                      escapeHtml(nm) +
+                      '</span><span class="vtt-tile-sub">Action</span></span>'
+                    : '<span class="vtt-tile-ic">\u2726</span><span class="vtt-tile-t">' +
+                      escapeHtml(nm) +
+                      '</span><span class="vtt-tile-sub">Action</span>';
+            fh +=
+                '<button type="button" class="vtt-tile vtt-tile--misc dm-enemy-misc-btn' +
+                thumbCls +
+                '"' +
+                dmTipAttr +
+                ' data-dm-label="' +
+                escapeHtml(nm) +
+                '"' +
+                ' onclick="rollDmEnemyNamedChunk(' +
+                JSON.stringify(creatureName) +
+                ', ' +
+                JSON.stringify(nm) +
+                ', ' +
+                JSON.stringify(atk.description || '') +
+                ')">' +
+                mBody +
+                '</button>';
+        }
+    });
+    if (fight) {
+        fight.innerHTML = fh;
+        delete fight.dataset.dmEnemyFightTipsWired;
+        var mv = fight.querySelector('.vtt-tile--move');
+        if (mv) {
+            mv.onclick = function () {
+                addLogEntry(creatureName + ' moves (adjust on the map).', 'info');
+            };
+        }
+        wireBarAttackButtons(fight, creatureName);
+        wireDmEnemySaveAttackTiles(fight, creatureName);
+        wireDmEnemyFightRowTooltips(fight, creatureName);
+    }
+
+    var actionsData = parseCustomEnemyActions(enemy);
+    if (actionsData.length === 0 && enemy.actions && typeof enemy.actions === 'object' && !Array.isArray(enemy.actions)) {
+        actionsData = Object.entries(enemy.actions)
+            .filter(function (kv) {
+                var k = kv[0];
+                return (
+                    k &&
+                    typeof k === 'string' &&
+                    k !== 'sheet_attacks' &&
+                    k !== '_gorg_actions_freeform' &&
+                    k !== '_gorgox_arena_stl_url' &&
+                    k !== '_gorgox_arena_mini_scale'
+                );
+            })
+            .map(function (kv) {
+                var val = kv[1];
+                return {
+                    name: kv[0],
+                    description:
+                        typeof val === 'string'
+                            ? val
+                            : val && (val.description || val.desc || val.text) != null
+                              ? String(val.description || val.desc || val.text)
+                              : ''
+                };
+            });
+    }
+    window.__customEnemyActionsSheet = actionsData.slice();
+
+    var npc = getNpcDataMergedForDmBar(enemy);
+    window.__dmEnemyTooltipActionsFull = dmEnemyPickText(npc && npc.actions);
+    if (!window.__dmEnemyTooltipActionsFull && typeof enemy.actions === 'string') {
+        window.__dmEnemyTooltipActionsFull = String(enemy.actions).trim();
+    }
+    if (
+        (!window.__dmEnemyTooltipActionsFull || window.__dmEnemyTooltipActionsFull.length < 80) &&
+        actionsData.length
+    ) {
+        window.__dmEnemyTooltipActionsFull = actionsData
+            .map(function (x) {
+                return (x.name || 'Action') + '. ' + (x.description || '');
+            })
+            .join('\n\n');
+    }
+
+    var rawBlock = dmEnemyPickText(
+        npc && npc.raw_block,
+        enemy.raw_block,
+        enemy.rawBlock,
+        enemy.stat_block,
+        enemy.statBlock
+    );
+    var parsedNpc = rawBlock ? parseNPCRawBlock(rawBlock) : null;
+
+    var bonusChunks = [];
+    var reactionChunks = [];
+    var traitChunks = [];
+
+    if (npc && Array.isArray(npc.sw5e_bonus_action_items) && npc.sw5e_bonus_action_items.length) {
+        bonusChunks = npc.sw5e_bonus_action_items.map(function (bi) {
+            return {
+                name: (bi && bi.name) || 'Bonus action',
+                description: (bi && bi.description) || '',
+                img: resolveSw5eAssetUrl((bi && bi.img && String(bi.img).trim()) || '')
+            };
+        });
+    } else {
+        var bonusActionsText = dmEnemyPickText(
+            npc && npc.bonus_actions,
+            enemy.bonus_actions,
+            enemy.bonusActions
+        );
+        if (bonusActionsText) {
+            bonusChunks = bonusChunks.concat(splitNamedStatblockChunks(bonusActionsText));
+        }
+        var bonusFromRaw = extractBetweenHeaders(rawBlock || '', /\bBonus Actions\b/i, [
+            /\bActions\b/i,
+            /\bReactions\b/i,
+            /\bLegendary Actions\b/i,
+            /\bTraits\b/i,
+            /\bFeatures\b/i,
+            /\bChallenge\b/i
+        ]);
+        if (bonusFromRaw && bonusFromRaw.length > 10) {
+            bonusChunks = bonusChunks.concat(splitNamedStatblockChunks(bonusFromRaw));
+        }
+    }
+
+    if (npc && Array.isArray(npc.sw5e_reaction_items) && npc.sw5e_reaction_items.length) {
+        reactionChunks = npc.sw5e_reaction_items.map(function (ri) {
+            return {
+                name: (ri && ri.name) || 'Reaction',
+                description: (ri && ri.description) || '',
+                img: resolveSw5eAssetUrl((ri && ri.img && String(ri.img).trim()) || '')
+            };
+        });
+    } else {
+        var reactionsText = dmEnemyPickText(npc && npc.reactions, enemy.reactions);
+        if (reactionsText) {
+            reactionChunks = reactionChunks.concat(splitNamedStatblockChunks(reactionsText));
+        }
+        var reactFromRaw = extractBetweenHeaders(rawBlock || '', /\bReactions\b/i, [
+            /\bLegendary Actions\b/i,
+            /\bLair Actions\b/i,
+            /\bBonus Actions\b/i,
+            /\bChallenge\b/i,
+            /\bTraits\b/i,
+            /\bFeatures\b/i
+        ]);
+        if (reactFromRaw && reactFromRaw.length > 10) {
+            reactionChunks = reactionChunks.concat(splitNamedStatblockChunks(reactFromRaw));
+        }
+    }
+
+    if (npc && Array.isArray(npc.sw5e_trait_items) && npc.sw5e_trait_items.length) {
+        traitChunks = npc.sw5e_trait_items.map(function (ti) {
+            return {
+                name: (ti && ti.name) || 'Trait',
+                description: (ti && ti.description) || '',
+                img: resolveSw5eAssetUrl((ti && ti.img && String(ti.img).trim()) || '')
+            };
+        });
+    } else {
+        if (parsedNpc && parsedNpc.traits && parsedNpc.traits.length) {
+            parsedNpc.traits.forEach(function (tr) {
+                if (!tr || !String(tr).trim()) return;
+                var chunks = splitNamedStatblockChunks(String(tr).trim());
+                if (chunks && chunks.length) {
+                    chunks.forEach(function (c) {
+                        if (c && (c.name || c.description)) traitChunks.push(c);
+                    });
+                } else {
+                    traitChunks.push({ name: 'Trait', description: String(tr).trim() });
+                }
+            });
+        }
+        var traitsFromRaw = extractBetweenHeaders(rawBlock || '', /\bTraits\b/i, [
+            /\bActions\b/i,
+            /\bBonus Actions\b/i,
+            /\bReactions\b/i,
+            /\bFeatures\b/i,
+            /\bChallenge\b/i
+        ]);
+        if (traitsFromRaw && traitsFromRaw.length > 10) {
+            traitChunks = traitChunks.concat(splitNamedStatblockChunks(traitsFromRaw));
+        }
+        var traitsFromField = dmEnemyPickText(
+            enemy.traits,
+            enemy.features,
+            enemy.trait_text,
+            enemy.species_traits
+        );
+        if (traitsFromField) {
+            traitChunks = traitChunks.concat(splitNamedStatblockChunks(traitsFromField));
+        }
+    }
+
+    var maHtml = '';
+    var actionsForMultiattack = dmEnemyPickText((npc && npc.actions) || '', window.__dmEnemyTooltipActionsFull || '');
+    if (actionsForMultiattack && parseMultiattack(actionsForMultiattack)) {
+        maHtml =
+            '<button type="button" class="vtt-tile vtt-tile--multi" onclick="addLogEntry(' +
+            JSON.stringify(creatureName + ' uses Multiattack (declare targets).') +
+            ', \'info\')"><span class="vtt-tile-ic">\u2694</span><span class="vtt-tile-t">Multiattack</span><span class="vtt-tile-sub">Declare</span></button>';
+    }
+
+    var narrativeStrip = '';
+    var npcActionsFullText = (window.__dmEnemyTooltipActionsFull || '').trim();
+    function appendDmEnemyFullActionsTextButton(strip) {
+        if (!strip) return strip;
+        var full = (window.__dmEnemyTooltipActionsFull || '').trim();
+        if (full.length < 160) return strip;
+        return (
+            strip.replace(
+                /<\/div>\s*$/,
+                '<button type="button" class="vtt-chip vtt-chip--action-narr vtt-chip--fulltext" onmouseover="showNamedBlockTooltip(\\\'All actions (full)\\\', \\\'Stat block\\\', window.__dmEnemyTooltipActionsFull, event)" onmouseout="hideSpellTooltip()">Full text</button></div>'
+            )
+        );
+    }
+    if (npc && Array.isArray(npc.sw5e_action_items) && npc.sw5e_action_items.length) {
+        narrativeStrip =
+            '<div class="dm-enemy-narrative-strip"><span class="dm-enemy-strip-label">Actions</span>';
+        npc.sw5e_action_items.slice(0, 24).forEach(function (si) {
+            var lab = (si && si.name) || 'Action';
+            var escDesc = escapeJs((si && si.description) || '');
+            var imgUrl = resolveSw5eAssetUrl((si && si.img && String(si.img).trim()) || '');
+            var thumb =
+                imgUrl !== ''
+                    ? '<img class="vtt-chip-thumb" src="' + escapeHtml(imgUrl) + '" alt="" loading="lazy">'
+                    : '';
+            narrativeStrip +=
+                '<button type="button" class="vtt-chip vtt-chip--dm-rich vtt-chip--action-narr' +
+                (imgUrl !== '' ? ' vtt-chip--has-thumb' : '') +
+                '" onclick="rollDmEnemyNamedChunk(' +
+                JSON.stringify(creatureName) +
+                ', ' +
+                JSON.stringify(lab) +
+                ', ' +
+                JSON.stringify((si && si.description) || '') +
+                ')" onmouseover="showNamedBlockTooltip(\'' +
+                escapeJs(String(lab)) +
+                "', 'Action', '" +
+                escDesc +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">" +
+                thumb +
+                '<span class="vtt-chip-label">' +
+                escapeHtml(String(lab).substring(0, 36)) +
+                '</span></button>';
+        });
+        narrativeStrip = appendDmEnemyFullActionsTextButton(narrativeStrip + '</div>');
+    } else if (actionsData.length > 0) {
+        narrativeStrip =
+            '<div class="dm-enemy-narrative-strip"><span class="dm-enemy-strip-label">Actions</span>';
+        actionsData.slice(0, 24).forEach(function (a, idx) {
+            var lab = (a && a.name) || 'Action';
+            var escDesc = escapeJs((a && a.description) || '');
+            narrativeStrip +=
+                '<button type="button" class="vtt-chip vtt-chip--action-narr" onclick="rollActionFromSheet(' +
+                idx +
+                ')" onmouseover="showNamedBlockTooltip(\'' +
+                escapeJs(String(lab)) +
+                "', 'Action', '" +
+                escDesc +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">" +
+                escapeHtml(lab) +
+                '</button>';
+        });
+        narrativeStrip = appendDmEnemyFullActionsTextButton(narrativeStrip + '</div>');
+    } else if (npcActionsFullText) {
+        var narrBlocks = splitNamedStatblockChunks(npcActionsFullText);
+        narrativeStrip =
+            '<div class="dm-enemy-narrative-strip"><span class="dm-enemy-strip-label">Actions</span>';
+        narrBlocks.slice(0, 20).forEach(function (b, j) {
+            narrativeStrip +=
+                '<button type="button" class="vtt-chip vtt-chip--action-narr" onclick="rollDmEnemyNamedChunk(' +
+                JSON.stringify(creatureName) +
+                ', ' +
+                JSON.stringify(b.name) +
+                ', ' +
+                JSON.stringify(b.description || '') +
+                ')" onmouseover="showNamedBlockTooltip(\'' +
+                escapeJs(String(b.name || 'Action')) +
+                "', 'Action', '" +
+                escapeJs(String(b.description || '')) +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">" +
+                escapeHtml(b.name) +
+                '</button>';
+        });
+        narrativeStrip = appendDmEnemyFullActionsTextButton(narrativeStrip + '</div>');
+    }
+
+    var legendaryStrip = '';
+    var legendaryText = dmEnemyPickText(
+        npc && npc.legendary_actions,
+        enemy.legendary_actions,
+        enemy.legendaryActions
+    );
+    if (legendaryText && legendaryText.trim()) {
+        var legendaryImgByNorm = {};
+        if (npc && Array.isArray(npc.sw5e_legendary_items)) {
+            npc.sw5e_legendary_items.forEach(function (li) {
+                if (!li || !li.name) return;
+                var lk = String(li.name)
+                    .replace(/\s*\([^)]*\)\s*/g, '')
+                    .trim()
+                    .toLowerCase();
+                if (lk && li.img && String(li.img).trim() && !legendaryImgByNorm[lk])
+                    legendaryImgByNorm[lk] = resolveSw5eAssetUrl(String(li.img).trim());
+            });
+        }
+        var legendaryData = parseLegendaryActions(legendaryText);
+        var legendaryKey = 'legendary_actions_' + enemy.id;
+        var legendaryUsage = JSON.parse(
+            localStorage.getItem(legendaryKey) || '{"used": 0, "max": ' + legendaryData.maxActions + '}'
+        );
+        legendaryUsage.max = legendaryData.maxActions;
+        if (legendaryUsage.used > legendaryUsage.max) legendaryUsage.used = legendaryUsage.max;
+        var remaining = legendaryUsage.max - legendaryUsage.used;
+        legendaryStrip =
+            '<div class="dm-enemy-narrative-strip dm-enemy-narrative-strip--legendary"><span class="dm-enemy-strip-label">\u2605 Legendary</span>' +
+            '<span class="dm-enemy-legendary-remaining" title="Legendary actions remaining">' +
+            remaining +
+            '/' +
+            legendaryUsage.max +
+            '</span>';
+        if (legendaryData.actions && legendaryData.actions.length) {
+            legendaryData.actions.slice(0, 16).forEach(function (act) {
+                var nm = (act && act.name) || 'Legendary Action';
+                var cost = act && act.cost ? act.cost : 1;
+                var desc = act && act.description ? act.description : '';
+                var disabled = remaining < cost;
+                var legKeyNorm = String(nm)
+                    .replace(/\s*\([^)]*\)\s*/g, '')
+                    .trim()
+                    .toLowerCase();
+                var legImg = legendaryImgByNorm[legKeyNorm] || '';
+                var thumbL =
+                    legImg !== ''
+                        ? '<img class="vtt-chip-thumb" src="' + escapeHtml(legImg) + '" alt="" loading="lazy">'
+                        : '';
+                legendaryStrip +=
+                    '<button type="button" class="vtt-chip vtt-chip--dm-rich vtt-chip--legendary-act' +
+                    (legImg !== '' ? ' vtt-chip--has-thumb' : '') +
+                    (disabled ? ' is-disabled' : '') +
+                    '" onclick="' +
+                    (disabled
+                        ? "alert('Not enough legendary actions remaining!')"
+                        : 'useLegendaryAction(' +
+                          JSON.stringify(String(enemy.id)) +
+                          ', ' +
+                          JSON.stringify(legendaryKey) +
+                          ', ' +
+                          Number(cost) +
+                          ', ' +
+                          JSON.stringify(String(nm)) +
+                          ', ' +
+                          JSON.stringify(String(creatureName)) +
+                          ')') +
+                    '" onmouseover="showNamedBlockTooltip(\'' +
+                    escapeJs(String(nm)) +
+                    "', 'Legendary Action', '" +
+                    escapeJs(String(desc || '')) +
+                    "', event)\" onmouseout=\"hideSpellTooltip()\">" +
+                    thumbL +
+                    '<span class="vtt-chip-label">' +
+                    escapeHtml(nm) +
+                    (cost > 1 ? ' (' + cost + ')' : '') +
+                    '</span></button>';
+            });
+        } else {
+            legendaryStrip +=
+                '<button type="button" class="vtt-chip vtt-chip--legendary-act" onmouseover="showNamedBlockTooltip(\\\'Legendary Actions\\\', \\\'Legendary\\\', \\\'' +
+                escapeJs(String(legendaryText)) +
+                '\\\', event)" onmouseout="hideSpellTooltip()">Details</button>';
+        }
+        legendaryStrip += '</div>';
+    }
+
+    var spec = document.getElementById('playerBarSpecialRow');
+    if (spec) {
+        spec.innerHTML =
+            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+            JSON.stringify(creatureName + ' takes the Dodge action.') +
+            ', \'info\')"><span class="vtt-tile-ic">\u{1F6E1}</span><span class="vtt-tile-t">Dodge</span><span class="vtt-tile-sub">Action</span></button>' +
+            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+            JSON.stringify(creatureName + ' takes the Dash action.') +
+            ', \'info\')"><span class="vtt-tile-ic">\u{1F3C3}</span><span class="vtt-tile-t">Dash</span><span class="vtt-tile-sub">Action</span></button>' +
+            maHtml +
+            '<button type="button" class="vtt-tile vtt-tile--utility" onclick="showEnemyManager()"><span class="vtt-tile-ic">\u22EF</span><span class="vtt-tile-t">Enemy DB</span><span class="vtt-tile-sub">Edit</span></button>' +
+            narrativeStrip +
+            legendaryStrip;
+    }
+
+    function renderChunkColumn(chunks, maxN, emptyDash, blockKind) {
+        var kindLbl = blockKind || 'Feature';
+        if (!chunks || !chunks.length) {
+            return emptyDash ? '<span class="vtt-ab-empty-hint">\u2014</span>' : '';
+        }
+        var h = '';
+        var seen = {};
+        var n = 0;
+        for (var i = 0; i < chunks.length && n < maxN; i++) {
+            var c = chunks[i];
+            var key = ((c.name || '') + '|' + (c.description || '').slice(0, 40)).toLowerCase();
+            if (seen[key]) continue;
+            seen[key] = true;
+            n++;
+            var ds = escapeJs(c.description || '');
+            var imgUrl = resolveSw5eAssetUrl((c.img && String(c.img).trim()) || '');
+            var thumb =
+                imgUrl !== ''
+                    ? '<img class="vtt-chip-thumb" src="' + escapeHtml(imgUrl) + '" alt="" loading="lazy">'
+                    : '';
+            h +=
+                '<button type="button" class="vtt-chip vtt-chip--dm-rich' +
+                (imgUrl !== '' ? ' vtt-chip--has-thumb' : '') +
+                '" onclick="rollDmEnemyNamedChunk(' +
+                JSON.stringify(creatureName) +
+                ', ' +
+                JSON.stringify(c.name || 'Feature') +
+                ', ' +
+                JSON.stringify(c.description || '') +
+                ')" onmouseover="showNamedBlockTooltip(\'' +
+                escapeJs(String(c.name || 'Feature')) +
+                "', '" +
+                escapeJs(kindLbl) +
+                "', '" +
+                ds +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">" +
+                thumb +
+                '<span class="vtt-chip-label">' +
+                escapeHtml((c.name || 'Feature').substring(0, 36)) +
+                '</span></button>';
+        }
+        return h;
+    }
+
+    var bonusEl = document.getElementById('playerBarBonusCol');
+    if (bonusEl) {
+        bonusEl.innerHTML = renderChunkColumn(bonusChunks, 20, true, 'Bonus action');
+    }
+    var reactEl = document.getElementById('playerBarReactionCol');
+    if (reactEl) {
+        reactEl.innerHTML = reactionChunks.length
+            ? renderChunkColumn(reactionChunks, 16, true, 'Reaction')
+            : '<button type="button" class="vtt-chip vtt-chip--reaction" onclick="addLogEntry(' +
+              JSON.stringify(creatureName + ' uses a reaction (declare).') +
+              ', \'info\')">Reaction</button>';
+    }
+
+    var traitsHtml = '';
+    if (parsedNpc && parsedNpc.techPowers && parsedNpc.techPowers.length) {
+        parsedNpc.techPowers.slice(0, 8).forEach(function (pw) {
+            var attr = String(pw).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            traitsHtml +=
+                '<button type="button" class="vtt-chip vtt-chip--techpow" onmouseover="showSpellTooltip(\'' +
+                attr +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">\u26a1 " +
+                escapeHtml(String(pw).substring(0, 28)) +
+                '</button>';
+        });
+    }
+    if (parsedNpc && parsedNpc.forcePowers && parsedNpc.forcePowers.length) {
+        parsedNpc.forcePowers.slice(0, 8).forEach(function (pw) {
+            var attr = String(pw).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            traitsHtml +=
+                '<button type="button" class="vtt-chip vtt-chip--forcepow" onmouseover="showSpellTooltip(\'' +
+                attr +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">\u2726 " +
+                escapeHtml(String(pw).substring(0, 28)) +
+                '</button>';
+        });
+    }
+    traitsHtml += renderChunkColumn(traitChunks, 14, false, 'Trait');
+    var invEl = document.getElementById('playerBarInventoryCol');
+    if (invEl) {
+        invEl.innerHTML =
+            traitsHtml.trim() !== ''
+                ? traitsHtml
+                : '<button type="button" class="vtt-chip vtt-chip--inv" onclick="showInfoPanel()">Info</button>';
+    }
+}
+
 // Populate the fixed bottom player action bar (stats, HP, abilities, saves, skills, actions, attacks, dice)
 function populatePlayerActionBar() {
     const bar = document.getElementById('playerActionBar');
-    if (!bar || bar.classList.contains('hidden') || isDM) return;
+    if (!bar || bar.classList.contains('hidden')) return;
+    if (isDM) {
+        if (!selectedToken || selectedToken.entity_type !== 'Enemy') return;
+        populateDmEnemyActionBar(selectedToken);
+        return;
+    }
+    bar.classList.remove('player-action-bar--dm-enemy');
 
     // No character selected: show empty state and hide tab bar
     if (!myCharacterId) {
@@ -7802,11 +9124,16 @@ function populatePlayerActionBar() {
     const inner = bar.querySelector('.player-bar-inner');
     if (inner) {
         inner.innerHTML = '<div class="player-bar-tab-panels">' +
-            '<div class="player-bar-tab-panel active" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">' +
-            '<div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>' +
-            '<div class="player-bar-section player-bar-actions" id="playerBarActions"></div>' +
-            '<div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>' +
-            '</div>' +
+            '<div class="player-bar-tab-panel active vtt-combat-tab-shell" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">' +
+            '<div id="playerBarNameHp" class="vtt-ab-header-wrap"></div>' +
+            '<div class="vtt-ab-body">' +
+            '<div class="vtt-ab-fight-row" id="playerBarFightRow"></div>' +
+            '<div class="vtt-ab-special-row" id="playerBarSpecialRow"></div>' +
+            '<div class="vtt-ab-lower3">' +
+            '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Bonus actions</span><div id="playerBarBonusCol" class="vtt-ab-chip-col"></div></div>' +
+            '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Reactions</span><div id="playerBarReactionCol" class="vtt-ab-chip-col"></div></div>' +
+            '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Inventory</span><div id="playerBarInventoryCol" class="vtt-ab-chip-col"></div></div>' +
+            '</div></div></div>' +
             '<div class="player-bar-tab-panel" id="playerBarPanelAbilities" data-tab="abilities" role="tabpanel">' +
             '<div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>' +
             '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
@@ -7877,6 +9204,28 @@ function populatePlayerActionBar() {
     const currentHP = myCharacter.current_hp !== undefined && myCharacter.current_hp !== null ? myCharacter.current_hp : maxHP;
     const equipEff = recomputeEquipmentBonuses(charData, myCharacter);
     const ac = equipEff.ac;
+    const speedFt = charData.speed?.walk || charData.speed || myCharacter.speed || 30;
+    let portraitUrlPb = '';
+    try {
+        portraitUrlPb = normalizePortraitUrl(myCharacter.portrait_url || charData.image || '') || '';
+    } catch (ePb) {}
+    let subtitlePb = '';
+    if (charData.classes && charData.classes[0]) {
+        subtitlePb =
+            (charData.classes[0].name || '') + ' · Lv ' + (charData.classes[0].level || 1);
+    } else if (myCharacter.class) {
+        subtitlePb = (myCharacter.class || '') + ' · Lv ' + (myCharacter.level || 1);
+    }
+    const myTokPb = tokens.find(function (t) {
+        return t && t.entity_type === 'Player' && t.entity_id === myCharacterId;
+    });
+    const showEndTurnPb = !!(combatState.active && myTokPb && combatState.currentTurn === myTokPb.id);
+    const bonusFromSheet =
+        charData.actions && charData.actions.bonus_actions && Array.isArray(charData.actions.bonus_actions)
+            ? charData.actions.bonus_actions.map(function (a) {
+                  return { name: typeof a === 'string' ? a : a.name || a, icon: '\u2b50' };
+              })
+            : [];
 
     // Collect tech/force powers and points early (used in Combat tab and Powers tab)
     const allTechPowers = [];
@@ -7896,25 +9245,154 @@ function populatePlayerActionBar() {
     const forcePtsBar = getForcePointsFromCharData(charData);
     const showTechForceOnCombat = (techPtsBar.max > 0 || forcePtsBar.max > 0) || allTechPowers.length > 0 || allForcePowers.length > 0;
 
-    // Name & HP (and tech/force point counters when character has them)
+    // Combat tab: sci-fi header + tile rows (same visual language as DM enemy bar)
+    var auxHtmlPb = '';
+    if (showTechForceOnCombat) {
+        var bitsTf = [];
+        if (techPtsBar.max > 0 || allTechPowers.length > 0) {
+            bitsTf.push(
+                '<span class="vtt-ab-tf-tech">\u26a1 Tech ' +
+                    techPtsBar.current +
+                    '/' +
+                    techPtsBar.max +
+                    '</span>'
+            );
+        }
+        if (forcePtsBar.max > 0 || allForcePowers.length > 0) {
+            bitsTf.push(
+                '<span class="vtt-ab-tf-force">\u2726 Force ' +
+                    forcePtsBar.current +
+                    '/' +
+                    forcePtsBar.max +
+                    '</span>'
+            );
+        }
+        if (bitsTf.length) {
+            auxHtmlPb = '<div class="vtt-ab-tech-force">' + bitsTf.join(' ') + '</div>';
+        }
+    }
     const nameHpEl = document.getElementById('playerBarNameHp');
     if (nameHpEl) {
-        let nameHpHtml = '<span class="section-label">Character</span>' +
-            '<div style="font-weight:bold;font-size:10px;color:#4a9eff;line-height:1.2;">' + escapeHtml(charName) + '</div>' +
-            '<div style="font-size:9px;color:#44ff44;">HP ' + currentHP + '/' + maxHP + ' AC ' + ac + '</div>';
-        if (showTechForceOnCombat) {
-            nameHpHtml += '<div style="font-size:9px;margin-top:3px;">';
-            if (techPtsBar.max > 0 || allTechPowers.length > 0) {
-                nameHpHtml += '<span style="color:#00d4ff;">&#9889; Tech ' + techPtsBar.current + '/' + techPtsBar.max + '</span>';
-                if (forcePtsBar.max > 0 || allForcePowers.length > 0) nameHpHtml += ' ';
-            }
-            if (forcePtsBar.max > 0 || allForcePowers.length > 0) {
-                nameHpHtml += '<span style="color:#ff00ff;">&#9733; Force ' + forcePtsBar.current + '/' + forcePtsBar.max + '</span>';
-            }
-            nameHpHtml += '</div>';
+        nameHpEl.innerHTML = buildSciFiActionBarHeaderHtml({
+            name: charName,
+            subtitle: subtitlePb,
+            portraitUrl: portraitUrlPb,
+            currentHP: currentHP,
+            maxHP: maxHP,
+            ac: ac,
+            speed: speedFt,
+            showEndTurn: showEndTurnPb,
+            endTurnIsDmNext: false,
+            auxHtml: auxHtmlPb,
+            sheetButtonHtml:
+                '<button type="button" class="vtt-ab-sheet-mini" onclick="showMyCharacterSheet()">Sheet</button>',
+            inventoryButtonHtml:
+                '<button type="button" class="vtt-ab-inventory-mini" onclick="openMyInventoryFromActionBar()">Inventory</button>'
+        });
+    }
+
+    var fightElPb = document.getElementById('playerBarFightRow');
+    if (fightElPb) {
+        var fhPb =
+            '<button type="button" class="vtt-tile vtt-tile--move"><span class="vtt-tile-ic">\u{1F463}</span><span class="vtt-tile-t">Move</span><span class="vtt-tile-sub">' +
+            speedFt +
+            ' ft</span></button>';
+        fhPb +=
+            '<button type="button" class="vtt-tile vtt-tile--attack-declare"><span class="vtt-tile-ic">\u2694</span><span class="vtt-tile-t">Attack</span><span class="vtt-tile-sub">Action</span></button>';
+        equipEff.attacks.forEach(function (atk) {
+            var wname = atk.name || atk.weapon_name || 'Attack';
+            var toHit = atk.to_hit !== undefined ? atk.to_hit : atk.toHit !== undefined ? atk.toHit : 0;
+            var dmg = atk.damage || atk.damage_dice || '1d4';
+            var dmgType = atk.type || atk.damage_type || 'damage';
+            var rangeAttr = escapeHtml(attackRangeToDataAttr(atk.range));
+            var rangeTitle = attackRangeToDataAttr(atk.range);
+            var titleAttr = rangeTitle ? escapeHtml('Range: ' + rangeTitle + ' ft') : '';
+            fhPb +=
+                '<button type="button" tabindex="-1" class="vtt-tile vtt-tile--attack bar-attack-btn" data-weapon="' +
+                escapeHtml(wname) +
+                '" data-tohit="' +
+                toHit +
+                '" data-damage="' +
+                escapeHtml(dmg) +
+                '" data-type="' +
+                escapeHtml(dmgType) +
+                '" data-name="' +
+                escapeHtml(charName) +
+                '" data-range="' +
+                rangeAttr +
+                '"' +
+                (titleAttr ? ' title="' + titleAttr + '"' : '') +
+                '><span class="vtt-tile-ic">\u{1F3AF}</span><span class="vtt-tile-t">' +
+                escapeHtml(wname) +
+                '</span><span class="vtt-tile-sub">Attack</span></button>';
+        });
+        fightElPb.innerHTML = fhPb;
+        var mvPb = fightElPb.querySelector('.vtt-tile--move');
+        if (mvPb) {
+            mvPb.onclick = function () {
+                addLogEntry(charName + ' moves (update position on the map).', 'info');
+            };
         }
-        nameHpHtml += '<button type="button" tabindex="-1" onclick="showMyCharacterSheet()" style="margin-top:1px;padding:1px 4px;font-size:8px;background:rgba(74,158,255,0.3);border:1px solid #4a9eff;border-radius:3px;color:#fff;cursor:pointer;">Sheet</button>';
-        nameHpEl.innerHTML = nameHpHtml;
+        var atkDecl = fightElPb.querySelector('.vtt-tile--attack-declare');
+        if (atkDecl) {
+            atkDecl.onclick = function () {
+                addLogEntry(charName + ' takes the Attack action.', 'info');
+            };
+        }
+        wireBarAttackButtons(fightElPb, charName);
+    }
+
+    var specElPb = document.getElementById('playerBarSpecialRow');
+    if (specElPb) {
+        specElPb.innerHTML =
+            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+            JSON.stringify(charName + ' uses Cast Spell / tech or force (see Powers tab).') +
+            ', \'info\');switchPlayerActionBarTab(\'powers\');"><span class="vtt-tile-ic">\u{1F52E}</span><span class="vtt-tile-t">Cast / Powers</span><span class="vtt-tile-sub">Open Powers</span></button>' +
+            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+            JSON.stringify(charName + ' takes the Dash action.') +
+            ', \'info\')"><span class="vtt-tile-ic">\u{1F3C3}</span><span class="vtt-tile-t">Dash</span><span class="vtt-tile-sub">Action</span></button>' +
+            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+            JSON.stringify(charName + ' takes the Disengage action.') +
+            ', \'info\')"><span class="vtt-tile-ic">\u{1F6AA}</span><span class="vtt-tile-t">Disengage</span><span class="vtt-tile-sub">Action</span></button>' +
+            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+            JSON.stringify(charName + ' takes the Dodge action.') +
+            ', \'info\')"><span class="vtt-tile-ic">\u{1F6E1}</span><span class="vtt-tile-t">Dodge</span><span class="vtt-tile-sub">Action</span></button>' +
+            '<button type="button" class="vtt-tile vtt-tile--utility" onclick="switchPlayerActionBarTab(\'abilities\')"><span class="vtt-tile-ic">\u22EF</span><span class="vtt-tile-t">More</span><span class="vtt-tile-sub">Abilities & skills</span></button>';
+    }
+
+    var bonusColPb = document.getElementById('playerBarBonusCol');
+    if (bonusColPb) {
+        var bhPb = '';
+        bonusFromSheet.forEach(function (a) {
+            var nm = typeof a === 'string' ? a : a.name || '';
+            if (!nm) return;
+            var leg = /second wind|action surge|indomitable/i.test(nm);
+            bhPb +=
+                '<button type="button" class="vtt-chip ' +
+                (leg ? 'vtt-chip--legend' : 'vtt-chip--bonus') +
+                '" onclick="addLogEntry(' +
+                JSON.stringify(charName + ' uses bonus action: ' + nm) +
+                ', \'info\')">' +
+                escapeHtml(nm) +
+                '</button>';
+        });
+        bonusColPb.innerHTML =
+            bhPb || '<span class="vtt-ab-empty-hint">Bonus actions from sheet</span>';
+    }
+    var reactColPb = document.getElementById('playerBarReactionCol');
+    if (reactColPb) {
+        reactColPb.innerHTML =
+            '<button type="button" class="vtt-chip vtt-chip--reaction" onclick="addLogEntry(' +
+            JSON.stringify(charName + ' uses the Ready action (set trigger).') +
+            ', \'info\')">Ready</button>';
+    }
+    var invColPb = document.getElementById('playerBarInventoryCol');
+    if (invColPb) {
+        invColPb.innerHTML =
+            '<button type="button" class="vtt-chip vtt-chip--inv" onclick="addLogEntry(' +
+            JSON.stringify(charName + ' uses an item.') +
+            ', \'info\')">Use item</button>' +
+            '<button type="button" class="vtt-chip vtt-chip--inv" onclick="showMyCharacterSheet()">Open sheet</button>';
     }
 
     // Abilities (click to roll check)
@@ -8003,12 +9481,27 @@ function populatePlayerActionBar() {
             html += '<button type="button" class="bar-point-btn" onclick="useTechPoint(); populatePlayerActionBar();" title="Use 1">−</button>';
             html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreTechPoints();" title="Restore all">↺</button>';
             html += '</div>';
+            var tierKeysTechPb = [];
+            var techFilterPb = 'all';
             if (allTechPowers.length > 0) {
-                html += '<span class="section-label">Tech Powers</span><div class="bar-scroll">';
+                tierKeysTechPb = orderedTierKeysForPowerList(allTechPowers, 'tech', charData);
+                techFilterPb = getStoredPowerLevelFilter('playerBar', 'tech');
+                if (techFilterPb !== 'all' && tierKeysTechPb.indexOf(techFilterPb) === -1) techFilterPb = 'all';
+                html += '<span class="section-label">Tech Powers</span>';
+                html += buildPowerLevelFilterRowHtml(
+                    'playerBar',
+                    'tech',
+                    techFilterPb,
+                    tierKeysTechPb,
+                    true
+                );
+                html += '<div class="bar-scroll">';
             }
             allTechPowers.forEach(powerName => {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
+                var metaTf = resolvePowerTierForUi(safeName, 'tech', charData);
+                if (!powerTierPassesFilter(metaTf, techFilterPb)) return;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
                 const metaT = typeof findTechPowerInCacheGlobal === 'function' ? findTechPowerInCacheGlobal(safeName) : null;
                 const icT =
@@ -8031,6 +9524,7 @@ function populatePlayerActionBar() {
             });
             if (allTechPowers.length > 0) html += '</div>';
             techPowersEl.innerHTML = html;
+            wirePowerLevelFilterButtons(techPowersEl, populatePlayerActionBar);
             techPowersEl.querySelectorAll('.bar-tech-power-btn').forEach(btn => {
                 btn.onclick = function() {
                     requestPowerTarget('tech', this.dataset.power, this.dataset.charName || charName);
@@ -8052,12 +9546,27 @@ function populatePlayerActionBar() {
             html += '<button type="button" class="bar-point-btn" onclick="useForcePoint(); populatePlayerActionBar();" title="Use 1">−</button>';
             html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreForcePoints();" title="Restore all">↺</button>';
             html += '</div>';
+            var tierKeysForcePb = [];
+            var forceFilterPb = 'all';
             if (allForcePowers.length > 0) {
-                html += '<span class="section-label">Force Powers</span><div class="bar-scroll">';
+                tierKeysForcePb = orderedTierKeysForPowerList(allForcePowers, 'force', charData);
+                forceFilterPb = getStoredPowerLevelFilter('playerBar', 'force');
+                if (forceFilterPb !== 'all' && tierKeysForcePb.indexOf(forceFilterPb) === -1) forceFilterPb = 'all';
+                html += '<span class="section-label">Force Powers</span>';
+                html += buildPowerLevelFilterRowHtml(
+                    'playerBar',
+                    'force',
+                    forceFilterPb,
+                    tierKeysForcePb,
+                    true
+                );
+                html += '<div class="bar-scroll">';
             }
             allForcePowers.forEach(powerName => {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
+                var metaFf = resolvePowerTierForUi(safeName, 'force', charData);
+                if (!powerTierPassesFilter(metaFf, forceFilterPb)) return;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
                 const metaF = typeof findForcePowerInCacheGlobal === 'function' ? findForcePowerInCacheGlobal(safeName) : null;
                 const icF =
@@ -8080,68 +9589,13 @@ function populatePlayerActionBar() {
             });
             if (allForcePowers.length > 0) html += '</div>';
             forcePowersEl.innerHTML = html;
+            wirePowerLevelFilterButtons(forcePowersEl, populatePlayerActionBar);
             forcePowersEl.querySelectorAll('.bar-force-power-btn').forEach(btn => {
                 btn.onclick = function() {
                     requestPowerTarget('force', this.dataset.power, this.dataset.charName || charName);
                 };
             });
         }
-    }
-
-    // Actions: standard actions + character's bonus actions from sheet
-    const actionsEl = document.getElementById('playerBarActions');
-    if (actionsEl) {
-        const standardActions = [
-            { name: 'Attack', icon: '⚔️' }, { name: 'Cast Spell', icon: '🔮' }, { name: 'Dash', icon: '🏃' }, { name: 'Disengage', icon: '🚪' },
-            { name: 'Dodge', icon: '🛡️' }, { name: 'Help', icon: '🤝' }, { name: 'Hide', icon: '👁️' }, { name: 'Ready', icon: '⏸️' }, { name: 'Search', icon: '🔍' }, { name: 'Use Item', icon: '🎒' }
-        ];
-        const bonusFromSheet = (charData.actions && charData.actions.bonus_actions && Array.isArray(charData.actions.bonus_actions))
-            ? charData.actions.bonus_actions.map(function(a) { return { name: typeof a === 'string' ? a : (a.name || a), icon: '⭐' }; })
-            : [];
-        let html = '<span class="section-label">Actions</span><div class="bar-scroll">';
-        standardActions.forEach(a => {
-            html += '<button type="button" tabindex="-1" class="bar-action-btn" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + a.icon + ' ' + escapeHtml(a.name) + '</button>';
-        });
-        bonusFromSheet.forEach(a => {
-            html += '<button type="button" tabindex="-1" class="bar-action-btn bar-action-bonus" data-action="' + escapeHtml(a.name) + '" data-char-name="' + escapeHtml(charName) + '">' + (a.icon || '⭐') + ' ' + escapeHtml(a.name) + '</button>';
-        });
-        html += '</div>';
-        actionsEl.innerHTML = html;
-        actionsEl.querySelectorAll('.bar-action-btn').forEach(btn => {
-            btn.onclick = function() {
-                const name = this.dataset.charName || charName;
-                addLogEntry(name + ' is taking the ' + this.dataset.action + ' action', 'info');
-            };
-        });
-    }
-
-    // Attacks: character sheet + equipped weapons (SW5e item DB)
-    const attacksEl = document.getElementById('playerBarAttacks');
-    if (attacksEl) {
-        const attacks = equipEff.attacks;
-        let html = '<span class="section-label">Attacks</span><div class="bar-scroll">';
-        if (attacks.length === 0) {
-            html += '<span style="font-size:10px;opacity:0.6;">None</span>';
-        } else {
-            attacks.forEach(atk => {
-                const name = atk.name || atk.weapon_name || 'Attack';
-                const toHit = atk.to_hit !== undefined ? atk.to_hit : (atk.toHit !== undefined ? atk.toHit : 0);
-                const dmg = atk.damage || atk.damage_dice || '1d4';
-                const dmgType = atk.type || atk.damage_type || 'damage';
-                const rangeAttr = escapeHtml(attackRangeToDataAttr(atk.range));
-                const rangeTitle = attackRangeToDataAttr(atk.range);
-                const titleAttr = rangeTitle ? escapeHtml('Range: ' + rangeTitle + ' ft') : '';
-                html += '<button type="button" tabindex="-1" class="bar-attack-btn" data-weapon="' + escapeHtml(name) + '" data-tohit="' + toHit + '" data-damage="' + escapeHtml(dmg) + '" data-type="' + escapeHtml(dmgType) + '" data-name="' + escapeHtml(charName) + '" data-range="' + rangeAttr + '"' + (titleAttr ? ' title="' + titleAttr + '"' : '') + '>' + escapeHtml(name) + '</button>';
-            });
-        }
-        html += '</div>';
-        attacksEl.innerHTML = html;
-        attacksEl.querySelectorAll('.bar-attack-btn').forEach(btn => {
-            btn.onclick = function() {
-                const rangeInput = (this.dataset.range || '').trim() ? this.dataset.range : null;
-                requestAttackTarget(this.dataset.weapon, parseInt(this.dataset.tohit, 10), this.dataset.damage, this.dataset.type, this.dataset.name, rangeInput);
-            };
-        });
     }
 
     populatePlayerSw5eClassKit(charData, myCharacter);
@@ -8654,6 +10108,7 @@ function dealDamage() {
     // Update UI immediately
     updateInitiativeList();
     updateTokenInfo();
+    refreshSelectedDmEnemyActionBar();
     renderCanvas();
     
     document.getElementById('damageAmount').value = '';
@@ -10976,6 +12431,39 @@ function getTokenSize(entityId, entityType) {
     return sizeValue;
 }
 
+/** Fallback: derive "Name. Body" traits from exported Roll20 blobs (Circuitry The construct…). */
+function extractNpcTraitsFromExportedTraitsSection(traitsSectionText) {
+    var txt = String(traitsSectionText || '').trim();
+    if (!txt) return [];
+    var out = [];
+    var seen = {};
+    function add(name, body) {
+        var n = String(name || '').trim();
+        var b = String(body || '').trim();
+        if (!n && !b) return;
+        var key = (n.toLowerCase() + '|' + b.slice(0, 96).toLowerCase()).trim();
+        if (seen[key]) return;
+        seen[key] = true;
+        out.push(n ? n + '. ' + b : b);
+    }
+    var patterns = [
+        /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(The\b[\s\S]*?)(?=\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+The\b|\s+[A-Z][a-z]+\s+The\b|$)/gi,
+        /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(Unless\b[\s\S]*?)(?=\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:The|Unless)\b|\s+[A-Z][a-z]+\s+(?:The|Unless)\b|$)/gi,
+        /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(Creatures\b[\s\S]*?)(?=\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:The|Unless|Creatures)\b|\s+[A-Z][a-z]+\s+(?:The|Unless)\b|$)/gi
+    ];
+    for (var pi = 0; pi < patterns.length; pi++) {
+        try {
+            var re = patterns[pi];
+            var mt;
+            re.lastIndex = 0;
+            while ((mt = re.exec(txt)) !== null) {
+                add(mt[1], mt[2]);
+            }
+        } catch (_eTp) {}
+    }
+    return out.length ? out : [txt];
+}
+
 // Parse NPC raw_block to extract ability scores, tech powers, and force powers
 function parseNPCRawBlock(rawBlock) {
     const result = {
@@ -11125,14 +12613,12 @@ function parseNPCRawBlock(rawBlock) {
     }
     
     // Extract traits (look for "Traits" section)
-    const traitsMatch = rawBlock.match(/Traits\s+(.*?)(?:Actions|Challenge|$)/is);
+    const traitsMatch = rawBlock.match(/\bTraits\b\s+(.*?)(?:\b(?:Actions|Bonus Actions|Legendary Actions|Challenge)\b|$)/is);
     if (traitsMatch) {
         const traitsText = traitsMatch[1];
-        // Split by common patterns
-        const traitMatches = traitsText.split(/(?=[A-Z][a-z]+)/).filter(t => t.trim().length > 10);
-        result.traits = traitMatches.map(t => t.trim());
+        result.traits = extractNpcTraitsFromExportedTraitsSection(traitsText);
     }
-    
+
     return result;
 }
 
@@ -11376,7 +12862,7 @@ function showNPCCharacterSheet(entityId) {
         return;
     }
     
-    const npc = enemy.npcData;
+    const npc = getNpcDataMergedForDmBar(enemy) || enemy.npcData;
     const parsedData = parseNPCRawBlock(npc.raw_block || '');
     
     // Get current HP from combat if available
@@ -11835,12 +13321,36 @@ function showNPCCharacterSheet(entityId) {
         html += `</div>`;
     }
     
-    // Traits
-    if (parsedData.traits && parsedData.traits.length > 0) {
+    // Traits — prefer monster pack Items (structured name + portrait + HTML description)
+    if (npc.sw5e_trait_items && Array.isArray(npc.sw5e_trait_items) && npc.sw5e_trait_items.length > 0) {
+        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+            <h4 style="color: #4a9eff;">🌟 Traits</h4>`;
+        npc.sw5e_trait_items.forEach(ti => {
+            const nm = (ti && ti.name) ? String(ti.name).trim() : '';
+            const desc = (ti && ti.description) ? String(ti.description).trim() : '';
+            let im = resolveSw5eAssetUrl((ti && ti.img) ? String(ti.img).trim() : '');
+            html += `<div style="margin-bottom: 12px; padding: 10px; background: rgba(74,158,255,0.12); border-radius: 8px; display: flex; gap: 12px; align-items: flex-start;">`;
+            if (im)
+                html += `<img src="${escapeHtml(im)}" alt="" loading="lazy" style="flex-shrink:0;width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid rgba(74,158,255,0.45);background:rgba(0,0,0,0.3);"/>`;
+            html += `<div style="flex:1;min-width:0;line-height:1.55;"><div style="font-weight:bold;font-size:14px;color:#eaf2ff;margin-bottom:6px;">${escapeHtml(nm || 'Trait')}</div>`;
+            html +=
+                `<div style="font-size: 12px; opacity: 0.9; white-space: pre-wrap; word-break: break-word;">${escapeHtml(desc)}</div></div></div>`;
+        });
+        html += `</div>`;
+    } else if (parsedData.traits && parsedData.traits.length > 0) {
         html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #4a9eff;">🌟 Traits</h4>`;
         parsedData.traits.forEach(trait => {
-            html += `<div style="margin-bottom: 10px; padding: 8px; background: rgba(74,158,255,0.1); border-radius: 3px; font-size: 12px; line-height: 1.5;">${escapeHtml(trait)}</div>`;
+            const tl = typeof trait === 'string' ? trait : '';
+            const dot = tl.indexOf('. ');
+            const showName =
+                dot > 2 && dot < 100 ? escapeHtml(tl.slice(0, dot)) + '' : '';
+            const showBody =
+                dot > 2 && dot < 100 ? escapeHtml(tl.slice(dot + 2).trim()) : escapeHtml(tl);
+            html += `<div style="margin-bottom: 10px; padding: 10px; background: rgba(74,158,255,0.1); border-radius: 8px; font-size: 12px; line-height: 1.55;">`;
+            if (showName)
+                html += `<div style="font-weight: bold; font-size: 14px; color: #eaf2ff; margin-bottom: 6px;">${showName}</div>`;
+            html += `<div style="opacity: 0.92;">${showBody}</div></div>`;
         });
         html += `</div>`;
     }
@@ -12098,6 +13608,8 @@ function parseAttacksFromActions(actionsText) {
         if (foundNames.has(name.toLowerCase())) {
             return; // Skip duplicates
         }
+        if (typeof description === 'string')
+            description = description.replace(/\bHit\s*:\s*/gi, 'Hit: ');
         
         // Pattern 1: Standard weapon attacks (Melee/Ranged Weapon Attack: +3 to hit. ... Hit: 2 (1d4+2) piercing)
         const weaponMatch = description.match(/(?:Melee|Ranged)\s+Weapon\s+Attack:\s*([+-]?\d+)\s+to\s+hit.*?Hit:\s*(\d+)\s*\(([^)]+)\)\s*(\w+)?\s*damage/i);
@@ -14064,6 +15576,32 @@ function closeModal(modalId) {
     }
 }
 
+function openSw5eCharacterWizardFromApp() {
+    if (typeof window.mountSw5eCharacterWizard !== 'function') {
+        alert('SW5E creator module not loaded. Hard-refresh the page (Ctrl+F5).');
+        return;
+    }
+    closeModal('characterManagerModal');
+    void window.mountSw5eCharacterWizard();
+}
+
+function openSw5eLevelUpWizardFromApp() {
+    if (typeof window.mountSw5eLevelUpWizard !== 'function') {
+        alert('SW5E level-up module not loaded. Hard-refresh the page (Ctrl+F5).');
+        return;
+    }
+    const id =
+        currentViewingCharacter && currentViewingCharacter.id != null ? currentViewingCharacter.id : myCharacterId;
+    if (id == null) {
+        alert('Open a character sheet or select your character first.');
+        return;
+    }
+    Promise.resolve(window.mountSw5eLevelUpWizard(id)).catch((err) => {
+        console.error(err);
+        alert(`Level-up wizard failed to load: ${err && err.message ? err.message : String(err)}`);
+    });
+}
+
 // Helper function to check if a name belongs to a player character
 function isPlayerCharacter(name) {
     if (!name) return false;
@@ -14526,9 +16064,11 @@ function showSpellTooltip(spellName, event) {
             // Don't show alert - just fail silently (tooltip is optional)
             return;
         }
-        
+
         console.log('✅ Tooltip elements found');
-        
+
+        setSpellTooltipReadableMode(false);
+
         // Clear any pending hide timeout
         if (spellTooltipTimeout) {
             clearTimeout(spellTooltipTimeout);
@@ -14737,6 +16277,7 @@ function hideSpellTooltip() {
         if (tooltip) {
             tooltip.style.display = 'none';
         }
+        setSpellTooltipReadableMode(false);
     }, 300);
 }
 
@@ -14752,6 +16293,7 @@ function keepSpellTooltip() {
 function showAttackTooltip(description, event) {
     const tooltip = document.getElementById('spellTooltip');
     const content = document.getElementById('spellTooltipContent');
+    const footer = document.getElementById('spellTooltipFooter');
     
     if (!tooltip || !content) return;
     
@@ -14760,10 +16302,17 @@ function showAttackTooltip(description, event) {
         spellTooltipTimeout = null;
     }
     
-    // Format the tooltip content
-    content.innerHTML = `<div style="padding: 15px; max-width: 400px;">
-        <div style="font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(description)}</div>
-    </div>`;
+    if (footer) footer.style.display = 'none';
+
+    setSpellTooltipReadableMode(true);
+    
+    // Format the tooltip content (large-readable layout matches named tooltips)
+    const rendered = renderTooltipTextWithDice(description);
+    content.innerHTML =
+        '<div class="spell-tooltip-named-body">' +
+        '<div class="spell-tooltip-named-desc spell-tooltip-named-desc--plain">' +
+        rendered +
+        '</div></div>';
     
     tooltip.style.display = 'block';
     tooltip.style.zIndex = String(SPELL_POWER_TOOLTIP_Z_INDEX);
@@ -14771,6 +16320,117 @@ function showAttackTooltip(description, event) {
     tooltip.style.top = (event.clientY + 15) + 'px';
     
     // Adjust position if tooltip goes off screen
+    adjustTooltipPosition(tooltip, event);
+}
+
+function renderTooltipTextWithDice(text) {
+    return renderTooltipTextWithHighlights(text);
+}
+
+function renderTooltipTextWithHighlights(text) {
+    const raw = text != null ? String(text) : '';
+    if (!raw.trim()) return '';
+
+    // Matches (in priority order):
+    // - dice: 2d6, 2d6+4, 1d8 + 3, 3d10-2
+    // - DC: "DC 15"
+    // - to hit: "+7 to hit"
+    // - reach: "reach 5 ft"
+    // - range: "range 60/240 ft"
+    const re =
+        /(\b\d{1,3}\s*d\s*\d{1,3}(?:\s*[+-]\s*\d{1,4})?\b)|(\bDC\s*\d{1,2}\b)|(\b[+-]?\d{1,2}\s*to hit\b)|(\breach\s*\d{1,3}\s*ft\b)|(\brange\s*\d{1,4}(?:\s*\/\s*\d{1,4})?\s*ft\b)/gi;
+
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = re.exec(raw))) {
+        const idx = m.index;
+        if (idx > last) out += escapeHtml(raw.slice(last, idx));
+
+        const token = m[0];
+        let cls = 'tooltip-hl';
+        let title = 'Info';
+        let normalized = token;
+
+        if (m[1]) {
+            // dice
+            const dm = token.match(/\b(\d{1,3})\s*d\s*(\d{1,3})(?:\s*([+-])\s*(\d{1,4}))?\b/i);
+            if (dm) {
+                normalized = `${dm[1]}d${dm[2]}${dm[3] ? dm[3] + dm[4] : ''}`;
+            }
+            cls = 'tooltip-dice';
+            title = 'Dice';
+        } else if (m[2]) {
+            // DC
+            const dcm = token.match(/\bDC\s*(\d{1,2})\b/i);
+            normalized = dcm ? `DC ${dcm[1]}` : token;
+            cls = 'tooltip-dc';
+            title = 'Save DC';
+        } else if (m[3]) {
+            // to hit
+            const thm = token.match(/\b([+-]?\d{1,2})\s*to hit\b/i);
+            const mod = thm ? thm[1] : '';
+            normalized = mod ? `${mod.startsWith('+') || mod.startsWith('-') ? mod : '+' + mod} to hit` : token;
+            cls = 'tooltip-tohit';
+            title = 'Attack bonus';
+        } else if (m[4]) {
+            // reach
+            const rm = token.match(/\breach\s*(\d{1,3})\s*ft\b/i);
+            normalized = rm ? `reach ${rm[1]} ft` : token;
+            cls = 'tooltip-range';
+            title = 'Reach';
+        } else if (m[5]) {
+            // range
+            const rngm = token.match(/\brange\s*(\d{1,4})(?:\s*\/\s*(\d{1,4}))?\s*ft\b/i);
+            if (rngm) {
+                normalized = `range ${rngm[1]}${rngm[2] ? '/' + rngm[2] : ''} ft`;
+            }
+            cls = 'tooltip-range';
+            title = 'Range';
+        }
+
+        out += `<span class="${cls}" title="${escapeHtml(title)}">${escapeHtml(normalized)}</span>`;
+        last = idx + token.length;
+    }
+    if (last < raw.length) out += escapeHtml(raw.slice(last));
+    return out;
+}
+
+// Show a richer tooltip for named enemy blocks (traits / actions / legendary actions).
+function showNamedBlockTooltip(blockName, blockKind, description, event) {
+    const tooltip = document.getElementById('spellTooltip');
+    const content = document.getElementById('spellTooltipContent');
+    const footer = document.getElementById('spellTooltipFooter');
+    if (!tooltip || !content) return;
+    if (spellTooltipTimeout) {
+        clearTimeout(spellTooltipTimeout);
+        spellTooltipTimeout = null;
+    }
+    if (footer) footer.style.display = 'none';
+
+    setSpellTooltipReadableMode(true);
+    const title = blockName ? String(blockName) : '';
+    const kind = blockKind ? String(blockKind) : '';
+    const desc = description != null ? String(description) : '';
+    const hasDesc = desc.trim() !== '';
+    const renderedDesc = hasDesc ? renderTooltipTextWithDice(desc) : '';
+    content.innerHTML = `
+        <div class="spell-tooltip-named-body">
+            <div class="spell-tooltip-named-head">
+                <div class="spell-tooltip-named-title">${escapeHtml(title || kind || 'Details')}</div>
+                ${kind ? `<div class="spell-tooltip-named-kind">${escapeHtml(kind)}</div>` : ''}
+            </div>
+            ${
+                hasDesc
+                    ? `<div class="spell-tooltip-named-desc">${renderedDesc}</div>`
+                    : `<div class="spell-tooltip-named-empty">No additional details.</div>`
+            }
+        </div>
+    `;
+    tooltip.style.display = 'block';
+    tooltip.style.zIndex = String(SPELL_POWER_TOOLTIP_Z_INDEX);
+    tooltip.style.left = (event.clientX + 15) + 'px';
+    tooltip.style.top = (event.clientY + 15) + 'px';
     adjustTooltipPosition(tooltip, event);
 }
 
@@ -16528,6 +18188,15 @@ function showMyCharacterSheet() {
     showCharacterSheet(char);
 }
 
+/** Opens your sheet and scrolls to the equipment / inventory block when present. */
+function openMyInventoryFromActionBar() {
+    showMyCharacterSheet();
+    setTimeout(function () {
+        var el = document.querySelector('#characterSheetContent .character-sheet-equipment-anchor');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+}
+
 let currentViewingCharacter = null; // Track which character is being viewed
 let currentViewingCharacterFullData = null; // Raw parsed character_data (may include wrapper)
 let currentViewingCharacterData = null; // Normalized character data object
@@ -16597,6 +18266,10 @@ function showCharacterSheet(char, isSelectionMode = false) {
     const updateJsonBtn = document.getElementById('updateCharacterFromJsonBtn');
     if (updateJsonBtn) {
         updateJsonBtn.style.display = shouldShowOwnSheetButtons ? 'block' : 'none';
+    }
+    const sw5eLuBtn = document.getElementById('sw5eLevelUpSheetBtn');
+    if (sw5eLuBtn) {
+        sw5eLuBtn.style.display = shouldShowOwnSheetButtons ? 'inline-block' : 'none';
     }
     
     // Show/hide the "Link Discord" button (only for players viewing their own sheet)
@@ -16837,6 +18510,11 @@ function renderCharacterSheetContent() {
             }
             contentEl.innerHTML = html;
             setupCharacterSheetRollHandlers(contentEl);
+            try {
+                wirePowerLevelFilterButtons(contentEl, renderCharacterSheetContent);
+            } catch (eF) {
+                /* ignore */
+            }
             restoreCharacterSheetScrollPosition(contentEl, savedScrollTop);
             setTimeout(() => {
                 try {
@@ -18058,7 +19736,7 @@ function buildDetailedCharacterSheet(char, charData) {
     
     // Equipment (any character with inventory) — NOT inside isStarWars/classes guard so it always shows
     if (Array.isArray(charData.equipment) && charData.equipment.length > 0) {
-        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+        html += `<div class="panel character-sheet-equipment-anchor" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ffaa44;">🎒 Equipment <span style="font-size: 10px; opacity: 0.6;">(Hover for details${showEquipControls ? '; Equip updates AC & attacks' : ''})</span></h4>
             ${!showEquipControls && charData.equipment.length ? '<p style="font-size:11px;opacity:0.75;margin:0 0 8px 0;">Equip / Unequip: select this character as <strong>yours</strong> (character list) and open the sheet again, or ask the <strong>DM</strong> to adjust.</p>' : ''}
             <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;">`;
@@ -18153,11 +19831,17 @@ function buildDetailedCharacterSheet(char, charData) {
         }
         
         if (allTechPowers.length > 0) {
+            const tierKeysTechSh = orderedTierKeysForPowerList(allTechPowers, 'tech', charData);
+            let techFilterSh = getStoredPowerLevelFilter('charSheet', 'tech');
+            if (techFilterSh !== 'all' && tierKeysTechSh.indexOf(techFilterSh) === -1) techFilterSh = 'all';
             html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
                 <h4 style="color: #00d4ff;">⚡ Tech Powers <span style="font-size: 10px; opacity: 0.6;">(Hover for details)</span></h4>
+                ${buildPowerLevelFilterRowHtml('charSheet', 'tech', techFilterSh, tierKeysTechSh, false)}
                 <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
             allTechPowers.forEach(powerName => {
                 if (!powerName) return;
+                const metaT = resolvePowerTierForUi(powerName, 'tech', charData);
+                if (!powerTierPassesFilter(metaT, techFilterSh)) return;
                 const lookup =
                     typeof findTechPowerInCacheGlobal === 'function' ? findTechPowerInCacheGlobal(powerName) : null;
                 const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
@@ -18176,11 +19860,17 @@ function buildDetailedCharacterSheet(char, charData) {
         }
         
         if (allForcePowers.length > 0) {
+            const tierKeysForceSh = orderedTierKeysForPowerList(allForcePowers, 'force', charData);
+            let forceFilterSh = getStoredPowerLevelFilter('charSheet', 'force');
+            if (forceFilterSh !== 'all' && tierKeysForceSh.indexOf(forceFilterSh) === -1) forceFilterSh = 'all';
             html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
                 <h4 style="color: #ff00ff;">✨ Force Powers</h4>
+                ${buildPowerLevelFilterRowHtml('charSheet', 'force', forceFilterSh, tierKeysForceSh, false)}
                 <div style="display: flex; flex-wrap: wrap; gap: 5px;">`;
             allForcePowers.forEach(powerName => {
                 if (!powerName) return;
+                const metaFilt = resolvePowerTierForUi(powerName, 'force', charData);
+                if (!powerTierPassesFilter(metaFilt, forceFilterSh)) return;
                 const lookup =
                     typeof findForcePowerInCacheGlobal === 'function' ? findForcePowerInCacheGlobal(powerName) : null;
                 const levelDisplay = lookup && (lookup.level_label || lookup.level || lookup.level === 0)
@@ -18423,7 +20113,7 @@ function buildDetailedCharacterSheet(char, charData) {
     
     // Equipment
     if (charData.equipment) {
-        html += `<div class="panel" style="padding: 15px; margin-bottom: 15px;">
+        html += `<div class="panel character-sheet-equipment-anchor" style="padding: 15px; margin-bottom: 15px;">
             <h4 style="color: #ffaa44;">🎒 Equipment</h4>`;
         if (charData.equipment.coins) {
             const c = charData.equipment.coins;

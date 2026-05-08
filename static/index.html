@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=134">
+    <link rel="stylesheet" href="/static/style.css?v=149">
 </head>
 <body>
     <div id="app">
@@ -53,6 +53,10 @@
                     </div>
                 </div>
                 <div class="vtt-top-bar-right">
+                    <div id="topBarQuickActions" class="vtt-top-quick-actions hidden" aria-label="Sync and 3D">
+                        <button type="button" class="vtt-top-quick-btn vtt-top-quick-btn-sync" onclick="refreshApplication()" title="Sync with server – latest map, tokens, combat">🔄 Sync</button>
+                        <button type="button" class="vtt-top-quick-btn vtt-top-quick-btn-3d" onclick="toggle3DArena()" title="Open experimental 3D arena">🧊 3D</button>
+                    </div>
                     <div id="playerInfo" class="vtt-player-info"></div>
                     <div id="connectionStatus">Disconnected</div>
                     <div id="adminMenu" class="vtt-admin-menu hidden">
@@ -80,7 +84,7 @@
                                 <button onclick="showCharacterSelect()">Select Character</button>
                                 <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
                                 <button type="button" id="armstechPlayerBtn" onclick="openArmstechTracker()" style="display:none;background:#2a4a3a;color:#a8f0c8;font-weight:bold;border:1px solid #44aa66;">🔧 Armstech</button>
-                                <button id="playerActionBarToggleBtn" onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold;" title="Toggle the action bar at the bottom (On/Off)">📊 Action Bar (On)</button>
+                                <button type="button" id="playerActionBarToggleBtn" data-action-bar-toggle onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold;" title="Toggle the bottom action bar (On/Off)">📊 Action Bar (On)</button>
                             </div>
                         </div>
                         <div class="panel vtt-card">
@@ -91,6 +95,7 @@
                         </div>
                     </div>
                     <div id="dmControls" class="panel vtt-card hidden">
+                            <button type="button" id="dmActionBarToggleBtn" data-action-bar-toggle onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold; width: 100%;" title="Show or hide the bottom action bar when controlling an enemy (less map clutter)">📊 Action Bar (On)</button>
                             <button onclick="showMapUpload()">📍 Upload Map</button>
                             <button onclick="saveCurrentMapState()" id="saveMapStateBtn" style="background: #ffaa44; color: #000; font-weight: bold;">💾 Save Map State</button>
                             <button onclick="showMapSettings()">⚙️ Map Settings</button>
@@ -236,7 +241,6 @@
                         <button type="button" onclick="resetZoom()">Reset</button>
                         <button type="button" onclick="fitMapToViewport()" title="Fit the whole map in the view">⤢ Fit</button>
                         <button type="button" onclick="centerOnSelectedToken()" title="Center on the selected token">◎ Center</button>
-                        <button type="button" onclick="toggle3DArena()" title="Experimental 3D arena">🧊 3D Arena</button>
                     </div>
                     </div>
                 </main>
@@ -383,12 +387,48 @@
         <div id="characterManagerModal" class="modal">
             <div class="modal-content large">
                 <h2 id="characterManagerModalTitle">Character Manager</h2>
-                <div id="characterManagerModalDmButtons" style="display: flex; gap: 8px; margin-bottom: 10px;">
+                <div id="characterManagerModalDmButtons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
                     <button onclick="showCreateCharacter()">Create Character</button>
+                    <button type="button" onclick="openSw5eCharacterWizardFromApp()">Make New Character (SW5E)</button>
                     <button onclick="showImportCharacter()">Import from JSON</button>
                 </div>
                 <div id="characterList"></div>
                 <button onclick="closeModal('characterManagerModal')">Close</button>
+            </div>
+        </div>
+
+        <!-- SW5E guided character creator (full-screen wizard) -->
+        <div id="sw5eCreatorModal" class="modal sw5e-wiz-modal">
+            <div class="modal-content sw5e-wiz-modal-inner xlarge">
+                <div class="sw5e-wiz-topbar">
+                    <h2 data-sw5e-wiz-title class="sw5e-wiz-title-h">Create Character (SW5E)</h2>
+                    <span data-sw5e-wiz-progress class="sw5e-wiz-progress-txt"></span>
+                    <button type="button" class="sw5e-wiz-icon-close" onclick="closeModal('sw5eCreatorModal')" aria-label="Close">×</button>
+                </div>
+                <div data-sw5e-wiz-errors class="sw5e-wiz-errors" role="alert"></div>
+                <div class="sw5e-wiz-main">
+                    <nav data-sw5e-wiz-nav class="sw5e-wiz-nav" aria-label="Steps"></nav>
+                    <div data-sw5e-wiz-center class="sw5e-wiz-center"></div>
+                    <aside data-sw5e-wiz-detail class="sw5e-wiz-detail"><p class="sw5e-wiz-detail-placeholder">Details</p></aside>
+                    <aside data-sw5e-wiz-preview class="sw5e-wiz-preview-wrap"></aside>
+                </div>
+                <div class="sw5e-wiz-footer modal-actions">
+                    <button type="button" data-sw5e-wiz-back>Back</button>
+                    <button type="button" data-sw5e-wiz-next class="primary">Next</button>
+                    <button type="button" data-sw5e-wiz-finish class="primary" style="display: none;">Finish</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- SW5E guided level-up -->
+        <div id="sw5eLevelUpModal" class="modal sw5e-wiz-modal">
+            <div class="modal-content large">
+                <h2 style="margin-top:0;">Level Up (SW5E)</h2>
+                <div id="sw5eLevelUpBody"></div>
+                <div class="modal-actions">
+                    <button type="button" id="sw5eLevelUpApply" class="primary">Apply Level</button>
+                    <button type="button" onclick="closeModal('sw5eLevelUpModal')">Cancel</button>
+                </div>
             </div>
         </div>
 
@@ -685,6 +725,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #444;">
                     <h2 id="sheetCharacterName" style="margin: 0;">Character Sheet</h2>
                     <div style="display: flex; gap: 10px; align-items: center;">
+                        <button type="button" id="sw5eLevelUpSheetBtn" onclick="openSw5eLevelUpWizardFromApp()" style="display: none; background: #2a4a5a; color: #a8e0f8; padding: 8px 15px; border: 1px solid #4a9eff; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;" title="Guided SW5e level-up using compendium data.">⬆️ Level Up (SW5E)</button>
                         <button id="updateCharacterFromJsonBtn" onclick="document.getElementById('updateCharacterJsonFile').click()" style="display: none; background: #c9a227; color: #1a1510; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;" title="Upload a new character sheet JSON (e.g. from SW5e export) to update this character (level up).">⬆️ Level Up (Update from JSON)</button>
                         <input type="file" id="updateCharacterJsonFile" accept=".json,application/json" style="display: none;" onchange="handleUpdateCharacterJsonFile(this)">
                         <button id="linkDiscordBtn" onclick="openDiscordLinkModal()" style="background: #5865f2; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;">🔗 Link Discord</button>
@@ -1067,23 +1108,24 @@
         border: 2px solid #aa88ff; 
         border-radius: 8px; 
         padding: 15px; 
-        max-width: 400px; 
-        min-width: 250px;
+        max-width: 560px; 
+        min-width: 320px;
         z-index: 200000; 
         box-shadow: 0 8px 32px rgba(170,136,255,0.5); 
         color: #fff; 
-        font-size: 13px; 
-        line-height: 1.6;
+        font-size: 14px; 
+        line-height: 1.65;
         pointer-events: auto;">
         <div id="spellTooltipContent">TEST TOOLTIP</div>
-        <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
+        <div id="spellTooltipFooter" style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
     <input type="file" id="arenaStlHiddenFilePicker" accept=".stl,.glb,model/stl,model/gltf-binary,application/sla,application/vnd.ms-pki.stl" style="display: none;" aria-hidden="true">
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=20"></script>
-    <script src="/static/app.js?v=134"></script>
+    <script src="/static/app.js?v=149"></script>
+    <script type="module" src="/static/js/sw5e-builder/bootstrap.js?v=2"></script>
     <script>
         // Verify connect function is available
         window.addEventListener('DOMContentLoaded', () => {
@@ -1111,10 +1153,17 @@
         </div>
         <div class="player-bar-inner">
             <div class="player-bar-tab-panels">
-                <div class="player-bar-tab-panel active" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">
-                    <div class="player-bar-section player-bar-name-hp" id="playerBarNameHp"></div>
-                    <div class="player-bar-section player-bar-actions" id="playerBarActions"></div>
-                    <div class="player-bar-section player-bar-attacks" id="playerBarAttacks"></div>
+                <div class="player-bar-tab-panel active vtt-combat-tab-shell" id="playerBarPanelCombat" data-tab="combat" role="tabpanel">
+                    <div id="playerBarNameHp" class="vtt-ab-header-wrap"></div>
+                    <div class="vtt-ab-body">
+                        <div class="vtt-ab-fight-row" id="playerBarFightRow"></div>
+                        <div class="vtt-ab-special-row" id="playerBarSpecialRow"></div>
+                        <div class="vtt-ab-lower3">
+                            <div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Bonus actions</span><div id="playerBarBonusCol" class="vtt-ab-chip-col"></div></div>
+                            <div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Reactions</span><div id="playerBarReactionCol" class="vtt-ab-chip-col"></div></div>
+                            <div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Inventory</span><div id="playerBarInventoryCol" class="vtt-ab-chip-col"></div></div>
+                        </div>
+                    </div>
                 </div>
                 <div class="player-bar-tab-panel" id="playerBarPanelAbilities" data-tab="abilities" role="tabpanel">
                     <div class="player-bar-section player-bar-abilities" id="playerBarAbilities"></div>
@@ -1135,20 +1184,6 @@
         </div>
     </div>
 
-    <!-- Sync / Refresh Button - for all players (especially remote) to pull latest state without reloading -->
-    <div id="refreshButton" class="hidden" style="position: fixed; bottom: 20px; right: 20px; z-index: 10000;">
-        <button onclick="refreshApplication()" 
-                title="Sync with server – get latest map, tokens, and combat (use if your view is behind)"
-                style="padding: 12px 20px; background: linear-gradient(135deg, #4a9eff 0%, #aa88ff 100%); 
-                       color: white; border: 2px solid rgba(255,255,255,0.3); border-radius: 8px; 
-                       cursor: pointer; font-weight: bold; font-size: 14px; 
-                       box-shadow: 0 4px 15px rgba(74, 158, 255, 0.4);
-                       transition: all 0.3s ease;"
-                onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 20px rgba(74, 158, 255, 0.6)'"
-                onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 15px rgba(74, 158, 255, 0.4)'">
-            🔄 Sync now
-        </button>
-    </div>
 </body>
 </html>
 

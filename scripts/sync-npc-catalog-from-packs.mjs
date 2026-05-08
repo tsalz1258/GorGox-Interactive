@@ -15,6 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const npcPath = path.join(repoRoot, "static", "data", "npc.json");
 const monstersRoot = path.join(repoRoot, "starwars5edata", "sw5e", "packs", "monsters");
+const iconRoot = path.join(repoRoot, "static", "sw5e-assets", "packs", "Icons");
 
 function fvttPackPathToAppUrl(p) {
   if (!p || typeof p !== "string") return "";
@@ -35,6 +36,64 @@ function fullMonsterArtAppUrl(fvttImg) {
     return base;
   }
   return base;
+}
+
+function normalizeIconName(s) {
+  return String(s || "")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[''']/g, "")
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/gi, "")
+    .toLowerCase();
+}
+
+function isMonsterPortraitIcon(appUrl) {
+  return /\/packs\/Icons\/monsters\/[^/]+\/(?:Avatar|Token)\.webp$/i.test(String(appUrl || ""));
+}
+
+let iconIndex = null;
+function buildIconIndex() {
+  if (iconIndex) return iconIndex;
+  iconIndex = { byName: new Map(), byNameAndDir: new Map() };
+  function walk(dir) {
+    if (!fs.existsSync(dir)) return;
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!ent.isFile() || !/\.(webp|png|jpe?g)$/i.test(ent.name)) continue;
+      const rel = path.relative(iconRoot, full).replace(/\\/g, "/");
+      const dirRel = path.dirname(rel).replace(/\\/g, "/");
+      const base = path.basename(ent.name, path.extname(ent.name));
+      const key = normalizeIconName(base);
+      if (!key) continue;
+      const appUrl = "/static/sw5e-assets/packs/Icons/" + rel;
+      if (!iconIndex.byName.has(key)) iconIndex.byName.set(key, appUrl);
+      iconIndex.byNameAndDir.set(dirRel + "|" + key, appUrl);
+    }
+  }
+  walk(iconRoot);
+  return iconIndex;
+}
+
+function namedIconAppUrl(name, preferredDirs = []) {
+  const key = normalizeIconName(name);
+  if (!key) return "";
+  const idx = buildIconIndex();
+  for (const dir of preferredDirs) {
+    const hit = idx.byNameAndDir.get(dir + "|" + key);
+    if (hit) return hit;
+  }
+  return idx.byName.get(key) || "";
+}
+
+function itemImgAppUrl(fvttImg, itemName, preferredDirs = []) {
+  const direct = fvttPackPathToAppUrl(fvttImg);
+  const named = namedIconAppUrl(itemName, preferredDirs);
+  if (named && (!direct || isMonsterPortraitIcon(direct))) return named;
+  return direct || named || "";
 }
 
 function nameSlug(s) {
@@ -246,6 +305,7 @@ function actionLineFromItem(it) {
 function categorizeItems(items) {
   const weapons = [];
   const actionFeats = [];
+  const bonusFeats = [];
   const traitFeats = [];
   const reactions = [];
   const legendary = [];
@@ -265,13 +325,17 @@ function categorizeItems(items) {
       reactions.push(it);
       continue;
     }
-    if (act === "action" || act === "bonus") {
+    if (act === "bonus") {
+      bonusFeats.push(it);
+      continue;
+    }
+    if (act === "action") {
       actionFeats.push(it);
       continue;
     }
     traitFeats.push(it);
   }
-  return { weapons, actionFeats, traitFeats, reactions, legendary };
+  return { weapons, actionFeats, bonusFeats, traitFeats, reactions, legendary };
 }
 
 function buildActionsText(cat) {
@@ -301,6 +365,76 @@ function buildReactionText(cat) {
     })
     .filter(Boolean)
     .join(" ");
+}
+
+function buildBonusActionsText(cat) {
+  return cat.bonusFeats
+    .map((f) => {
+      const n = String(f.name || "").replace(/\.$/, "").trim();
+      const t = stripHtml(f.system?.description?.value || "");
+      return n && t ? `${n} . ${t}` : t || n;
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+function mapWeaponOrFeatToActionStruct(it) {
+  const nm = String(it?.name || "Action").replace(/\.$/, "").trim();
+  let description = "";
+  if (it.type === "weapon") {
+    description = stripHtml(
+      normalizeWeaponDescription(it.system?.description?.value || "", it.system?.actionType)
+    );
+  } else {
+    description = stripHtml(it?.system?.description?.value || "");
+  }
+  const img = itemImgAppUrl(it?.img || "", nm, [
+    "Monster Traits",
+    "Martial Blasters",
+    "Simple Blasters",
+    "Martial Vibroweapons",
+    "Simple Vibroweapons",
+  ]);
+  return { name: nm, description, img };
+}
+
+/** Monster pack Actions column in sheet order — each row carries the item portrait for the DM bar */
+function buildSw5eActionItems(cat) {
+  const multi = cat.actionFeats.filter((f) => /multiattack/i.test(f.name));
+  const otherActs = cat.actionFeats.filter((f) => !/multiattack/i.test(f.name));
+  const order = [...multi, ...cat.weapons, ...otherActs];
+  return order.map(mapWeaponOrFeatToActionStruct).filter((x) => x.name || x.description);
+}
+
+function mapLegendaryItemStructs(cat) {
+  return (cat.legendary || [])
+    .map((f) => {
+      const nm = String(f.name || "").replace(/\.$/, "").trim();
+      const t = stripHtml(f.system?.description?.value || "");
+      const costRaw = f.system?.activation?.cost;
+      const cost =
+        costRaw != null && Number.isFinite(Number(costRaw)) ? Math.max(1, Number(costRaw)) : 1;
+      return {
+        name: nm,
+        description: t,
+        img: itemImgAppUrl(f.img || "", nm, ["Monster Traits"]),
+        cost,
+      };
+    })
+    .filter((x) => x.name || x.description);
+}
+
+/** Structured trait/reaction rows for the app (named chips + monster item icons). */
+function mapFeatLikeItemsToStructured(items) {
+  return (items || [])
+    .map((it) => ({
+      name: String(it?.name || "")
+        .replace(/\.$/, "")
+        .trim(),
+      description: stripHtml(it?.system?.description?.value || ""),
+      img: itemImgAppUrl(it?.img || "", it?.name || "", ["Monster Traits"]),
+    }))
+    .filter((x) => x.name || x.description);
 }
 
 function buildLegendaryText(actor) {
@@ -440,11 +574,29 @@ function npcFromActor(actor) {
   const rx = buildReactionText(cat);
   if (rx) npc.reactions = rx;
 
+  const bx = buildBonusActionsText(cat);
+  if (bx) npc.bonus_actions = bx;
+
   const leg = buildLegendaryText(actor);
   if (leg) npc.legendary_actions = leg;
 
   const lore = lorePlain(actor, 12000);
   if (lore) npc.lore = lore;
+
+  const traitStruct = mapFeatLikeItemsToStructured(cat.traitFeats);
+  if (traitStruct.length) npc.sw5e_trait_items = traitStruct;
+
+  const reactionStruct = mapFeatLikeItemsToStructured(cat.reactions);
+  if (reactionStruct.length) npc.sw5e_reaction_items = reactionStruct;
+
+  const actionStructs = buildSw5eActionItems(cat);
+  if (actionStructs.length) npc.sw5e_action_items = actionStructs;
+
+  const bonusStructs = mapFeatLikeItemsToStructured(cat.bonusFeats);
+  if (bonusStructs.length) npc.sw5e_bonus_action_items = bonusStructs;
+
+  const legendaryStructs = mapLegendaryItemStructs(cat);
+  if (legendaryStructs.length) npc.sw5e_legendary_items = legendaryStructs;
 
   const icon = fullMonsterArtAppUrl(actor.img || "");
   if (icon) {

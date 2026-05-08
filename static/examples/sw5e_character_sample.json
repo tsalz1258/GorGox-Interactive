@@ -1,0 +1,43 @@
+{
+  "name": "Sample Berserker",
+  "player_name": "Player",
+  "species": "Human",
+  "speciesSlug": "human",
+  "background": "Mercenary",
+  "backgroundStableId": "background:mercenary",
+  "baseAbilityScores": {
+    "Strength": 16,
+    "Dexterity": 14,
+    "Constitution": 15,
+    "Intelligence": 8,
+    "Wisdom": 10,
+    "Charisma": 12
+  },
+  "proficiency_bonus": 2,
+  "saving_throw_proficiencies": ["Strength", "Constitution"],
+  "skills": {},
+  "classes": [
+    {
+      "name": "Berserker",
+      "levels": 1,
+      "hitPoints": [17],
+      "techPowers": [],
+      "forcePowers": [],
+      "techPowerDetails": [],
+      "forcePowerDetails": []
+    }
+  ],
+  "class": "Berserker 1",
+  "level": 1,
+  "feats": [],
+  "techPowers": [],
+  "forcePowers": [],
+  "equipment": [],
+  "speed": { "walk": 30 },
+  "initiative": { "mod": 2 },
+  "traits": [],
+  "features": [],
+  "currentStats": { "hitPointsLost": 0 },
+  "ac": { "base": 12 },
+  "builderMeta": { "version": 1, "choiceHistory": [], "missingData": [] }
+}
