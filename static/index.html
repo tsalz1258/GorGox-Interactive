@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=149">
+    <link rel="stylesheet" href="/static/style.css?v=163">
 </head>
 <body>
     <div id="app">
@@ -37,6 +37,18 @@
 
         <!-- Main Interface -->
         <div id="mainInterface" class="hidden">
+            <div id="dmToolMenuOverlay" class="dm-tool-menu-overlay hidden" onclick="closeDmToolMenu(event)" aria-hidden="true">
+                <div class="dm-tool-menu-card" role="dialog" aria-modal="true" aria-labelledby="dmToolMenuTitle">
+                    <div class="dm-tool-menu-head">
+                        <div>
+                            <div class="dm-tool-menu-kicker">DM Tools</div>
+                            <h3 id="dmToolMenuTitle">Tools</h3>
+                        </div>
+                        <button type="button" class="dm-tool-menu-close" onclick="closeDmToolMenu()">x</button>
+                    </div>
+                    <div id="dmToolMenuBody" class="dm-tool-menu-body"></div>
+                </div>
+            </div>
             <header class="vtt-top-bar">
                 <div class="vtt-top-bar-left">
                     <button type="button" id="sidebarLeftToggle" class="vtt-sidebar-fab" onclick="toggleLeftSidebarCollapsed()" title="Collapse or expand left sidebar">⟨</button>
@@ -95,29 +107,18 @@
                         </div>
                     </div>
                     <div id="dmControls" class="panel vtt-card hidden">
-                            <button type="button" id="dmActionBarToggleBtn" data-action-bar-toggle onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold; width: 100%;" title="Show or hide the bottom action bar when controlling an enemy (less map clutter)">📊 Action Bar (On)</button>
-                            <button onclick="showMapUpload()">📍 Upload Map</button>
-                            <button onclick="saveCurrentMapState()" id="saveMapStateBtn" style="background: #ffaa44; color: #000; font-weight: bold;">💾 Save Map State</button>
-                            <button onclick="showMapSettings()">⚙️ Map Settings</button>
-                            <button onclick="showEnemyManager()">👹 Enemy Database</button>
+                            <div class="dm-tool-categories" aria-label="DM tool categories">
+                                <button type="button" class="dm-tool-category-btn dm-tool-category-btn--maps" onclick="openDmToolMenu('maps')">🗺️ Maps</button>
+                                <button type="button" class="dm-tool-category-btn dm-tool-category-btn--tokens" onclick="openDmToolMenu('tokens')">🎯 Tokens</button>
+                                <button type="button" class="dm-tool-category-btn dm-tool-category-btn--tools" onclick="openDmToolMenu('tools')">🛠️ Tools</button>
+                            </div>
                             <div class="meshy-sidebar-stack">
-                                <button type="button" id="meshySidebarOpenBtn" onclick="showMeshyArenaModal()" style="background:#6b4cff;color:#fff;font-weight:bold;width:100%;" title="Generate a GLB from the portrait via Meshy (server needs MESHY_API_KEY)">✨ Meshy 3D from portrait</button>
                                 <div id="meshySidebarProgressWrap" class="meshy-progress-wrap" style="display:none;" aria-hidden="true" role="status">
                                     <div id="meshySidebarProgressIndet" class="meshy-progress-track meshy-progress-indet-visible" aria-label="Meshy generation in progress"><div class="meshy-progress-indeterminate"></div></div>
                                     <progress id="meshySidebarProgressMeter" class="meshy-progress-meter" max="100" value="0" style="display:none;"></progress>
                                     <div id="meshySidebarProgressPct" class="meshy-progress-pct-line"></div>
                                 </div>
                             </div>
-                            <button onclick="showCharacterManager()">👤 Characters</button>
-                            <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
-                            <button onclick="showSaveLoadModal()" style="background: #4a9eff; color: white; font-weight: bold;">💾 Save/Load Game</button>
-                            <button onclick="showSoundBoard()" style="background: #aa44ff; color: white; font-weight: bold;">🔊 Sound Board</button>
-                            <button onclick="showSettings()" style="background: #ffaa44; color: white; font-weight: bold;">⚙️ Settings</button>
-                            <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
-                            <button onclick="showPlaceCharacter()">🎭 Place Character</button>
-                            <button type="button" onclick="showPlaceObjectModal()" style="background:#6a6a6a;color:#fff;font-weight:bold;">📦 Place Object</button>
-                            <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
-                            <button onclick="removeSelectedToken()">🗑️ Remove Token</button>
                             <button type="button" id="dmToggleCombatBtn" onclick="toggleCombat()">⚔️ Start Combat</button>
                             <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.12);">
                                 <div style="font-size:11px;font-weight:bold;color:#aa88ff;margin-bottom:6px;">👁️ Player map (anti-metagame)</div>
@@ -129,6 +130,32 @@
                                 <p style="font-size:10px;opacity:0.7;margin:0;line-height:1.35;">You always see the full map. Turn on, then use the tool to drag the cyan window. Players get fog outside it.</p>
                             </div>
                         </div>
+
+                    <!-- Session log (Rolls / Chat / System) -->
+                    <div class="panel vtt-log-panel" id="rollsLogPanel">
+                        <div class="vtt-log-tabs" role="tablist">
+                            <button type="button" class="vtt-log-tab active" data-log-tab="rolls" role="tab" aria-selected="true">Rolls</button>
+                            <button type="button" class="vtt-log-tab" data-log-tab="chat" role="tab" aria-selected="false">Chat</button>
+                            <button type="button" class="vtt-log-tab" data-log-tab="system" role="tab" aria-selected="false">System</button>
+                        </div>
+                        <div class="vtt-log-panes">
+                            <div class="vtt-log-pane active" data-log-pane="rolls" role="tabpanel">
+                                <div id="rollsLog" class="vtt-log-scroll">
+                                    <div class="log-empty-placeholder">Rolls will appear here…</div>
+                                </div>
+                            </div>
+                            <div class="vtt-log-pane" data-log-pane="chat" role="tabpanel" hidden>
+                                <div id="chatLog" class="vtt-log-scroll">
+                                    <div class="log-empty-placeholder">In-character and table chat will appear here when the server supports it. Until then, use voice or your group’s chat.</div>
+                                </div>
+                            </div>
+                            <div class="vtt-log-pane" data-log-pane="system" role="tabpanel" hidden>
+                                <div id="systemLog" class="vtt-log-scroll">
+                                    <div class="log-empty-placeholder">Connection, maps, and session notices appear here…</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                     <!-- Combat Tracker -->
                     <div class="panel" id="combatPanel">
@@ -192,6 +219,7 @@
                         </div>
                         <button id="shutdownServerBtn" onclick="requestServerShutdown()" style="width: 100%; background: #660000; color: white; font-weight: bold; padding: 10px; border: none; border-radius: 5px; cursor: pointer;">🛑 Shutdown Server</button>
                     </div>
+
                 </aside>
 
                 <!-- Center - Map View -->
@@ -256,32 +284,6 @@
                             <button onclick="dealDamage()">Deal Damage</button>
                             <input type="number" id="healAmount" placeholder="Healing" min="0">
                             <button onclick="healTarget()">Heal</button>
-                        </div>
-                    </div>
-
-                    <!-- Session log (Rolls / Chat / System) -->
-                    <div class="panel vtt-log-panel" id="rollsLogPanel">
-                        <div class="vtt-log-tabs" role="tablist">
-                            <button type="button" class="vtt-log-tab active" data-log-tab="rolls" role="tab" aria-selected="true">Rolls</button>
-                            <button type="button" class="vtt-log-tab" data-log-tab="chat" role="tab" aria-selected="false">Chat</button>
-                            <button type="button" class="vtt-log-tab" data-log-tab="system" role="tab" aria-selected="false">System</button>
-                        </div>
-                        <div class="vtt-log-panes">
-                            <div class="vtt-log-pane active" data-log-pane="rolls" role="tabpanel">
-                                <div id="rollsLog" class="vtt-log-scroll">
-                                    <div class="log-empty-placeholder">Rolls will appear here…</div>
-                                </div>
-                            </div>
-                            <div class="vtt-log-pane" data-log-pane="chat" role="tabpanel" hidden>
-                                <div id="chatLog" class="vtt-log-scroll">
-                                    <div class="log-empty-placeholder">In-character and table chat will appear here when the server supports it. Until then, use voice or your group’s chat.</div>
-                                </div>
-                            </div>
-                            <div class="vtt-log-pane" data-log-pane="system" role="tabpanel" hidden>
-                                <div id="systemLog" class="vtt-log-scroll">
-                                    <div class="log-empty-placeholder">Connection, maps, and session notices appear here…</div>
-                                </div>
-                            </div>
                         </div>
                     </div>
 
@@ -1124,7 +1126,7 @@
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=20"></script>
-    <script src="/static/app.js?v=149"></script>
+    <script src="/static/app.js?v=163"></script>
     <script type="module" src="/static/js/sw5e-builder/bootstrap.js?v=2"></script>
     <script>
         // Verify connect function is available

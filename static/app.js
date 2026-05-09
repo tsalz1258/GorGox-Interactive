@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v149'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v163'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -27,7 +27,22 @@ let dmActionBarEnabled = (function () {
 const PLAYER_ACTION_BAR_HEIGHT_MIN = 80;
 const PLAYER_ACTION_BAR_HEIGHT_MAX = 520;
 const PLAYER_ACTION_BAR_HEIGHT_DEFAULT = 100;
+const DM_ACTION_BAR_HEIGHT_COMPACT = 286;
 let playerActionBarHeight = PLAYER_ACTION_BAR_HEIGHT_DEFAULT; // Resizable; persisted in localStorage
+let dmEnemyActionBarHeight = (function () {
+    try {
+        const saved = parseInt(localStorage.getItem('dmEnemyActionBarHeight') || '', 10);
+        if (!isNaN(saved) && saved >= PLAYER_ACTION_BAR_HEIGHT_MIN && saved <= PLAYER_ACTION_BAR_HEIGHT_MAX) return saved;
+    } catch (e) {}
+    return DM_ACTION_BAR_HEIGHT_COMPACT;
+})();
+let dmActionBarExpanded = (function () {
+    try {
+        return localStorage.getItem('dmActionBarExpanded') === '1';
+    } catch (e) {
+        return false;
+    }
+})();
 let currentMap = null;
 let tokens = [];
 let characters = [];
@@ -7335,7 +7350,97 @@ function ensurePlayerActionBarExists() {
     return bar;
 }
 
-// Load saved action bar height and left edge; apply to bar + main content
+function getEffectiveActionBarHeight(dmEnemyBar) {
+    return dmEnemyBar ? dmEnemyActionBarHeight : playerActionBarHeight;
+}
+
+function calcAbilityMod(score) {
+    var n = Number(score);
+    if (isNaN(n)) n = 10;
+    return Math.floor((n - 10) / 2);
+}
+
+function formatSignedMod(mod) {
+    var n = Number(mod) || 0;
+    return n >= 0 ? '+' + n : String(n);
+}
+
+function showRollsLogPane() {
+    var btn = document.querySelector('.vtt-log-tab[data-log-tab="rolls"]');
+    if (btn) btn.click();
+}
+
+function dmBarDealDamage() {
+    var src = document.getElementById('dmBarDamageAmount');
+    var target = document.getElementById('damageAmount');
+    if (src && target) target.value = src.value;
+    dealDamage();
+    if (src) src.value = '';
+}
+
+function dmBarHealTarget() {
+    var src = document.getElementById('dmBarHealAmount');
+    var target = document.getElementById('healAmount');
+    if (src && target) target.value = src.value;
+    healTarget();
+    if (src) src.value = '';
+}
+
+function rollDmEnemyAbilityCheck(enemyName, ability, score) {
+    showRollsLogPane();
+    var mod = calcAbilityMod(score);
+    var roll = Math.floor(Math.random() * 20) + 1;
+    var total = roll + mod;
+    var natText = roll === 20 ? ' ✨ NATURAL 20!' : roll === 1 ? ' ❌ NATURAL 1!' : '';
+    addRollEntry('🎲 ' + (enemyName || 'Enemy') + ' rolled ' + String(ability).toUpperCase() + ' check: ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText, roll === 20, roll === 1);
+}
+
+function rollDmEnemySavingThrow(enemyName, ability, score) {
+    showRollsLogPane();
+    var mod = calcAbilityMod(score);
+    var roll = Math.floor(Math.random() * 20) + 1;
+    var total = roll + mod;
+    var natText = roll === 20 ? ' ✨ NATURAL 20!' : roll === 1 ? ' ❌ NATURAL 1!' : '';
+    addRollEntry('🛡️ ' + (enemyName || 'Enemy') + ' rolled ' + String(ability).toUpperCase() + ' save: ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText, roll === 20, roll === 1);
+}
+
+function rollDmEnemySkillCheck(enemyName, skillName, modifier) {
+    showRollsLogPane();
+    var mod = Number(modifier) || 0;
+    var roll = Math.floor(Math.random() * 20) + 1;
+    var total = roll + mod;
+    var natText = roll === 20 ? ' ✨ NATURAL 20!' : roll === 1 ? ' ❌ NATURAL 1!' : '';
+    addRollEntry('🎯 ' + (enemyName || 'Enemy') + ' rolled ' + (skillName || 'Skill') + ': ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText, roll === 20, roll === 1);
+}
+
+function rollDmEnemyFlatDie(sides, enemyName) {
+    showRollsLogPane();
+    var n = Number(sides) || 20;
+    var result = rollDice('1d' + n);
+    addRollEntry('🎲 ' + (enemyName || 'Enemy') + ' rolled d' + n + ': ' + result.breakdown, false, false);
+}
+
+function wireDmEnemyRollPanel(panel, enemyName) {
+    if (!panel) return;
+    panel.onclick = function (event) {
+        var btn = event.target.closest('button[data-dm-roll-kind]');
+        if (!btn || !panel.contains(btn)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        var kind = btn.getAttribute('data-dm-roll-kind');
+        if (kind === 'skill') {
+            rollDmEnemySkillCheck(enemyName, btn.getAttribute('data-skill-name') || 'Skill', parseInt(btn.getAttribute('data-mod') || '0', 10));
+        } else if (kind === 'check') {
+            rollDmEnemyAbilityCheck(enemyName, btn.getAttribute('data-ability') || 'str', parseInt(btn.getAttribute('data-score') || '10', 10));
+        } else if (kind === 'save') {
+            rollDmEnemySavingThrow(enemyName, btn.getAttribute('data-ability') || 'str', parseInt(btn.getAttribute('data-score') || '10', 10));
+        } else if (kind === 'die') {
+            rollDmEnemyFlatDie(parseInt(btn.getAttribute('data-sides') || '20', 10), enemyName);
+        }
+    };
+}
+
+// Load saved action bar height and apply the effective height to the bar + main content
 function applyPlayerActionBarHeight() {
     try {
         const savedH = localStorage.getItem('playerActionBarHeight');
@@ -7347,12 +7452,12 @@ function applyPlayerActionBarHeight() {
         }
     } catch (e) {}
     const bar = document.getElementById('playerActionBar');
+    const dmEnemyBar = isDM && selectedToken && selectedToken.entity_type === 'Enemy';
+    const effectiveH = getEffectiveActionBarHeight(dmEnemyBar);
     if (bar && !bar.classList.contains('hidden')) {
-        bar.style.height = playerActionBarHeight + 'px';
-        bar.style.left = '0';
-        bar.style.width = '100%';
+        bar.style.height = effectiveH + 'px';
     }
-    document.body.style.setProperty('--player-action-bar-height', playerActionBarHeight + 'px');
+    document.body.style.setProperty('--player-action-bar-height', effectiveH + 'px');
 }
 
 // Resize handles: height (top grip) and width (left edge grip)
@@ -7361,20 +7466,34 @@ function setupPlayerActionBarResize(bar) {
     if (handle) {
         handle.onmousedown = function(e) {
             e.preventDefault();
+            const dmEnemyBar = isDM && selectedToken && selectedToken.entity_type === 'Enemy';
+            if (dmEnemyBar && !dmActionBarExpanded) {
+                dmActionBarExpanded = true;
+                try { localStorage.setItem('dmActionBarExpanded', '1'); } catch (e3) {}
+                bar.classList.remove('player-action-bar--compact');
+                bar.classList.add('player-action-bar--expanded');
+            }
             const startY = e.clientY;
-            const startH = playerActionBarHeight;
+            const startH = parseInt(bar.style.height, 10) || getEffectiveActionBarHeight(dmEnemyBar);
             function onMove(e2) {
                 const dy = startY - e2.clientY;
                 let h = Math.round(startH + dy);
                 h = Math.max(PLAYER_ACTION_BAR_HEIGHT_MIN, Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, h));
-                playerActionBarHeight = h;
+                if (dmEnemyBar) {
+                    dmEnemyActionBarHeight = h;
+                } else {
+                    playerActionBarHeight = h;
+                }
                 bar.style.height = h + 'px';
                 document.body.style.setProperty('--player-action-bar-height', h + 'px');
             }
             function onUp() {
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
-                try { localStorage.setItem('playerActionBarHeight', String(playerActionBarHeight)); } catch (e2) {}
+                try {
+                    localStorage.setItem(dmEnemyBar ? 'dmEnemyActionBarHeight' : 'playerActionBarHeight', String(dmEnemyBar ? dmEnemyActionBarHeight : playerActionBarHeight));
+                } catch (e2) {}
+                if (dmEnemyBar) refreshSelectedDmEnemyActionBar();
             }
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp);
@@ -7956,6 +8075,14 @@ function updateActionBarButtonLabel() {
     });
 }
 
+function toggleDmActionBarExpanded() {
+    dmActionBarExpanded = !dmActionBarExpanded;
+    try {
+        localStorage.setItem('dmActionBarExpanded', dmActionBarExpanded ? '1' : '0');
+    } catch (e) {}
+    updatePlayerActionBarVisibility();
+}
+
 // Show/hide the bottom action bar: players (toggle), or DM when an enemy token is selected.
 function updatePlayerActionBarVisibility() {
     const bar = ensurePlayerActionBarExists();
@@ -7966,16 +8093,26 @@ function updatePlayerActionBarVisibility() {
     if (shouldShow) {
         bar.classList.remove('hidden');
         bar.classList.toggle('player-action-bar--dm-enemy', !!dmEnemyBar);
+        bar.classList.toggle('player-action-bar--compact', false);
+        bar.classList.toggle('player-action-bar--expanded', !!dmEnemyBar);
         applyPlayerActionBarHeight();
+        const effectiveH = getEffectiveActionBarHeight(dmEnemyBar);
+        const dockStyle = dmEnemyBar
+            ? 'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;max-width:none!important;height:' +
+              effectiveH +
+              'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;'
+            : 'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;height:' +
+              effectiveH +
+              'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#070b14 0%,#050814 45%,#03050c 100%)!important;border-top:3px solid rgba(74,158,255,0.55)!important;border-left:3px solid rgba(201,162,39,0.45)!important;box-shadow:0 -8px 40px rgba(0,0,0,.55)!important;';
         bar.style.cssText =
-            'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;height:' +
-            playerActionBarHeight +
-            'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#070b14 0%,#050814 45%,#03050c 100%)!important;border-top:3px solid rgba(74,158,255,0.55)!important;border-left:3px solid rgba(201,162,39,0.45)!important;box-shadow:0 -8px 40px rgba(0,0,0,.55)!important;';
+            dockStyle;
+        document.body.style.setProperty('--player-action-bar-height', effectiveH + 'px');
         document.body.classList.add('player-action-bar-visible');
         populatePlayerActionBar();
     } else {
         bar.classList.add('hidden');
         bar.classList.remove('player-action-bar--dm-enemy');
+        bar.classList.remove('player-action-bar--compact', 'player-action-bar--expanded');
         bar.style.cssText = 'display:none!important;visibility:hidden!important;';
         document.body.classList.remove('player-action-bar-visible');
     }
@@ -8459,11 +8596,52 @@ function populateDmEnemyActionBar(token) {
     try {
         portraitUrl = normalizePortraitUrl(portraitRaw) || '';
     } catch (e1) {}
+    function abilityScoreObj() {
+        return {
+            str: Number(enemy.strength) || 10,
+            dex: Number(enemy.dexterity) || 10,
+            con: Number(enemy.constitution) || 10,
+            int: Number(enemy.intelligence) || 10,
+            wis: Number(enemy.wisdom) || 10,
+            cha: Number(enemy.charisma) || 10
+        };
+    }
+    var abilityScores = abilityScoreObj();
+    var abilityLabels = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
+    var abilityHeaderHtml = '<div class="dm-enemy-header-abilities">';
+    Object.keys(abilityScores).forEach(function (ab) {
+        abilityHeaderHtml +=
+            '<button type="button" class="dm-enemy-ability-pill" onclick="rollDmEnemyAbilityCheck(' +
+            JSON.stringify(creatureName) +
+            ', ' +
+            JSON.stringify(ab) +
+            ', ' +
+            abilityScores[ab] +
+            ')" title="Roll ' +
+            abilityLabels[ab] +
+            ' check"><span>' +
+            abilityLabels[ab] +
+            '</span><strong>' +
+            abilityScores[ab] +
+            '</strong></button>';
+    });
+    abilityHeaderHtml += '</div>';
+    var headerControlsHtml =
+        '<div class="dm-enemy-hp-tools">' +
+        '<input id="dmBarDamageAmount" class="dm-enemy-hp-input" type="number" min="1" placeholder="Dmg">' +
+        '<button type="button" class="dm-enemy-hp-btn dm-enemy-hp-btn--damage" onclick="dmBarDealDamage()">Damage</button>' +
+        '<input id="dmBarHealAmount" class="dm-enemy-hp-input" type="number" min="1" placeholder="Heal">' +
+        '<button type="button" class="dm-enemy-hp-btn dm-enemy-hp-btn--heal" onclick="dmBarHealTarget()">Heal</button>' +
+        '</div>';
     var myTurn = combatState.active && combatState.currentTurn === token.id;
     var sheetBtn =
+        headerControlsHtml +
         '<button type="button" class="vtt-ab-sheet-mini" onclick="showNPCCharacterSheet(\'' +
         String(token.entity_id).replace(/'/g, "\\'") +
-        '\')">View</button>';
+        '\')">View</button>' +
+        '<button type="button" class="vtt-ab-sheet-mini" onclick="showInfoPanel()">Notes</button>' +
+        '<button type="button" class="vtt-ab-sheet-mini" onclick="showInfoPanel()">Conditions</button>' +
+        '<button type="button" class="vtt-ab-sheet-mini" onclick="showEnemyManager()">More</button>';
     var headerHtml = buildSciFiActionBarHeaderHtml({
         name: creatureName,
         subtitle: sub,
@@ -8474,7 +8652,8 @@ function populateDmEnemyActionBar(token) {
         speed: speedFt,
         showEndTurn: myTurn,
         endTurnIsDmNext: true,
-        sheetButtonHtml: sheetBtn
+        sheetButtonHtml: sheetBtn,
+        auxHtml: abilityHeaderHtml
     });
     inner.innerHTML =
         '<div class="player-bar-tab-panels">' +
@@ -8482,20 +8661,46 @@ function populateDmEnemyActionBar(token) {
         '<div id="playerBarNameHp" class="vtt-ab-header-wrap">' +
         headerHtml +
         '</div>' +
-        '<div class="vtt-ab-body">' +
+        '<div class="vtt-ab-body dm-enemy-command-body">' +
+        '<section class="dm-enemy-console-panel dm-enemy-console-panel--movement">' +
+        '<span class="dm-enemy-console-label">Movement</span>' +
+        '<div id="playerBarMovementCol" class="dm-enemy-movement-stack"></div>' +
+        '<span class="dm-enemy-console-label dm-enemy-console-label--minor">Bonus actions</span>' +
+        '<div id="playerBarBonusCol" class="vtt-ab-chip-col dm-enemy-chip-scroll dm-enemy-bonus-stack"></div>' +
+        '</section>' +
+        '<section class="dm-enemy-console-panel dm-enemy-console-panel--actions">' +
+        '<span class="dm-enemy-console-label">Actions</span>' +
         '<div class="vtt-ab-fight-row dm-enemy-fight-row" id="playerBarFightRow"></div>' +
+        '<div id="playerBarSaveDiceRow" class="dm-enemy-save-dice-row"></div>' +
+        '<div class="dm-enemy-console-tabs"><span class="is-active">Primary</span><span>Secondary</span><span>Systems</span></div>' +
+        '<span class="dm-enemy-console-label dm-enemy-console-label--minor">Quick actions</span>' +
         '<div class="vtt-ab-special-row dm-enemy-special-row" id="playerBarSpecialRow"></div>' +
-        '<div class="vtt-ab-lower3">' +
-        '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Bonus actions</span><div id="playerBarBonusCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div></div>' +
-        '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Reactions</span><div id="playerBarReactionCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div></div>' +
-        '<div class="vtt-ab-lower-col"><span class="vtt-ab-block-label">Traits / features</span><div id="playerBarInventoryCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div></div>' +
+        '</section>' +
+        '<section class="dm-enemy-console-panel dm-enemy-console-panel--legendary">' +
+        '<span class="dm-enemy-console-label">Legendary</span>' +
+        '<div id="playerBarLegendaryCol" class="dm-enemy-legendary-panel"></div>' +
+        '<span class="dm-enemy-console-label dm-enemy-console-label--minor">Reactions</span>' +
+        '<div id="playerBarReactionCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div>' +
+        '</section>' +
+        '<section class="dm-enemy-console-panel dm-enemy-console-panel--traits">' +
+        '<span class="dm-enemy-console-label">Traits &amp; features</span>' +
+        '<div id="playerBarInventoryCol" class="vtt-ab-chip-col dm-enemy-chip-scroll"></div>' +
+        '</section>' +
         '</div></div></div></div>';
 
     var fight = document.getElementById('playerBarFightRow');
-    var fh =
+    var movement = document.getElementById('playerBarMovementCol');
+    var movementHtml =
         '<button type="button" class="vtt-tile vtt-tile--move"><span class="vtt-tile-ic">\u{1F463}</span><span class="vtt-tile-t">Move</span><span class="vtt-tile-sub">' +
         speedFt +
-        ' ft</span></button>';
+        ' ft</span></button>' +
+        '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+        JSON.stringify(creatureName + ' takes the Dodge action.') +
+        ', \'info\')"><span class="vtt-tile-ic">\u{1F6E1}</span><span class="vtt-tile-t">Dodge</span><span class="vtt-tile-sub">Action</span></button>' +
+        '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
+        JSON.stringify(creatureName + ' takes the Dash action.') +
+        ', \'info\')"><span class="vtt-tile-ic">\u{1F3C3}</span><span class="vtt-tile-t">Dash</span><span class="vtt-tile-sub">Action</span></button>';
+    var fh = '';
     attackRows.forEach(function (atk) {
         var nm = atk.name || 'Attack';
         var rangeAttr = escapeHtml(attackRangeToDataAttr(atk.range));
@@ -8610,7 +8815,7 @@ function populateDmEnemyActionBar(token) {
     if (fight) {
         fight.innerHTML = fh;
         delete fight.dataset.dmEnemyFightTipsWired;
-        var mv = fight.querySelector('.vtt-tile--move');
+        var mv = movement ? movement.querySelector('.vtt-tile--move') : null;
         if (mv) {
             mv.onclick = function () {
                 addLogEntry(creatureName + ' moves (adjust on the map).', 'info');
@@ -8619,6 +8824,47 @@ function populateDmEnemyActionBar(token) {
         wireBarAttackButtons(fight, creatureName);
         wireDmEnemySaveAttackTiles(fight, creatureName);
         wireDmEnemyFightRowTooltips(fight, creatureName);
+    }
+    if (movement) {
+        movement.innerHTML = movementHtml;
+        var moveBtn = movement.querySelector('.vtt-tile--move');
+        if (moveBtn) {
+            moveBtn.onclick = function () {
+                addLogEntry(creatureName + ' moves (adjust on the map).', 'info');
+            };
+        }
+    }
+    var saveDiceRow = document.getElementById('playerBarSaveDiceRow');
+    if (saveDiceRow) {
+        var saveDiceHtml = '<div class="dm-enemy-save-group"><span class="dm-enemy-save-dice-label">Saves</span>';
+        Object.keys(abilityScores).forEach(function (ab) {
+            var mod = calcAbilityMod(abilityScores[ab]);
+            saveDiceHtml +=
+                '<button type="button" class="dm-enemy-save-dice-btn" onclick="rollDmEnemySavingThrow(' +
+                JSON.stringify(creatureName) +
+                ', ' +
+                JSON.stringify(ab) +
+                ', ' +
+                abilityScores[ab] +
+                ')">' +
+                abilityLabels[ab] +
+                ' ' +
+                formatSignedMod(mod) +
+                '</button>';
+        });
+        saveDiceHtml += '</div><div class="dm-enemy-dice-group"><span class="dm-enemy-save-dice-label">Dice</span>';
+        [4, 6, 8, 10, 12, 20, 100].forEach(function (sides) {
+            saveDiceHtml +=
+                '<button type="button" class="dm-enemy-save-dice-btn dm-enemy-flat-die-btn" onclick="rollDmEnemyFlatDie(' +
+                sides +
+                ', ' +
+                JSON.stringify(creatureName) +
+                ')">d' +
+                sides +
+                '</button>';
+        });
+        saveDiceHtml += '</div>';
+        saveDiceRow.innerHTML = saveDiceHtml;
     }
 
     var actionsData = parseCustomEnemyActions(enemy);
@@ -8674,6 +8920,67 @@ function populateDmEnemyActionBar(token) {
         enemy.statBlock
     );
     var parsedNpc = rawBlock ? parseNPCRawBlock(rawBlock) : null;
+    var rollPanel = document.getElementById('playerBarSaveDiceRow');
+    if (rollPanel) {
+        var rollPanelHtml = '<div class="dm-enemy-roll-group dm-enemy-check-group"><span class="dm-enemy-save-dice-label">Checks</span>';
+        var skillRows = parsedNpc && Array.isArray(parsedNpc.skills) ? parsedNpc.skills : [];
+        if (skillRows.length) {
+            skillRows.slice(0, 10).forEach(function (skill) {
+                var skillName = (skill && skill.name) || 'Skill';
+                var skillBonus = Number(skill && skill.bonus) || 0;
+                rollPanelHtml +=
+                    '<button type="button" class="dm-enemy-save-dice-btn dm-enemy-skill-check-btn" data-dm-roll-kind="skill" data-skill-name="' +
+                    escapeHtml(skillName) +
+                    '" data-mod="' +
+                    skillBonus +
+                    '">' +
+                    escapeHtml(skillName) +
+                    ' ' +
+                    formatSignedMod(skillBonus) +
+                    '</button>';
+            });
+        } else {
+            Object.keys(abilityScores).forEach(function (ab) {
+                var checkMod = calcAbilityMod(abilityScores[ab]);
+                rollPanelHtml +=
+                    '<button type="button" class="dm-enemy-save-dice-btn dm-enemy-skill-check-btn" data-dm-roll-kind="check" data-ability="' +
+                    escapeHtml(ab) +
+                    '" data-score="' +
+                    abilityScores[ab] +
+                    '">' +
+                    abilityLabels[ab] +
+                    ' Check ' +
+                    formatSignedMod(checkMod) +
+                    '</button>';
+            });
+        }
+        rollPanelHtml += '</div><div class="dm-enemy-roll-group dm-enemy-save-group"><span class="dm-enemy-save-dice-label">Saves</span>';
+        Object.keys(abilityScores).forEach(function (ab) {
+            var saveMod = calcAbilityMod(abilityScores[ab]);
+            rollPanelHtml +=
+                '<button type="button" class="dm-enemy-save-dice-btn" data-dm-roll-kind="save" data-ability="' +
+                escapeHtml(ab) +
+                '" data-score="' +
+                abilityScores[ab] +
+                '">' +
+                abilityLabels[ab] +
+                ' Save ' +
+                formatSignedMod(saveMod) +
+                '</button>';
+        });
+        rollPanelHtml += '</div><div class="dm-enemy-roll-group dm-enemy-dice-group"><span class="dm-enemy-save-dice-label">Dice</span>';
+        [4, 6, 8, 10, 12, 20, 100].forEach(function (sides) {
+            rollPanelHtml +=
+                '<button type="button" class="dm-enemy-save-dice-btn dm-enemy-flat-die-btn" data-dm-roll-kind="die" data-sides="' +
+                sides +
+                '">d' +
+                sides +
+                '</button>';
+        });
+        rollPanelHtml += '</div>';
+        rollPanel.innerHTML = rollPanelHtml;
+        wireDmEnemyRollPanel(rollPanel, creatureName);
+    }
 
     var bonusChunks = [];
     var reactionChunks = [];
@@ -8790,15 +9097,7 @@ function populateDmEnemyActionBar(token) {
     var narrativeStrip = '';
     var npcActionsFullText = (window.__dmEnemyTooltipActionsFull || '').trim();
     function appendDmEnemyFullActionsTextButton(strip) {
-        if (!strip) return strip;
-        var full = (window.__dmEnemyTooltipActionsFull || '').trim();
-        if (full.length < 160) return strip;
-        return (
-            strip.replace(
-                /<\/div>\s*$/,
-                '<button type="button" class="vtt-chip vtt-chip--action-narr vtt-chip--fulltext" onmouseover="showNamedBlockTooltip(\\\'All actions (full)\\\', \\\'Stat block\\\', window.__dmEnemyTooltipActionsFull, event)" onmouseout="hideSpellTooltip()">Full text</button></div>'
-            )
-        );
+        return strip || '';
     }
     if (npc && Array.isArray(npc.sw5e_action_items) && npc.sw5e_action_items.length) {
         narrativeStrip =
@@ -8901,11 +9200,31 @@ function populateDmEnemyActionBar(token) {
         var remaining = legendaryUsage.max - legendaryUsage.used;
         legendaryStrip =
             '<div class="dm-enemy-narrative-strip dm-enemy-narrative-strip--legendary"><span class="dm-enemy-strip-label">\u2605 Legendary</span>' +
-            '<span class="dm-enemy-legendary-remaining" title="Legendary actions remaining">' +
+            '<div class="dm-enemy-legendary-toolbar">' +
+            '<button type="button" id="dmbar-legendary-remaining-' +
+            escapeHtml(String(enemy.id)) +
+            '" class="dm-enemy-legendary-remaining" title="Use 1 legendary action" onclick="useLegendaryAction(' +
+            JSON.stringify(String(enemy.id)) +
+            ', ' +
+            JSON.stringify(legendaryKey) +
+            ', 1, \'Legendary Action\', ' +
+            JSON.stringify(String(creatureName)) +
+            ')">' +
             remaining +
             '/' +
             legendaryUsage.max +
-            '</span>';
+            '</button>' +
+            '<button type="button" class="dm-enemy-legendary-tool" onclick="resetLegendaryActions(' +
+            JSON.stringify(String(enemy.id)) +
+            ', ' +
+            JSON.stringify(legendaryKey) +
+            ')">Reset</button>' +
+            '<button type="button" class="dm-enemy-legendary-tool" onclick="showDmEnemyLegendaryDetails(' +
+            JSON.stringify(String(creatureName)) +
+            ', ' +
+            JSON.stringify(String(legendaryText)) +
+            ')">Details</button>' +
+            '</div>';
         if (legendaryData.actions && legendaryData.actions.length) {
             legendaryData.actions.slice(0, 16).forEach(function (act) {
                 var nm = (act && act.name) || 'Legendary Action';
@@ -8952,9 +9271,11 @@ function populateDmEnemyActionBar(token) {
             });
         } else {
             legendaryStrip +=
-                '<button type="button" class="vtt-chip vtt-chip--legendary-act" onmouseover="showNamedBlockTooltip(\\\'Legendary Actions\\\', \\\'Legendary\\\', \\\'' +
-                escapeJs(String(legendaryText)) +
-                '\\\', event)" onmouseout="hideSpellTooltip()">Details</button>';
+                '<button type="button" class="vtt-chip vtt-chip--legendary-act" onclick="showDmEnemyLegendaryDetails(' +
+                JSON.stringify(String(creatureName)) +
+                ', ' +
+                JSON.stringify(String(legendaryText)) +
+                ')">Details</button>';
         }
         legendaryStrip += '</div>';
     }
@@ -8962,16 +9283,12 @@ function populateDmEnemyActionBar(token) {
     var spec = document.getElementById('playerBarSpecialRow');
     if (spec) {
         spec.innerHTML =
-            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
-            JSON.stringify(creatureName + ' takes the Dodge action.') +
-            ', \'info\')"><span class="vtt-tile-ic">\u{1F6E1}</span><span class="vtt-tile-t">Dodge</span><span class="vtt-tile-sub">Action</span></button>' +
-            '<button type="button" class="vtt-tile vtt-tile--power" onclick="addLogEntry(' +
-            JSON.stringify(creatureName + ' takes the Dash action.') +
-            ', \'info\')"><span class="vtt-tile-ic">\u{1F3C3}</span><span class="vtt-tile-t">Dash</span><span class="vtt-tile-sub">Action</span></button>' +
             maHtml +
-            '<button type="button" class="vtt-tile vtt-tile--utility" onclick="showEnemyManager()"><span class="vtt-tile-ic">\u22EF</span><span class="vtt-tile-t">Enemy DB</span><span class="vtt-tile-sub">Edit</span></button>' +
-            narrativeStrip +
-            legendaryStrip;
+            narrativeStrip;
+    }
+    var legendaryEl = document.getElementById('playerBarLegendaryCol');
+    if (legendaryEl) {
+        legendaryEl.innerHTML = legendaryStrip || '<span class="vtt-ab-empty-hint">No legendary actions</span>';
     }
 
     function renderChunkColumn(chunks, maxN, emptyDash, blockKind) {
@@ -10577,6 +10894,7 @@ function healTarget() {
     // Update UI immediately
     updateInitiativeList();
     updateTokenInfo();
+    refreshSelectedDmEnemyActionBar();
     renderCanvas();
     
     document.getElementById('healAmount').value = '';
@@ -13874,19 +14192,29 @@ function useLegendaryAction(enemyId, storageKey, cost, actionName, enemyName) {
     const remainingEl = document.getElementById(`legendary-remaining-${enemyId}`);
     if (remainingEl) {
         const newRemaining = legendaryUsage.max - legendaryUsage.used;
-        remainingEl.textContent = newRemaining;
+        remainingEl.textContent = `${newRemaining}/${legendaryUsage.max}`;
         remainingEl.style.color = newRemaining > 0 ? '#44ff44' : '#ff4444';
+    }
+    const barRemainingEl = document.getElementById(`dmbar-legendary-remaining-${enemyId}`);
+    if (barRemainingEl) {
+        const newRemaining = legendaryUsage.max - legendaryUsage.used;
+        barRemainingEl.textContent = `${newRemaining}/${legendaryUsage.max}`;
+        barRemainingEl.style.color = newRemaining > 0 ? '#44ff44' : '#ff4444';
     }
     
     // Log the action
     addLogEntry(`${enemyName} used legendary action: ${actionName} (Cost: ${cost})`, 'info');
     
-    // Refresh the sheet if it's open
+    // Refresh visible UI
     const enemy = enemies.find(e => e.id === enemyId);
     if (enemy && selectedToken && selectedToken.entity_id === enemyId) {
-        setTimeout(() => {
-            showNPCCharacterSheet(enemyId);
-        }, 100);
+        if (typeof refreshSelectedDmEnemyActionBar === 'function') refreshSelectedDmEnemyActionBar();
+        const sheetModal = document.getElementById('characterSheetModal');
+        if (sheetModal && sheetModal.classList.contains('active')) {
+            setTimeout(() => {
+                showNPCCharacterSheet(enemyId);
+            }, 100);
+        }
     }
 }
 
@@ -13899,19 +14227,51 @@ function resetLegendaryActions(enemyId, storageKey) {
     // Update display
     const remainingEl = document.getElementById(`legendary-remaining-${enemyId}`);
     if (remainingEl) {
-        remainingEl.textContent = legendaryUsage.max;
+        remainingEl.textContent = `${legendaryUsage.max}/${legendaryUsage.max}`;
         remainingEl.style.color = '#44ff44';
     }
+    const barRemainingEl = document.getElementById(`dmbar-legendary-remaining-${enemyId}`);
+    if (barRemainingEl) {
+        barRemainingEl.textContent = `${legendaryUsage.max}/${legendaryUsage.max}`;
+        barRemainingEl.style.color = '#44ff44';
+    }
     
-    // Refresh the sheet if it's open
+    // Refresh visible UI
     const enemy = enemies.find(e => e.id === enemyId);
     if (enemy && selectedToken && selectedToken.entity_id === enemyId) {
-        setTimeout(() => {
-            showNPCCharacterSheet(enemyId);
-        }, 100);
+        if (typeof refreshSelectedDmEnemyActionBar === 'function') refreshSelectedDmEnemyActionBar();
+        const sheetModal = document.getElementById('characterSheetModal');
+        if (sheetModal && sheetModal.classList.contains('active')) {
+            setTimeout(() => {
+                showNPCCharacterSheet(enemyId);
+            }, 100);
+        }
     }
     
     addLogEntry('Legendary actions reset!', 'info');
+}
+
+function showDmEnemyLegendaryDetails(enemyName, legendaryText) {
+    var existing = document.getElementById('dmEnemyLegendaryDetailsModal');
+    if (existing) existing.remove();
+    var modal = document.createElement('div');
+    modal.id = 'dmEnemyLegendaryDetailsModal';
+    modal.className = 'dm-legendary-details-modal';
+    modal.innerHTML =
+        '<div class="dm-legendary-details-card" role="dialog" aria-modal="true" aria-label="Legendary action details">' +
+        "<button type=\"button\" class=\"dm-legendary-details-close\" onclick=\"var m=document.getElementById('dmEnemyLegendaryDetailsModal'); if(m) m.remove();\">x</button>" +
+        '<div class="dm-legendary-details-kicker">Legendary actions</div>' +
+        '<div class="dm-legendary-details-title">' +
+        escapeHtml(enemyName || 'Enemy') +
+        '</div>' +
+        '<div class="dm-legendary-details-body">' +
+        escapeHtml(legendaryText || 'No legendary action details available.').replace(/\n/g, '<br>') +
+        '</div>' +
+        '</div>';
+    modal.addEventListener('click', function (event) {
+        if (event.target === modal) modal.remove();
+    });
+    document.body.appendChild(modal);
 }
 
 function escapeHtml(text) {
@@ -15683,6 +16043,65 @@ function updateCampaignTitle() {
     if (el) el.textContent = label;
     const legacy = document.getElementById('currentMapName');
     if (legacy) legacy.textContent = label;
+}
+
+function openDmToolMenu(category) {
+    const overlay = document.getElementById('dmToolMenuOverlay');
+    const title = document.getElementById('dmToolMenuTitle');
+    const body = document.getElementById('dmToolMenuBody');
+    if (!overlay || !title || !body) return;
+    const groups = {
+        maps: {
+            title: 'Maps',
+            items: [
+                { label: '📍 Upload Map', action: 'showMapUpload()' },
+                { label: '💾 Save Map State', action: 'saveCurrentMapState()' },
+                { label: '💾 Save/Load Game', action: 'showSaveLoadModal()' },
+                { label: '⚙️ Map Settings', action: 'showMapSettings()' }
+            ]
+        },
+        tokens: {
+            title: 'Tokens',
+            items: [
+                { label: '👹 Enemy Database', action: 'showEnemyManager()' },
+                { label: '👤 Characters', action: 'showCharacterManager()' },
+                { label: '🎭 Place Character', action: 'showPlaceCharacter()' },
+                { label: '📦 Place Object', action: 'showPlaceObjectModal()' },
+                { label: '🗑️ Remove Token', action: 'removeSelectedToken()' }
+            ]
+        },
+        tools: {
+            title: 'Tools',
+            items: [
+                { label: '🔊 Sounds', action: 'showSettings()' },
+                { label: '📏 Ruler Tools', action: 'toggleRulerTool()' },
+                { label: '✨ Meshy 3D from Portrait', action: 'showMeshyArenaModal()' },
+                { label: '🎛️ Sound Board', action: 'showSoundBoard()' },
+                { label: (dmActionBarEnabled ? '📊 Action Bar (On)' : '📊 Action Bar (Off)'), action: 'togglePlayerActionBar()' },
+                { label: '✨ Custom Spells', action: 'showCustomSpellsManager()' },
+                { label: 'ℹ️ Info', action: 'showInfoPanel()' }
+            ]
+        }
+    };
+    const group = groups[category] || groups.tools;
+    title.textContent = group.title;
+    body.innerHTML = group.items.map(function (item) {
+        return '<button type="button" class="dm-tool-menu-option" onclick="' +
+            item.action +
+            '; closeDmToolMenu();">' +
+            escapeHtml(item.label) +
+            '</button>';
+    }).join('');
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+}
+
+function closeDmToolMenu(event) {
+    if (event && event.target && event.target.id !== 'dmToolMenuOverlay') return;
+    const overlay = document.getElementById('dmToolMenuOverlay');
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
 }
 
 function initLogTabs() {

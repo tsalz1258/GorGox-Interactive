@@ -85,6 +85,118 @@ body {
     display: none !important;
 }
 
+.dm-tool-categories {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.dm-tool-category-btn {
+    width: 100%;
+    min-height: 38px;
+    border: 1px solid rgba(74, 158, 255, 0.35);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(18, 28, 46, 0.96), rgba(7, 12, 22, 0.98));
+    color: #edf4ff;
+    cursor: pointer;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+}
+
+.dm-tool-category-btn--maps {
+    border-color: rgba(74, 158, 255, 0.5);
+}
+
+.dm-tool-category-btn--tokens {
+    border-color: rgba(255, 170, 68, 0.48);
+}
+
+.dm-tool-category-btn--tools {
+    border-color: rgba(170, 136, 255, 0.48);
+}
+
+.dm-tool-menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 220000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 22px;
+    background: rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(4px);
+}
+
+.dm-tool-menu-card {
+    width: min(460px, 92vw);
+    max-height: min(680px, 86vh);
+    overflow: auto;
+    border: 1px solid rgba(74, 158, 255, 0.36);
+    border-radius: 14px;
+    background:
+        radial-gradient(520px 170px at 16% 0%, rgba(74, 158, 255, 0.14), transparent 62%),
+        linear-gradient(180deg, rgba(10, 15, 28, 0.98), rgba(4, 7, 14, 0.99));
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62), 0 0 28px rgba(74, 158, 255, 0.12);
+    padding: 16px;
+}
+
+.dm-tool-menu-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(74, 158, 255, 0.18);
+}
+
+.dm-tool-menu-kicker {
+    color: rgba(170, 195, 230, 0.66);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+}
+
+.dm-tool-menu-head h3 {
+    margin: 3px 0 0;
+    color: #edf4ff;
+}
+
+.dm-tool-menu-close {
+    width: 30px;
+    height: 30px;
+    border: 1px solid rgba(74, 158, 255, 0.35);
+    border-radius: 7px;
+    background: rgba(4, 7, 14, 0.95);
+    color: #edf4ff;
+    cursor: pointer;
+    font-weight: 900;
+}
+
+.dm-tool-menu-body {
+    display: grid;
+    gap: 8px;
+}
+
+.dm-tool-menu-option {
+    min-height: 42px;
+    padding: 10px 12px;
+    border: 1px solid rgba(74, 158, 255, 0.28);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(18, 28, 46, 0.95), rgba(7, 12, 22, 0.98));
+    color: #edf4ff;
+    cursor: pointer;
+    font-weight: 800;
+    text-align: left;
+}
+
+.dm-tool-menu-option:hover {
+    border-color: rgba(74, 158, 255, 0.62);
+    box-shadow: 0 0 14px rgba(74, 158, 255, 0.15);
+    transform: translateY(-1px);
+}
+
 /* Spell / tech / force / item tooltips — must paint above #playerActionBar (JS sets bar to z-index 99999) */
 #spellTooltip {
     z-index: 200000 !important;
@@ -351,6 +463,259 @@ body {
     display: none !important;
 }
 
+/* Compact DM enemy dock: keeps primary attacks visible without covering the map. */
+.player-action-bar--dm-enemy {
+    border-radius: 16px 16px 0 0;
+    border: 1px solid rgba(74, 158, 255, 0.42);
+    border-top-width: 2px;
+    background: linear-gradient(180deg, rgba(7, 12, 24, 0.9) 0%, rgba(4, 7, 16, 0.94) 100%);
+    box-shadow:
+        0 -10px 34px rgba(0, 0, 0, 0.48),
+        0 0 0 1px rgba(201, 162, 39, 0.12) inset;
+    backdrop-filter: blur(10px);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact {
+    overflow: hidden;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded {
+    border-top-color: rgba(74, 158, 255, 0.58);
+}
+
+.player-action-bar--dm-enemy .player-action-bar-resize-height {
+    min-height: 10px;
+    height: 10px;
+    border-bottom: 1px solid rgba(74, 158, 255, 0.32);
+    background: linear-gradient(180deg, rgba(74, 158, 255, 0.25), rgba(74, 158, 255, 0.08));
+}
+
+.player-action-bar--dm-enemy .player-action-bar-resize-grip {
+    font-size: 12px;
+    letter-spacing: 3px;
+    color: rgba(190, 220, 255, 0.85);
+    text-shadow: 0 0 8px rgba(74, 158, 255, 0.5);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .player-bar-tab-panel.vtt-combat-tab-shell {
+    gap: 5px !important;
+    padding: 5px 8px 7px !important;
+    overflow: hidden !important;
+    background: transparent;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-header-inner {
+    min-height: 34px;
+    padding: 4px 8px;
+    gap: 8px;
+    flex-wrap: nowrap;
+    border-radius: 10px;
+    background: rgba(10, 18, 34, 0.78);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-portrait {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-name {
+    font-size: 12px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-sub {
+    font-size: 9px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-header-right {
+    gap: 6px;
+    flex-wrap: nowrap;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-vitals {
+    gap: 5px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat {
+    min-width: 46px;
+    padding: 3px 6px;
+    border-radius: 8px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat-ic,
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat-lbl,
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-economy {
+    display: none;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat-val {
+    font-size: 12px;
+    line-height: 1.1;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-endturn-wrap {
+    gap: 4px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-bar-actions {
+    flex-wrap: nowrap;
+    gap: 4px;
+}
+
+.player-action-bar--dm-enemy .vtt-ab-dock-toggle {
+    padding: 5px 9px;
+    font-size: 10px;
+    font-weight: 900;
+    border-radius: 8px;
+    border: 1px solid rgba(201, 162, 39, 0.55);
+    background: rgba(55, 42, 18, 0.88);
+    color: #ffecc8;
+    cursor: pointer;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-sheet-mini,
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-dock-toggle,
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-end-turn {
+    padding: 5px 8px;
+    font-size: 10px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-body {
+    gap: 5px;
+    overflow: hidden;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-special-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 5px;
+    min-height: 30px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 1px;
+    scrollbar-width: thin;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-lower3 {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    min-height: 42px;
+    overflow: hidden;
+    margin-top: 0;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-fight-row {
+    min-height: 34px;
+    gap: 5px;
+    padding-bottom: 1px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile {
+    flex: 0 0 auto;
+    min-width: 112px;
+    max-width: 160px;
+    min-height: 34px;
+    padding: 5px 7px;
+    border-radius: 8px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile--move {
+    min-width: 80px;
+    max-width: 90px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile-t {
+    font-size: 10px;
+    line-height: 1.1;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile-sub {
+    font-size: 9px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile-thumb {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-narrative-strip {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 4px;
+    max-width: min(520px, 64vw);
+    max-height: 32px;
+    min-height: 30px;
+    margin-top: 0;
+    padding: 4px 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-radius: 8px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-special-row .dm-enemy-narrative-strip {
+    flex: 0 0 auto;
+    order: initial;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-strip-label {
+    font-size: 8px;
+    margin-right: 2px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-legendary-remaining {
+    font-size: 9px;
+    padding: 1px 5px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-chip {
+    padding: 4px 7px;
+    font-size: 10px;
+    border-radius: 7px;
+    white-space: nowrap;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-chip-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-lower-col {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-block-label {
+    font-size: 8px;
+    margin-bottom: 3px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-chip-col {
+    flex-wrap: nowrap;
+    min-height: 26px;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-chip-scroll {
+    max-height: 34px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .dm-enemy-special-row,
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-lower3 {
+    display: flex;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-lower3 {
+    display: grid;
+}
+
 /* DM enemy combat bar: many attacks scroll horizontally; trait columns scroll vertically */
 .player-action-bar--dm-enemy .dm-enemy-fight-row {
     flex-wrap: nowrap;
@@ -484,6 +849,880 @@ body {
 .vtt-chip-label {
     min-width: 0;
     text-align: left;
+}
+
+/* DM enemy command card refresh: compact, dense, and grouped without hiding data. */
+.player-action-bar--dm-enemy {
+    border-radius: 18px;
+    border-color: rgba(74, 158, 255, 0.34);
+    background:
+        radial-gradient(900px 180px at 18% 0%, rgba(74, 158, 255, 0.18), transparent 62%),
+        radial-gradient(720px 180px at 82% 12%, rgba(201, 162, 39, 0.13), transparent 58%),
+        linear-gradient(180deg, rgba(8, 13, 25, 0.94) 0%, rgba(5, 8, 18, 0.96) 100%);
+    box-shadow:
+        0 -18px 46px rgba(0, 0, 0, 0.55),
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 0 32px rgba(74, 158, 255, 0.1);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .player-action-bar-resize-height {
+    min-height: 7px;
+    height: 7px;
+    border-bottom-color: rgba(74, 158, 255, 0.18);
+    background: linear-gradient(90deg, transparent, rgba(74, 158, 255, 0.3), transparent);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .player-action-bar-resize-grip {
+    transform: translateY(-4px);
+    opacity: 0.75;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .player-bar-tab-panel.vtt-combat-tab-shell {
+    gap: 7px !important;
+    padding: 7px 9px 9px !important;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-header-inner {
+    min-height: 44px;
+    padding: 5px 8px;
+    gap: 9px;
+    border-radius: 13px;
+    background:
+        linear-gradient(135deg, rgba(15, 26, 48, 0.9), rgba(8, 12, 24, 0.82)),
+        linear-gradient(90deg, rgba(74, 158, 255, 0.08), transparent);
+    border-color: rgba(74, 158, 255, 0.26);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-portrait {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-name {
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-sub {
+    font-size: 10px;
+    color: rgba(198, 220, 255, 0.72);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat {
+    min-width: 54px;
+    padding: 4px 8px;
+    border-radius: 10px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat-ic {
+    display: none;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat-lbl {
+    display: block;
+    font-size: 7px;
+    margin-top: 1px;
+    color: rgba(200, 220, 255, 0.58);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-stat-val {
+    font-size: 13px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-body {
+    display: grid;
+    grid-template-columns: minmax(420px, 1.12fr) minmax(360px, 0.88fr);
+    grid-template-rows: 58px minmax(68px, 1fr);
+    grid-template-areas:
+        "primary support"
+        "secondary secondary";
+    gap: 7px;
+    min-height: 0;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-fight-row,
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-special-row,
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-secondary-grid {
+    position: relative;
+    min-height: 0;
+    padding: 18px 8px 7px;
+    border: 1px solid rgba(74, 158, 255, 0.18);
+    border-radius: 12px;
+    background: rgba(5, 10, 22, 0.58);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-fight-row::before,
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-special-row::before,
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-secondary-grid::before {
+    position: absolute;
+    top: 5px;
+    left: 9px;
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: rgba(180, 205, 240, 0.52);
+    pointer-events: none;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-fight-row {
+    grid-area: primary;
+    align-items: stretch;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-fight-row::before {
+    content: "Primary actions";
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-special-row {
+    grid-area: support;
+    align-items: stretch;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-special-row::before {
+    content: "Tactics / actions";
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-secondary-grid {
+    grid-area: secondary;
+    padding-top: 19px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-secondary-grid::before {
+    content: "Bonus actions, reactions, traits";
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile {
+    min-width: 108px;
+    max-width: 150px;
+    min-height: 34px;
+    padding: 5px 7px;
+    border-radius: 9px;
+    box-shadow: 0 8px 14px rgba(0, 0, 0, 0.2);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile--move {
+    min-width: 76px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-tile-thumb {
+    width: 25px;
+    height: 25px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-special-row .vtt-tile {
+    min-width: 82px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-narrative-strip {
+    flex: 1 1 220px;
+    max-width: none;
+    min-width: 180px;
+    min-height: 30px;
+    max-height: 34px;
+    padding: 4px 6px;
+    background: rgba(10, 18, 34, 0.66);
+    border-color: rgba(74, 158, 255, 0.18);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .dm-enemy-narrative-strip--legendary {
+    border-color: rgba(170, 136, 255, 0.24);
+    background: rgba(30, 18, 46, 0.52);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-lower-col {
+    padding: 0 2px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-block-label {
+    display: block;
+    font-size: 8px;
+    color: rgba(180, 205, 240, 0.56);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-chip-col {
+    min-height: 31px;
+    padding-bottom: 1px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-chip {
+    min-height: 25px;
+    padding: 4px 8px;
+    font-size: 10px;
+    box-shadow: 0 7px 13px rgba(0, 0, 0, 0.18);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--compact .vtt-chip-thumb {
+    width: 18px;
+    height: 18px;
+}
+
+@media (max-width: 1040px) {
+    .player-action-bar--dm-enemy.player-action-bar--compact .vtt-ab-body {
+        grid-template-columns: 1fr;
+        grid-template-rows: 52px 52px minmax(62px, 1fr);
+        grid-template-areas:
+            "primary"
+            "support"
+            "secondary";
+    }
+}
+
+/* Full-width DM enemy console based on the command-panel mockup. */
+.player-action-bar--dm-enemy.player-action-bar--expanded {
+    border-radius: 18px 18px 0 0;
+    border: 2px solid rgba(110, 22, 34, 0.92);
+    border-bottom: 0;
+    background:
+        linear-gradient(90deg, rgba(180, 18, 42, 0.16), transparent 18%, transparent 82%, rgba(180, 18, 42, 0.14)),
+        radial-gradient(900px 200px at 50% -20%, rgba(80, 160, 255, 0.15), transparent 62%),
+        linear-gradient(180deg, rgba(7, 10, 17, 0.98), rgba(3, 5, 10, 0.99));
+    box-shadow:
+        0 -18px 44px rgba(0, 0, 0, 0.62),
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 0 26px rgba(190, 20, 45, 0.2);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .player-action-bar-resize-height {
+    min-height: 8px;
+    height: 8px;
+    border-bottom: 1px solid rgba(190, 20, 45, 0.58);
+    background:
+        linear-gradient(90deg, transparent, rgba(190, 20, 45, 0.7) 10%, transparent 26%, transparent 74%, rgba(190, 20, 45, 0.7) 90%, transparent),
+        #03060c;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .player-bar-tab-panel.vtt-combat-tab-shell {
+    gap: 8px !important;
+    padding: 8px 12px 12px !important;
+    overflow: hidden !important;
+    background: transparent;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-header-inner {
+    min-height: 58px;
+    padding: 7px 12px;
+    gap: 12px;
+    flex-wrap: nowrap;
+    border-radius: 14px 14px 6px 6px;
+    border: 1px solid rgba(76, 110, 145, 0.38);
+    background:
+        linear-gradient(120deg, rgba(12, 18, 30, 0.96) 0%, rgba(12, 18, 30, 0.96) 23%, rgba(22, 28, 44, 0.8) 23.4%, rgba(6, 10, 18, 0.94) 100%),
+        linear-gradient(90deg, rgba(190, 20, 45, 0.22), transparent 34%);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-portrait {
+    width: 48px;
+    height: 48px;
+    border-radius: 11px;
+    border-color: rgba(220, 230, 245, 0.46);
+    box-shadow: 0 0 18px rgba(120, 180, 255, 0.2);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-name {
+    font-size: 16px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-sub {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(190, 210, 235, 0.68);
+}
+
+.player-action-bar--dm-enemy .dm-enemy-header-abilities {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 5px;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-ability-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 22px;
+    padding: 3px 7px;
+    border: 1px solid rgba(80, 110, 145, 0.5);
+    border-radius: 5px;
+    background: linear-gradient(180deg, rgba(14, 22, 34, 0.92), rgba(5, 8, 14, 0.96));
+    color: rgba(226, 236, 250, 0.9);
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 900;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-ability-pill span {
+    color: rgba(170, 190, 215, 0.68);
+    letter-spacing: 0.08em;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-ability-pill:hover {
+    border-color: rgba(90, 160, 255, 0.68);
+    box-shadow: 0 0 12px rgba(90, 160, 255, 0.14);
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-stat {
+    min-width: 72px;
+    padding: 6px 10px;
+    border-radius: 7px;
+    border-color: rgba(80, 110, 145, 0.45);
+    background: linear-gradient(180deg, rgba(15, 22, 34, 0.94), rgba(5, 8, 14, 0.96));
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-stat--hp {
+    border-color: rgba(220, 28, 58, 0.65);
+    background: linear-gradient(180deg, rgba(48, 12, 22, 0.96), rgba(12, 7, 12, 0.98));
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-stat-val {
+    font-size: 15px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-stat-lbl {
+    font-size: 8px;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-economy {
+    display: none;
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-bar-actions {
+    gap: 6px;
+    align-items: center;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-hp-tools {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-right: 4px;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-hp-input {
+    width: 54px;
+    min-height: 27px;
+    padding: 4px 6px;
+    border: 1px solid rgba(80, 110, 145, 0.45);
+    border-radius: 6px;
+    background: rgba(4, 7, 13, 0.96);
+    color: #edf3ff;
+    font-size: 11px;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-hp-btn {
+    min-height: 27px;
+    padding: 5px 8px;
+    border: 1px solid rgba(80, 110, 145, 0.45);
+    border-radius: 6px;
+    color: rgba(240, 246, 255, 0.92);
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-hp-btn--damage {
+    border-color: rgba(220, 28, 58, 0.56);
+    background: linear-gradient(180deg, rgba(60, 14, 24, 0.94), rgba(12, 7, 12, 0.98));
+}
+
+.player-action-bar--dm-enemy .dm-enemy-hp-btn--heal {
+    border-color: rgba(70, 190, 115, 0.48);
+    background: linear-gradient(180deg, rgba(16, 54, 32, 0.94), rgba(6, 14, 10, 0.98));
+}
+
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-sheet-mini,
+.player-action-bar--dm-enemy.player-action-bar--expanded .vtt-ab-end-turn {
+    min-height: 27px;
+    padding: 6px 10px;
+    border-radius: 7px;
+    border-color: rgba(80, 110, 145, 0.45);
+    background: linear-gradient(180deg, rgba(16, 23, 34, 0.94), rgba(5, 8, 14, 0.96));
+    color: rgba(225, 235, 248, 0.88);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-command-body {
+    display: grid;
+    grid-template-columns: 170px minmax(640px, 1.2fr) 150px minmax(220px, 270px);
+    gap: 8px;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+.dm-enemy-console-panel {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    padding: 24px 10px 10px;
+    border: 1px solid rgba(165, 24, 42, 0.56);
+    border-radius: 10px;
+    background:
+        linear-gradient(180deg, rgba(8, 12, 20, 0.9), rgba(3, 5, 10, 0.96)),
+        repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0, rgba(255, 255, 255, 0.025) 1px, transparent 1px, transparent 22px);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+        inset 0 -2px 0 rgba(190, 20, 45, 0.24);
+    overflow: hidden;
+}
+
+.dm-enemy-console-panel::after {
+    content: "";
+    position: absolute;
+    right: 8px;
+    bottom: 0;
+    left: 8px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(220, 22, 50, 0.9), transparent);
+    pointer-events: none;
+}
+
+.dm-enemy-console-label {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: rgba(255, 54, 78, 0.78);
+}
+
+.dm-enemy-console-label--minor {
+    position: static;
+    display: block;
+    margin: 7px 0 5px;
+}
+
+.dm-enemy-console-panel--movement {
+    display: grid;
+    grid-template-rows: 58px 44px auto;
+    gap: 7px;
+}
+
+.dm-enemy-movement-stack {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    min-height: 0;
+}
+
+.dm-enemy-movement-stack .vtt-tile--move {
+    grid-column: 1 / -1;
+    min-height: 48px;
+}
+
+.dm-enemy-movement-stack .vtt-tile {
+    min-width: 0;
+    max-width: none;
+    min-height: 38px;
+    padding: 6px 7px;
+}
+
+.dm-enemy-movement-stack .vtt-tile-ic {
+    font-size: 14px;
+}
+
+.dm-enemy-bonus-stack {
+    align-content: flex-start;
+    max-height: 100%;
+    overflow: auto;
+}
+
+.dm-enemy-console-panel--actions {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.8fr) minmax(390px, 1.2fr);
+    grid-template-rows: minmax(66px, 1fr) 27px 16px minmax(58px, 0.9fr);
+    grid-template-areas:
+        "actions rolls"
+        "tabs rolls"
+        "quickLabel rolls"
+        "quick rolls";
+    gap: 7px;
+}
+
+.dm-enemy-save-dice-row {
+    grid-area: rolls;
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: minmax(118px, 1fr) minmax(118px, 1fr) minmax(92px, 0.85fr);
+    gap: 7px;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0 4px 2px 0;
+}
+
+.dm-enemy-console-panel--actions .dm-enemy-fight-row {
+    grid-area: actions;
+}
+
+.dm-enemy-console-panel--actions .dm-enemy-console-tabs {
+    grid-area: tabs;
+}
+
+.dm-enemy-console-panel--actions .dm-enemy-console-label--minor {
+    grid-area: quickLabel;
+}
+
+.dm-enemy-console-panel--actions .dm-enemy-special-row {
+    grid-area: quick;
+}
+
+.dm-enemy-roll-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 6px 6px;
+    border: 1px solid rgba(70, 95, 120, 0.34);
+    border-radius: 7px;
+    background: rgba(5, 9, 16, 0.55);
+    scrollbar-width: thin;
+}
+
+.dm-enemy-save-dice-label {
+    flex: 1 0 100%;
+    color: rgba(255, 54, 78, 0.7);
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.dm-enemy-save-dice-btn {
+    flex: 1 1 86px;
+    min-width: 78px;
+    min-height: 34px;
+    padding: 6px 9px;
+    border: 1px solid rgba(70, 95, 120, 0.5);
+    border-radius: 6px;
+    background: linear-gradient(180deg, rgba(16, 24, 36, 0.94), rgba(5, 8, 14, 0.98));
+    color: rgba(225, 235, 248, 0.9);
+    cursor: pointer;
+    pointer-events: auto;
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.dm-enemy-save-dice-btn:hover {
+    border-color: rgba(90, 160, 255, 0.65);
+}
+
+.dm-enemy-skill-check-btn {
+    border-color: rgba(90, 160, 255, 0.45);
+}
+
+.dm-enemy-flat-die-btn {
+    flex-basis: 48px;
+    min-width: 44px;
+    border-color: rgba(201, 162, 39, 0.4);
+}
+
+.player-action-bar--dm-enemy .dm-enemy-fight-row,
+.player-action-bar--dm-enemy .dm-enemy-special-row,
+.player-action-bar--dm-enemy .dm-enemy-chip-scroll,
+.dm-enemy-legendary-panel {
+    overflow: auto;
+    scrollbar-width: thin;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-fight-row {
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 8px;
+    padding: 2px 2px 5px;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-special-row {
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 7px;
+    padding: 0 2px 4px;
+}
+
+.dm-enemy-console-tabs {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.dm-enemy-console-tabs span {
+    min-width: 78px;
+    padding: 7px 10px;
+    border: 1px solid rgba(54, 78, 105, 0.5);
+    border-radius: 4px 4px 0 0;
+    background: rgba(5, 9, 16, 0.82);
+    color: rgba(170, 190, 215, 0.62);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+.dm-enemy-console-tabs .is-active {
+    color: rgba(255, 70, 90, 0.9);
+    border-color: rgba(190, 20, 45, 0.68);
+    box-shadow: inset 0 -2px 0 rgba(190, 20, 45, 0.9);
+}
+
+.player-action-bar--dm-enemy .vtt-tile {
+    min-width: 116px;
+    max-width: 150px;
+    min-height: 55px;
+    padding: 8px 9px;
+    border-radius: 5px;
+    border-color: rgba(70, 95, 120, 0.55);
+    background: linear-gradient(180deg, rgba(20, 28, 40, 0.96), rgba(7, 10, 16, 0.98));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 7px 16px rgba(0, 0, 0, 0.28);
+}
+
+.player-action-bar--dm-enemy .vtt-tile--attack {
+    border-color: rgba(180, 56, 70, 0.62);
+}
+
+.player-action-bar--dm-enemy .vtt-tile--save,
+.player-action-bar--dm-enemy .vtt-tile--multi {
+    border-color: rgba(215, 35, 58, 0.68);
+}
+
+.player-action-bar--dm-enemy .vtt-tile-thumb {
+    width: 34px;
+    height: 34px;
+    border-radius: 5px;
+}
+
+.player-action-bar--dm-enemy .vtt-tile-t {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.player-action-bar--dm-enemy .vtt-tile-sub {
+    font-size: 8px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-narrative-strip {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    order: initial;
+    align-items: stretch;
+    min-width: 220px;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    gap: 7px;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-special-row .dm-enemy-narrative-strip {
+    flex: 1 1 auto;
+    order: initial;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-narrative-strip .dm-enemy-strip-label {
+    display: none;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-legendary-panel .dm-enemy-narrative-strip {
+    flex-direction: column;
+    min-width: 0;
+    gap: 6px;
+}
+
+.dm-enemy-legendary-toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 2px;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-legendary-remaining {
+    align-self: center;
+    margin: 0;
+    min-height: 26px;
+    padding: 4px 9px;
+    border-color: rgba(150, 90, 255, 0.45);
+    background: rgba(70, 35, 110, 0.28);
+    color: #d9cbff;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.player-action-bar--dm-enemy .dm-enemy-legendary-remaining:hover {
+    border-color: rgba(190, 150, 255, 0.72);
+    box-shadow: 0 0 14px rgba(150, 90, 255, 0.24);
+}
+
+.dm-enemy-legendary-tool {
+    min-height: 24px;
+    padding: 4px 7px;
+    border: 1px solid rgba(150, 90, 255, 0.36);
+    border-radius: 5px;
+    background: linear-gradient(180deg, rgba(38, 25, 58, 0.92), rgba(11, 8, 18, 0.96));
+    color: rgba(224, 214, 255, 0.92);
+    cursor: pointer;
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.dm-enemy-legendary-tool:hover {
+    border-color: rgba(185, 145, 255, 0.68);
+    box-shadow: 0 0 12px rgba(150, 90, 255, 0.18);
+}
+
+.player-action-bar--dm-enemy .vtt-chip {
+    min-height: 42px;
+    padding: 7px 9px;
+    border-radius: 5px;
+    border-color: rgba(70, 95, 120, 0.52);
+    background: linear-gradient(180deg, rgba(17, 25, 37, 0.96), rgba(6, 9, 15, 0.98));
+    color: rgba(230, 238, 250, 0.9);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.player-action-bar--dm-enemy .vtt-chip--has-thumb {
+    gap: 7px;
+    padding-left: 6px;
+}
+
+.player-action-bar--dm-enemy .vtt-chip-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border-color: rgba(95, 135, 175, 0.5);
+}
+
+.player-action-bar--dm-enemy #playerBarBonusCol,
+.player-action-bar--dm-enemy #playerBarReactionCol,
+.player-action-bar--dm-enemy #playerBarInventoryCol {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 7px;
+    min-height: 0;
+}
+
+.player-action-bar--dm-enemy #playerBarInventoryCol {
+    max-height: 100%;
+}
+
+.player-action-bar--dm-enemy #playerBarInventoryCol .vtt-chip {
+    width: 74px;
+    min-height: 62px;
+    padding: 6px;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+    font-size: 8px;
+}
+
+.player-action-bar--dm-enemy #playerBarInventoryCol .vtt-chip-thumb {
+    width: 28px;
+    height: 28px;
+}
+
+@media (max-width: 1180px) {
+    .player-action-bar--dm-enemy .dm-enemy-command-body {
+        grid-template-columns: 145px minmax(560px, 1fr) 140px minmax(200px, 230px);
+    }
+}
+
+.dm-legendary-details-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 210000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.62);
+    backdrop-filter: blur(4px);
+}
+
+.dm-legendary-details-card {
+    position: relative;
+    width: min(720px, 92vw);
+    max-height: min(680px, 82vh);
+    overflow: auto;
+    padding: 22px 24px 24px;
+    border: 1px solid rgba(170, 136, 255, 0.5);
+    border-radius: 14px;
+    background:
+        radial-gradient(520px 180px at 12% 0%, rgba(170, 136, 255, 0.16), transparent 58%),
+        linear-gradient(180deg, rgba(11, 14, 26, 0.98), rgba(4, 6, 12, 0.99));
+    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.62), 0 0 26px rgba(150, 90, 255, 0.15);
+    color: #edf3ff;
+}
+
+.dm-legendary-details-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border: 1px solid rgba(170, 136, 255, 0.42);
+    border-radius: 7px;
+    background: rgba(10, 12, 20, 0.92);
+    color: #f3efff;
+    cursor: pointer;
+    font-weight: 900;
+}
+
+.dm-legendary-details-kicker {
+    margin-bottom: 6px;
+    color: rgba(170, 136, 255, 0.88);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+}
+
+.dm-legendary-details-title {
+    margin-bottom: 14px;
+    font-size: 22px;
+    font-weight: 900;
+}
+
+.dm-legendary-details-body {
+    color: rgba(228, 236, 255, 0.9);
+    font-size: 14px;
+    line-height: 1.55;
 }
 
 .vtt-tile--save {
@@ -1916,6 +3155,16 @@ body.player-action-bar-visible .main-container {
     background: linear-gradient(145deg, rgba(20, 28, 48, 0.95) 0%, rgba(10, 14, 28, 0.92) 100%);
     border: 1px solid rgba(170, 136, 255, 0.35);
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+.sidebar.left .vtt-log-panel {
+    min-height: 220px;
+    max-height: 360px;
+}
+
+.sidebar.left .vtt-log-scroll {
+    min-height: 150px;
+    max-height: 280px;
 }
 
 .vtt-log-tabs {
