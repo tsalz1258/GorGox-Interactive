@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v163'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v170'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -171,7 +171,7 @@ let currentPlacementShape = null; // Shape being placed (cone or circle)
 let conePlacementState = null; // Track cone placement: {startX, startY} or null
 
 // DM: rectangle in map pixels — only this region is drawn for non-DM clients when enabled (synced by server)
-let playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+let playerMapViewport = { enabled: false, hidden: false, x: 0, y: 0, width: 640, height: 480 };
 let dmPlayerViewportToolActive = false;
 let playerViewportDrag = null; // { mode, startMx, startMy, ox, oy, ow, oh }
 let playerViewportSendTimer = null;
@@ -727,6 +727,18 @@ function getBattlefieldSnapshotForArena3d() {
     const gp =
         typeof gridSize === 'number' && !isNaN(gridSize) && gridSize > 0 ? gridSize : 50;
     const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+    if (viewerIsPlayer && playerMapViewport && playerMapViewport.hidden) {
+        return {
+            hasMap: false,
+            image: null,
+            imagePath: null,
+            width: fallbackW,
+            height: fallbackH,
+            gridPixels: gp,
+            tokens: [],
+            combatOverlay: { movementCells: [], targeting: null, measurements: [] },
+        };
+    }
     const tokenList = [];
     if (Array.isArray(tokens)) {
         for (const t of tokens) {
@@ -2597,7 +2609,7 @@ function handleServerMessage(message) {
                 measurementShapes = [];
                 rulerStart = null;
                 rulerEnd = null;
-                playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+                playerMapViewport = { enabled: false, hidden: false, x: 0, y: 0, width: 640, height: 480 };
                 dmPlayerViewportToolActive = false;
                 playerViewportDrag = null;
                 syncPlayerViewportCheckbox();
@@ -2637,7 +2649,7 @@ function handleServerMessage(message) {
             measurementShapes = [];
             rulerStart = null;
             rulerEnd = null;
-            playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+            playerMapViewport = { enabled: false, hidden: false, x: 0, y: 0, width: 640, height: 480 };
             dmPlayerViewportToolActive = false;
             playerViewportDrag = null;
             syncPlayerViewportCheckbox();
@@ -3360,7 +3372,6 @@ function handleServerMessage(message) {
             console.log('Target ID:', message.target_id);
             console.log('Damage:', message.damage);
             console.log('New HP:', message.new_hp);
-            
             // CRITICAL: Store previous HP BEFORE updating (needed for animation)
             const damagedToken = tokens.find(t => t.id === message.target_id);
             let damagedParticipant = null;
@@ -3526,7 +3537,6 @@ function handleServerMessage(message) {
             console.log('Target ID:', message.target_id);
             console.log('Healing:', message.healing);
             console.log('New HP:', message.new_hp);
-            
             // CRITICAL: Always update character or enemy data FIRST (source of truth)
             // This ensures HP is synced across all clients
             const healedToken = tokens.find(t => t.id === message.target_id);
@@ -4031,10 +4041,14 @@ function loadInitialData() {
 function syncPlayerViewportCheckbox() {
     const el = document.getElementById('playerViewportEnabled');
     if (el) el.checked = !!playerMapViewport.enabled;
+    const hiddenEl = document.getElementById('playerMapHidden');
+    if (hiddenEl) hiddenEl.checked = !!playerMapViewport.hidden;
     const btn = document.getElementById('playerViewportToolBtn');
     if (btn) {
         btn.style.background = dmPlayerViewportToolActive ? '#357abd' : '#2a3a5a';
         btn.textContent = dmPlayerViewportToolActive ? '✅ Done moving box' : '📐 Move / resize box';
+        btn.disabled = !!playerMapViewport.hidden;
+        btn.style.opacity = playerMapViewport.hidden ? '0.55' : '1';
     }
 }
 
@@ -4044,9 +4058,15 @@ function viewportEnabledFromServer(raw) {
     return false;
 }
 
+function isPlayerMapHiddenForThisClient() {
+    const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+    return viewerIsPlayer && !!(playerMapViewport && playerMapViewport.hidden);
+}
+
 function applyPlayerMapViewportFromServer(msg) {
     if (!msg || typeof msg !== 'object') return;
     playerMapViewport.enabled = viewportEnabledFromServer(msg.enabled);
+    playerMapViewport.hidden = viewportEnabledFromServer(msg.hidden);
     playerMapViewport.x = Number(msg.x) || 0;
     playerMapViewport.y = Number(msg.y) || 0;
     playerMapViewport.width = Math.max(32, Number(msg.width) || 640);
@@ -4097,8 +4117,22 @@ function onPlayerViewportEnabledChange() {
     renderCanvas();
 }
 
+function onPlayerMapHiddenChange() {
+    if (!isDM) return;
+    const el = document.getElementById('playerMapHidden');
+    playerMapViewport.hidden = !!(el && el.checked);
+    if (playerMapViewport.hidden) {
+        dmPlayerViewportToolActive = false;
+        playerViewportDrag = null;
+    }
+    sendPlayerMapViewportToServer();
+    syncPlayerViewportCheckbox();
+    renderCanvas();
+}
+
 function togglePlayerViewportTool() {
     if (!isDM) return;
+    if (playerMapViewport.hidden) return;
     dmPlayerViewportToolActive = !dmPlayerViewportToolActive;
     playerViewportDrag = null;
     syncPlayerViewportCheckbox();
@@ -4111,6 +4145,7 @@ function sendPlayerMapViewportToServer() {
     sendMessage({
         type: 'SetPlayerMapViewport',
         enabled: playerMapViewport.enabled,
+        hidden: !!playerMapViewport.hidden,
         x: playerMapViewport.x,
         y: playerMapViewport.y,
         width: playerMapViewport.width,
@@ -4284,9 +4319,9 @@ function renderCanvas() {
     const vp = playerMapViewport;
     const mapReadyForFog = currentMap && currentMap.image && currentMap.width && currentMap.height;
     const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+    const playerMapHidden = viewerIsPlayer && !!vp.hidden && mapReadyForFog;
     const playerFogActive = viewerIsPlayer && vp.enabled && mapReadyForFog;
     const dmVpGuide = isDM && vp.enabled && mapReadyForFog;
-    
     // Draw map image if loaded
     // CRITICAL: Double-check currentMap is not null and has an image before drawing
     // This prevents drawing a cleared map
@@ -4409,6 +4444,24 @@ function renderCanvas() {
         ctx.strokeStyle = 'rgba(255,255,255,0.22)';
         ctx.lineWidth = 2;
         ctx.strokeRect(x0, y0, w0, h0);
+        ctx.restore();
+    }
+
+    if (playerMapHidden) {
+        const cw = canvas.width;
+        const ch = canvas.height;
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#020308';
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.fillStyle = 'rgba(170, 136, 255, 0.95)';
+        ctx.font = 'bold 22px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Map hidden by the DM', cw / 2, ch / 2 - 12);
+        ctx.fillStyle = 'rgba(230, 230, 255, 0.72)';
+        ctx.font = '14px Arial, sans-serif';
+        ctx.fillText('Please wait while the DM prepares the scene.', cw / 2, ch / 2 + 18);
         ctx.restore();
     }
 
@@ -5519,6 +5572,15 @@ function loadMapImage(imagePath, expectedGen) {
 
 // Canvas Interaction
 function onCanvasMouseDown(e) {
+    if (isPlayerMapHiddenForThisClient()) {
+        e.preventDefault();
+        e.stopPropagation();
+        isDragging = false;
+        selectedToken = null;
+        updateTokenInfo();
+        return;
+    }
+
     const rect = canvas.getBoundingClientRect();
     const mouseX = (e.clientX - rect.left - panX) / zoom;
     const mouseY = (e.clientY - rect.top - panY) / zoom;
@@ -5850,6 +5912,7 @@ function onCanvasMouseUp(e) {
 function onCanvasRightClick(e) {
     e.preventDefault();
     e.stopPropagation();
+    if (isPlayerMapHiddenForThisClient()) return;
     
     // Don't show context menu if measurement tools are active
     if (measurementToolType) {
@@ -6021,6 +6084,486 @@ function centerOnSelectedToken() {
     renderCanvas();
 }
 
+let enemySidebarActiveTab = 'stats';
+
+function setEnemySidebarTab(tab) {
+    enemySidebarActiveTab = ['stats', 'actions', 'rolls', 'traits'].includes(tab) ? tab : 'stats';
+    updateTokenInfo();
+}
+
+function sidebarEnemyDealDamage() {
+    var src = document.getElementById('sidebarEnemyDamageAmount');
+    var target = document.getElementById('damageAmount');
+    if (src && target) target.value = src.value;
+    dealDamage();
+    if (src) src.value = '';
+}
+
+function sidebarEnemyHealTarget() {
+    var src = document.getElementById('sidebarEnemyHealAmount');
+    var target = document.getElementById('healAmount');
+    if (src && target) target.value = src.value;
+    healTarget();
+    if (src) src.value = '';
+}
+
+function buildEnemySidebarTabs(activeTab, panels) {
+    var labels = {
+        stats: 'Stats',
+        actions: 'Actions',
+        rolls: 'Rolls',
+        traits: 'Traits'
+    };
+    var html = '<div class="enemy-sidebar-tabs" role="tablist">';
+    ['stats', 'actions', 'rolls', 'traits'].forEach(function (tab) {
+        html +=
+            '<button type="button" class="enemy-sidebar-tab ' +
+            (activeTab === tab ? 'is-active' : '') +
+            '" onclick="setEnemySidebarTab(\'' +
+            tab +
+            '\')" role="tab" aria-selected="' +
+            (activeTab === tab ? 'true' : 'false') +
+            '">' +
+            labels[tab] +
+            '</button>';
+    });
+    html += '</div>';
+    html += '<div class="enemy-sidebar-tab-panel enemy-sidebar-tab-panel--' + activeTab + '">';
+    html += panels[activeTab] || '<p class="enemy-sidebar-empty">No information available.</p>';
+    html += '</div>';
+    return html;
+}
+
+function getEnemySidebarContext(enemy) {
+    var npc = getNpcDataMergedForDmBar(enemy);
+    var rawBlock = dmEnemyPickText(
+        npc && npc.raw_block,
+        enemy.raw_block,
+        enemy.rawBlock,
+        enemy.stat_block,
+        enemy.statBlock
+    );
+    var parsedNpc = rawBlock ? parseNPCRawBlock(rawBlock) : null;
+    return { npc: npc, rawBlock: rawBlock || '', parsedNpc: parsedNpc };
+}
+
+function normalizeSidebarChunks(items, fallbackName) {
+    if (!Array.isArray(items)) return [];
+    return items
+        .filter(function (it) { return !!it; })
+        .map(function (it) {
+            return {
+                name: (it && it.name) || fallbackName || 'Feature',
+                description: (it && it.description) || '',
+                img: resolveSw5eAssetUrl((it && it.img && String(it.img).trim()) || '')
+            };
+        });
+}
+
+function renderEnemySidebarChipList(chunks, creatureName, kind, maxN) {
+    if (!chunks || !chunks.length) return '<p class="enemy-sidebar-empty">None listed.</p>';
+    var h = '<div class="enemy-sidebar-chip-list">';
+    var seen = {};
+    chunks.slice(0, maxN || 30).forEach(function (c) {
+        if (!c) return;
+        var name = c.name || kind || 'Feature';
+        var desc = c.description || '';
+        var key = (name + '|' + desc.slice(0, 50)).toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        var imgUrl = resolveSw5eAssetUrl((c.img && String(c.img).trim()) || '');
+        var thumb = imgUrl ? '<img class="vtt-chip-thumb" src="' + escapeHtml(imgUrl) + '" alt="" loading="lazy">' : '';
+        h +=
+            '<button type="button" class="vtt-chip vtt-chip--dm-rich enemy-sidebar-chip' +
+            (imgUrl ? ' vtt-chip--has-thumb' : '') +
+            '" onclick="rollDmEnemyNamedChunk(' +
+            JSON.stringify(creatureName) +
+            ', ' +
+            JSON.stringify(name) +
+            ', ' +
+            JSON.stringify(desc) +
+            ')" onmouseover="showNamedBlockTooltip(\'' +
+            escapeJs(String(name)) +
+            "', '" +
+            escapeJs(kind || 'Feature') +
+            "', '" +
+            escapeJs(String(desc)) +
+            "', event)\" onmouseout=\"hideSpellTooltip()\">" +
+            thumb +
+            '<span class="vtt-chip-label">' +
+            escapeHtml(String(name).substring(0, 44)) +
+            '</span></button>';
+    });
+    h += '</div>';
+    return h;
+}
+
+function buildEnemySidebarRollsHtml(enemy, creatureName, parsedNpc) {
+    var abilityScores = {
+        str: Number(enemy.strength) || 10,
+        dex: Number(enemy.dexterity) || 10,
+        con: Number(enemy.constitution) || 10,
+        int: Number(enemy.intelligence) || 10,
+        wis: Number(enemy.wisdom) || 10,
+        cha: Number(enemy.charisma) || 10
+    };
+    var abilityLabels = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
+    var html = '<div id="enemySidebarRollPanel" class="enemy-sidebar-roll-panel">';
+    html += '<div class="dm-enemy-roll-group"><span class="dm-enemy-save-dice-label">Skill checks</span>';
+    Object.keys(abilityScores).forEach(function (ab) {
+        var mod = calcAbilityMod(abilityScores[ab]);
+        html +=
+            '<button type="button" class="dm-enemy-save-dice-btn dm-enemy-skill-check-btn" data-dm-roll-kind="check" data-ability="' +
+            escapeHtml(ab) +
+            '" data-score="' +
+            abilityScores[ab] +
+            '">' +
+            abilityLabels[ab] +
+            ' Check ' +
+            formatSignedMod(mod) +
+            '</button>';
+    });
+    var skillRows = parsedNpc && Array.isArray(parsedNpc.skills) ? parsedNpc.skills : [];
+    if (skillRows.length) {
+        html += '<div class="enemy-sidebar-skill-extras">';
+        skillRows.slice(0, 12).forEach(function (skill) {
+            var skillName = (skill && skill.name) || 'Skill';
+            var skillBonus = Number(skill && skill.bonus) || 0;
+            html +=
+                '<button type="button" class="dm-enemy-save-dice-btn dm-enemy-skill-check-btn" data-dm-roll-kind="skill" data-skill-name="' +
+                escapeHtml(skillName) +
+                '" data-mod="' +
+                skillBonus +
+                '">' +
+                escapeHtml(skillName) +
+                ' ' +
+                formatSignedMod(skillBonus) +
+                '</button>';
+        });
+        html += '</div>';
+    }
+    html += '</div><div class="dm-enemy-roll-group"><span class="dm-enemy-save-dice-label">Saving throws</span>';
+    Object.keys(abilityScores).forEach(function (ab) {
+        var saveMod = calcAbilityMod(abilityScores[ab]);
+        html +=
+            '<button type="button" class="dm-enemy-save-dice-btn" data-dm-roll-kind="save" data-ability="' +
+            escapeHtml(ab) +
+            '" data-score="' +
+            abilityScores[ab] +
+            '">' +
+            abilityLabels[ab] +
+            ' Save ' +
+            formatSignedMod(saveMod) +
+            '</button>';
+    });
+    html += '</div><div class="dm-enemy-roll-group"><span class="dm-enemy-save-dice-label">Flat dice rolls</span>';
+    [2, 4, 6, 8, 10, 12, 20, 100].forEach(function (sides) {
+        html +=
+            '<button type="button" class="dm-enemy-save-dice-btn dm-enemy-flat-die-btn" data-dm-roll-kind="die" data-sides="' +
+            sides +
+            '">d' +
+            sides +
+            '</button>';
+    });
+    html += '</div></div>';
+    return html;
+}
+
+function buildEnemySidebarLegendaryHtml(enemy, creatureName, npc) {
+    var legendaryText = dmEnemyPickText(npc && npc.legendary_actions, enemy.legendary_actions, enemy.legendaryActions);
+    if (!legendaryText || !legendaryText.trim()) return '<p class="enemy-sidebar-empty">No legendary actions.</p>';
+    var legendaryData = parseLegendaryActions(legendaryText);
+    var legendaryKey = 'legendary_actions_' + enemy.id;
+    var legendaryUsage = JSON.parse(localStorage.getItem(legendaryKey) || '{"used": 0, "max": ' + legendaryData.maxActions + '}');
+    legendaryUsage.max = legendaryData.maxActions;
+    if (legendaryUsage.used > legendaryUsage.max) legendaryUsage.used = legendaryUsage.max;
+    var remaining = legendaryUsage.max - legendaryUsage.used;
+    var html =
+        '<div class="dm-enemy-legendary-toolbar enemy-sidebar-legendary-toolbar">' +
+        '<button type="button" id="dmbar-legendary-remaining-' +
+        escapeHtml(String(enemy.id)) +
+        '" class="dm-enemy-legendary-remaining" title="Use 1 legendary action" onclick="useLegendaryAction(' +
+        JSON.stringify(String(enemy.id)) +
+        ', ' +
+        JSON.stringify(legendaryKey) +
+        ', 1, \'Legendary Action\', ' +
+        JSON.stringify(String(creatureName)) +
+        ')">' +
+        remaining +
+        '/' +
+        legendaryUsage.max +
+        '</button>' +
+        '<button type="button" class="dm-enemy-legendary-tool" onclick="resetLegendaryActions(' +
+        JSON.stringify(String(enemy.id)) +
+        ', ' +
+        JSON.stringify(legendaryKey) +
+        ')">Reset</button>' +
+        '<button type="button" class="dm-enemy-legendary-tool" onclick="showDmEnemyLegendaryDetails(' +
+        JSON.stringify(String(creatureName)) +
+        ', ' +
+        JSON.stringify(String(legendaryText)) +
+        ')">Details</button>' +
+        '</div>';
+    if (legendaryData.actions && legendaryData.actions.length) {
+        var itemChunks = normalizeSidebarChunks(npc && npc.sw5e_legendary_items, 'Legendary Action');
+        var iconByName = {};
+        itemChunks.forEach(function (c) {
+            iconByName[String(c.name || '').replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()] = c.img || '';
+        });
+        html += '<div class="enemy-sidebar-chip-list">';
+        legendaryData.actions.slice(0, 16).forEach(function (act) {
+            var nm = (act && act.name) || 'Legendary Action';
+            var cost = act && act.cost ? act.cost : 1;
+            var desc = act && act.description ? act.description : '';
+            var disabled = remaining < cost;
+            var imgUrl = iconByName[String(nm).replace(/\s*\([^)]*\)\s*/g, '').trim().toLowerCase()] || '';
+            var thumb = imgUrl ? '<img class="vtt-chip-thumb" src="' + escapeHtml(imgUrl) + '" alt="" loading="lazy">' : '';
+            html +=
+                '<button type="button" class="vtt-chip vtt-chip--legendary-act enemy-sidebar-chip' +
+                (imgUrl ? ' vtt-chip--has-thumb' : '') +
+                (disabled ? ' is-disabled' : '') +
+                '" onclick="' +
+                (disabled
+                    ? "alert('Not enough legendary actions remaining!')"
+                    : 'useLegendaryAction(' +
+                      JSON.stringify(String(enemy.id)) +
+                      ', ' +
+                      JSON.stringify(legendaryKey) +
+                      ', ' +
+                      Number(cost) +
+                      ', ' +
+                      JSON.stringify(String(nm)) +
+                      ', ' +
+                      JSON.stringify(String(creatureName)) +
+                      ')') +
+                '" onmouseover="showNamedBlockTooltip(\'' +
+                escapeJs(String(nm)) +
+                "', 'Legendary Action', '" +
+                escapeJs(String(desc || '')) +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">" +
+                thumb +
+                '<span class="vtt-chip-label">' +
+                escapeHtml(nm + (cost > 1 ? ' (' + cost + ')' : '')) +
+                '</span></button>';
+        });
+        html += '</div>';
+    }
+    return html;
+}
+
+function buildEnemySidebarActionsHtml(enemy, token, ctx) {
+    var npc = ctx.npc;
+    var rawBlock = ctx.rawBlock || '';
+    var creatureName = enemy.name || 'Creature';
+    var attackRows = mergeEnemyAttackRowsForDmBar(enemy);
+    var actionItems = normalizeSidebarChunks(npc && npc.sw5e_action_items, 'Action');
+    var compactActions = actionItems.length ? actionItems : attackRows;
+    var html = '<div class="enemy-sidebar-section"><span class="enemy-sidebar-section-title">Actions</span><div class="enemy-sidebar-compact-actions">';
+    var seenActions = {};
+    compactActions.forEach(function (atk) {
+        var nm = atk.name || 'Attack';
+        var actionKey = String(nm).trim().toLowerCase();
+        if (seenActions[actionKey]) return;
+        seenActions[actionKey] = true;
+        var packImg = resolveSw5eAssetUrl(atk.img && String(atk.img).trim() ? String(atk.img).trim() : '');
+        var thumbCls = packImg !== '' ? ' vtt-chip--has-thumb' : '';
+        var thumb = packImg ? '<img class="vtt-chip-thumb" src="' + escapeHtml(packImg) + '" alt="" loading="lazy">' : '';
+        var labelBody =
+            thumb +
+            '<span class="enemy-sidebar-action-text"><span class="vtt-chip-label">' +
+            escapeHtml(nm) +
+            '</span><span class="enemy-sidebar-action-sub">' +
+            (atk.type === 'saving_throw' && atk.saveDC
+                ? 'DC ' + escapeHtml(String(atk.saveDC)) + ' ' + escapeHtml(String(atk.saveType || 'save').toUpperCase().slice(0, 3))
+                : atk.type === 'weapon'
+                  ? 'Attack'
+                  : 'Action') +
+            '</span></span>';
+        var dmTipAttr =
+            atk.description != null && String(atk.description).trim() !== ''
+                ? ' data-dm-tip="' + encodeURIComponent(String(atk.description)) + '"'
+                : '';
+        if (atk.type === 'weapon' && atk.toHit !== null && atk.toHit !== undefined) {
+            html +=
+                '<button type="button" tabindex="-1" class="vtt-chip vtt-chip--dm-rich bar-attack-btn enemy-sidebar-action-row' +
+                thumbCls +
+                '" data-weapon="' +
+                escapeHtml(nm) +
+                '" data-tohit="' +
+                atk.toHit +
+                '" data-damage="' +
+                escapeHtml(atk.damage || '') +
+                '" data-type="' +
+                escapeHtml(atk.damageType || atk.type || 'damage') +
+                '" data-name="' +
+                escapeHtml(creatureName) +
+                '" data-range="' +
+                escapeHtml(attackRangeToDataAttr(atk.range)) +
+                '"' +
+                dmTipAttr +
+                '>' +
+                labelBody +
+                '</button>';
+        } else if (atk.type === 'saving_throw' && atk.saveDC) {
+            html +=
+                '<button type="button" class="vtt-chip vtt-chip--dm-rich dm-enemy-save-btn enemy-sidebar-action-row' +
+                thumbCls +
+                '" data-label="' +
+                escapeHtml(nm) +
+                '" data-save-dc="' +
+                atk.saveDC +
+                '" data-save-type="' +
+                escapeHtml(atk.saveType || 'dex') +
+                '" data-damage="' +
+                escapeHtml(atk.damage || '') +
+                '" data-dmg-type="' +
+                escapeHtml(atk.damageType || '') +
+                '"' +
+                dmTipAttr +
+                '>' +
+                labelBody +
+                '</button>';
+        } else {
+            html +=
+                '<button type="button" class="vtt-chip vtt-chip--dm-rich dm-enemy-misc-btn enemy-sidebar-action-row' +
+                thumbCls +
+                '"' +
+                dmTipAttr +
+                ' onclick="rollDmEnemyNamedChunk(' +
+                JSON.stringify(creatureName) +
+                ', ' +
+                JSON.stringify(nm) +
+                ', ' +
+                JSON.stringify(atk.description || '') +
+                ')">' +
+                labelBody +
+                '</button>';
+        }
+    });
+    if (!compactActions.length) {
+        html += '<p class="enemy-sidebar-empty">No actions listed.</p></div>';
+    } else {
+        html += '</div>';
+    }
+
+    var bonusChunks = normalizeSidebarChunks(npc && npc.sw5e_bonus_action_items, 'Bonus action');
+    if (!bonusChunks.length) {
+        var bonusActionsText = dmEnemyPickText(npc && npc.bonus_actions, enemy.bonus_actions, enemy.bonusActions);
+        if (bonusActionsText) bonusChunks = bonusChunks.concat(splitNamedStatblockChunks(bonusActionsText));
+        var bonusFromRaw = extractBetweenHeaders(rawBlock || '', /\bBonus Actions\b/i, [
+            /\bActions\b/i,
+            /\bReactions\b/i,
+            /\bLegendary Actions\b/i,
+            /\bTraits\b/i,
+            /\bFeatures\b/i,
+            /\bChallenge\b/i
+        ]);
+        if (bonusFromRaw && bonusFromRaw.length > 10) bonusChunks = bonusChunks.concat(splitNamedStatblockChunks(bonusFromRaw));
+    }
+    var reactionChunks = normalizeSidebarChunks(npc && npc.sw5e_reaction_items, 'Reaction');
+    if (!reactionChunks.length) {
+        var reactionsText = dmEnemyPickText(npc && npc.reactions, enemy.reactions);
+        if (reactionsText) reactionChunks = reactionChunks.concat(splitNamedStatblockChunks(reactionsText));
+        var reactFromRaw = extractBetweenHeaders(rawBlock || '', /\bReactions\b/i, [
+            /\bLegendary Actions\b/i,
+            /\bLair Actions\b/i,
+            /\bBonus Actions\b/i,
+            /\bChallenge\b/i,
+            /\bTraits\b/i,
+            /\bFeatures\b/i
+        ]);
+        if (reactFromRaw && reactFromRaw.length > 10) reactionChunks = reactionChunks.concat(splitNamedStatblockChunks(reactFromRaw));
+    }
+
+    html +=
+        '<div class="enemy-sidebar-section"><span class="enemy-sidebar-section-title">Bonus Actions</span>' +
+        renderEnemySidebarChipList(bonusChunks, creatureName, 'Bonus action', 20) +
+        '</div>';
+    html +=
+        '<div class="enemy-sidebar-section"><span class="enemy-sidebar-section-title">Legendary Actions</span>' +
+        buildEnemySidebarLegendaryHtml(enemy, creatureName, npc) +
+        '</div>';
+    html +=
+        '<div class="enemy-sidebar-section"><span class="enemy-sidebar-section-title">Reactions</span>' +
+        (reactionChunks.length
+            ? renderEnemySidebarChipList(reactionChunks, creatureName, 'Reaction', 20)
+            : '<button type="button" class="vtt-chip vtt-chip--reaction enemy-sidebar-chip" onclick="addLogEntry(' +
+              JSON.stringify(creatureName + ' uses a reaction (declare).') +
+              ', \'info\')">Reaction</button>') +
+        '</div>';
+    return html + '</div>';
+}
+
+function buildEnemySidebarTraitsHtml(enemy, ctx) {
+    var npc = ctx.npc;
+    var rawBlock = ctx.rawBlock || '';
+    var parsedNpc = ctx.parsedNpc;
+    var creatureName = enemy.name || 'Creature';
+    var traitChunks = normalizeSidebarChunks(npc && npc.sw5e_trait_items, 'Trait');
+    if (!traitChunks.length) {
+        if (parsedNpc && parsedNpc.traits && parsedNpc.traits.length) {
+            parsedNpc.traits.forEach(function (tr) {
+                if (!tr || !String(tr).trim()) return;
+                var chunks = splitNamedStatblockChunks(String(tr).trim());
+                if (chunks && chunks.length) traitChunks = traitChunks.concat(chunks);
+                else traitChunks.push({ name: 'Trait', description: String(tr).trim() });
+            });
+        }
+        var traitsFromRaw = extractBetweenHeaders(rawBlock || '', /\bTraits\b/i, [
+            /\bActions\b/i,
+            /\bBonus Actions\b/i,
+            /\bReactions\b/i,
+            /\bFeatures\b/i,
+            /\bChallenge\b/i
+        ]);
+        if (traitsFromRaw && traitsFromRaw.length > 10) traitChunks = traitChunks.concat(splitNamedStatblockChunks(traitsFromRaw));
+        var traitsFromField = dmEnemyPickText(enemy.traits, enemy.features, enemy.trait_text, enemy.species_traits);
+        if (traitsFromField) traitChunks = traitChunks.concat(splitNamedStatblockChunks(traitsFromField));
+    }
+    var html = '<div class="enemy-sidebar-section"><span class="enemy-sidebar-section-title">Traits &amp; Features</span>';
+    if (parsedNpc && parsedNpc.techPowers && parsedNpc.techPowers.length) {
+        html += '<div class="enemy-sidebar-chip-list">';
+        parsedNpc.techPowers.slice(0, 8).forEach(function (pw) {
+            var attr = String(pw).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            html +=
+                '<button type="button" class="vtt-chip vtt-chip--techpow enemy-sidebar-chip" onmouseover="showSpellTooltip(\'' +
+                attr +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">\u26a1 " +
+                escapeHtml(String(pw).substring(0, 28)) +
+                '</button>';
+        });
+        html += '</div>';
+    }
+    if (parsedNpc && parsedNpc.forcePowers && parsedNpc.forcePowers.length) {
+        html += '<div class="enemy-sidebar-chip-list">';
+        parsedNpc.forcePowers.slice(0, 8).forEach(function (pw) {
+            var attr = String(pw).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            html +=
+                '<button type="button" class="vtt-chip vtt-chip--forcepow enemy-sidebar-chip" onmouseover="showSpellTooltip(\'' +
+                attr +
+                "', event)\" onmouseout=\"hideSpellTooltip()\">\u2726 " +
+                escapeHtml(String(pw).substring(0, 28)) +
+                '</button>';
+        });
+        html += '</div>';
+    }
+    html += renderEnemySidebarChipList(traitChunks, creatureName, 'Trait', 40);
+    return html + '</div>';
+}
+
+function windowEnemySidebarAfterRender(creatureName) {
+    var scope = document.getElementById('enemySidebarTabs');
+    if (!scope) return;
+    wireBarAttackButtons(scope, creatureName);
+    wireDmEnemySaveAttackTiles(scope, creatureName);
+    wireDmEnemyFightRowTooltips(scope, creatureName);
+    wireDmEnemyRollPanel(document.getElementById('enemySidebarRollPanel'), creatureName);
+}
+
+window.setEnemySidebarTab = setEnemySidebarTab;
+window.sidebarEnemyDealDamage = sidebarEnemyDealDamage;
+window.sidebarEnemyHealTarget = sidebarEnemyHealTarget;
+
 // Token Info
 function updateTokenInfo() {
     const infoDiv = document.getElementById('tokenInfo');
@@ -6034,6 +6577,7 @@ function updateTokenInfo() {
     
     let info = '';
     let entityData = null;
+    let enemySidebarRendered = false;
     
     const isOwnToken = selectedToken.entity_type === 'Player' && selectedToken.entity_id === myCharacterId;
     const canEditSelectedPlayerHp = isDM || isOwnToken;
@@ -6133,11 +6677,12 @@ function updateTokenInfo() {
             const maxHp = instance ? instance.max_hp : (enemy ? enemy.max_hp : 0);
             const ac = instance ? instance.armor_class : (enemy ? enemy.armor_class : 0);
             
-            info += `<h4>👹 ${displayName}</h4>`;
+            let statsHtml = '';
+            statsHtml += `<h4>👹 ${displayName}</h4>`;
             if (enemy) {
-                info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${enemy.creature_type} (CR ${enemy.challenge_rating})</p>`;
+                statsHtml += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${enemy.creature_type} (CR ${enemy.challenge_rating})</p>`;
             }
-            info += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#ff8844'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
+            statsHtml += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#ff8844'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
             const hpPercent = maxHp > 0 ? (currentHp / maxHp) * 100 : 0;
             const hpBarId = `hp-bar-enemy-${selectedToken.entity_id}`;
             const previousHp = previousHpValues.get(`enemy-${selectedToken.entity_id}`);
@@ -6146,7 +6691,7 @@ function updateTokenInfo() {
             // CRITICAL: Only animate if startPercent is different from hpPercent
             if (Math.abs(startPercent - hpPercent) > 0.1) {
                 // CRITICAL: Ensure transition is applied by setting it explicitly in the style
-                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%; transition: width 1.5s ease-out !important;"></div></div>`;
+                statsHtml += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${startPercent}%; transition: width 1.5s ease-out !important;"></div></div>`;
                 // Animate to new value after a tiny delay to ensure DOM is ready
                 setTimeout(() => {
                     const fillElement = document.querySelector(`#${hpBarId} .hp-fill`);
@@ -6164,33 +6709,78 @@ function updateTokenInfo() {
                 }, 10);
             } else {
                 // No animation needed - values are the same (or very close)
-                info += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${hpPercent}%;"></div></div>`;
+                statsHtml += `<div class="hp-bar" id="${hpBarId}"><div class="hp-fill" style="width: ${hpPercent}%;"></div></div>`;
             }
             // Store current HP for next update (delay to ensure animation uses old value)
             // CRITICAL: Delay this to AFTER the animation completes (1.5s + buffer)
             setTimeout(() => {
                 previousHpValues.set(`enemy-${selectedToken.entity_id}`, { hp: currentHp, maxHp: maxHp });
             }, 1600);
-            info += `<div class="token-stat"><span>AC:</span><span>${ac}</span></div>`;
+            statsHtml += `<div class="token-stat"><span>AC:</span><span>${ac}</span></div>`;
             
             if (enemy) {
-                info += `<div class="token-stat"><span>Initiative:</span><span>+${enemy.initiative_bonus}</span></div>`;
-                info += `<div class="token-stat"><span>Speed:</span><span>${enemy.speed} ft</span></div>`;
+                statsHtml += `<div class="token-stat"><span>Initiative:</span><span>+${enemy.initiative_bonus}</span></div>`;
+                statsHtml += `<div class="token-stat"><span>Speed:</span><span>${enemy.speed} ft</span></div>`;
                 
-                info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                info += `<div class="token-stat"><span>STR:</span><span>${enemy.strength}</span></div>`;
-                info += `<div class="token-stat"><span>DEX:</span><span>${enemy.dexterity}</span></div>`;
-                info += `<div class="token-stat"><span>CON:</span><span>${enemy.constitution}</span></div>`;
-                info += `<div class="token-stat"><span>INT:</span><span>${enemy.intelligence}</span></div>`;
-                info += `<div class="token-stat"><span>WIS:</span><span>${enemy.wisdom}</span></div>`;
-                info += `<div class="token-stat"><span>CHA:</span><span>${enemy.charisma}</span></div>`;
+                statsHtml += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                statsHtml += `<div class="token-stat"><span>STR:</span><span>${enemy.strength}</span></div>`;
+                statsHtml += `<div class="token-stat"><span>DEX:</span><span>${enemy.dexterity}</span></div>`;
+                statsHtml += `<div class="token-stat"><span>CON:</span><span>${enemy.constitution}</span></div>`;
+                statsHtml += `<div class="token-stat"><span>INT:</span><span>${enemy.intelligence}</span></div>`;
+                statsHtml += `<div class="token-stat"><span>WIS:</span><span>${enemy.wisdom}</span></div>`;
+                statsHtml += `<div class="token-stat"><span>CHA:</span><span>${enemy.charisma}</span></div>`;
                 
                 // Add button to view full character sheet (NPC or custom enemy, DM only)
                 if (isDM) {
-                    info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-                    info += `<button onclick="showNPCCharacterSheet('${selectedToken.entity_id}')" style="width: 100%; padding: 8px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; margin-top: 10px;">📋 View Full Character Sheet</button>`;
+                    statsHtml += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                    statsHtml += `<button onclick="showNPCCharacterSheet('${selectedToken.entity_id}')" style="width: 100%; padding: 8px; background: #4a9eff; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; margin-top: 10px;">📋 View Full Character Sheet</button>`;
                 }
             }
+
+            const participant = combatState.participants.find(p => p.id === selectedToken.id);
+            if (participant && combatState.active) {
+                statsHtml += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                statsHtml += `<p style="font-size: 12px; font-weight: bold; color: #4a9eff; margin-bottom: 8px;">⚔️ Combat Status</p>`;
+                statsHtml += `<div class="token-stat"><span>Initiative Roll:</span><span>${participant.initiative}</span></div>`;
+                if (combatState.currentTurn === selectedToken.id) {
+                    statsHtml += `<p style="color: #ffaa44; font-weight: bold; margin-top: 8px;">🎯 CURRENT TURN!</p>`;
+                }
+            }
+            if (isDM) {
+                const currentSize = selectedToken.size || 1.0;
+                const sizeLabel = currentSize <= 1.0 ? 'Medium (1x1)' :
+                                 currentSize <= 2.0 ? 'Large (2x2)' :
+                                 currentSize <= 4.0 ? 'Huge (4x4)' :
+                                 'Gargantuan (8x8)';
+                statsHtml += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                statsHtml += `<div class="token-stat"><span>Token Size:</span><span>${sizeLabel}</span></div>`;
+                statsHtml += `<div style="margin-top: 10px;">`;
+                statsHtml += `<label style="display: block; font-size: 11px; margin-bottom: 5px; color: #aaa;">Change Size:</label>`;
+                statsHtml += `<select id="tokenSizeSelect" onchange="changeTokenSize('${selectedToken.id}', this.value)" style="width: 100%; padding: 5px; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 3px; font-size: 12px;">`;
+                statsHtml += `<option value="1.0" ${currentSize <= 1.0 ? 'selected' : ''}>Medium (1x1 square)</option>`;
+                statsHtml += `<option value="2.0" ${currentSize > 1.0 && currentSize <= 2.0 ? 'selected' : ''}>Large (2x2 = 4 squares)</option>`;
+                statsHtml += `<option value="4.0" ${currentSize > 2.0 && currentSize <= 4.0 ? 'selected' : ''}>Huge (4x4 = 16 squares)</option>`;
+                statsHtml += `<option value="8.0" ${currentSize > 4.0 ? 'selected' : ''}>Gargantuan (8x8 = 64 squares)</option>`;
+                statsHtml += `</select>`;
+                statsHtml += `</div>`;
+                statsHtml += `<div class="enemy-sidebar-hp-tools">`;
+                statsHtml += `<input id="sidebarEnemyDamageAmount" class="dm-enemy-hp-input" type="number" min="1" placeholder="Damage">`;
+                statsHtml += `<button type="button" class="dm-enemy-hp-btn dm-enemy-hp-btn--damage" onclick="sidebarEnemyDealDamage()">Deal Damage</button>`;
+                statsHtml += `<input id="sidebarEnemyHealAmount" class="dm-enemy-hp-input" type="number" min="1" placeholder="Healing">`;
+                statsHtml += `<button type="button" class="dm-enemy-hp-btn dm-enemy-hp-btn--heal" onclick="sidebarEnemyHealTarget()">Heal</button>`;
+                statsHtml += `</div>`;
+            }
+
+            const sidebarEnemy = enemy || {};
+            const ctx = getEnemySidebarContext(sidebarEnemy);
+            const panels = {
+                stats: statsHtml,
+                actions: sidebarEnemy.id ? buildEnemySidebarActionsHtml(sidebarEnemy, selectedToken, ctx) : '<p class="enemy-sidebar-empty">Enemy action data not loaded.</p>',
+                rolls: sidebarEnemy.id ? buildEnemySidebarRollsHtml(sidebarEnemy, displayName, ctx.parsedNpc) : '<p class="enemy-sidebar-empty">Enemy roll data not loaded.</p>',
+                traits: sidebarEnemy.id ? buildEnemySidebarTraitsHtml(sidebarEnemy, ctx) : '<p class="enemy-sidebar-empty">Enemy traits not loaded.</p>'
+            };
+            info += '<div id="enemySidebarTabs" class="enemy-sidebar-token">' + buildEnemySidebarTabs(enemySidebarActiveTab, panels) + '</div>';
+            enemySidebarRendered = true;
         }
     } else if (selectedToken.entity_type === 'Object') {
         const rawLabel = coalesceTokenDisplayName(selectedToken);
@@ -6218,42 +6808,48 @@ function updateTokenInfo() {
         info += `<div class="token-stat"><span>Position:</span><span>(${selectedToken.x}, ${selectedToken.y})</span></div>`;
     }
     
-    // Add combat info if in combat
-    const participant = combatState.participants.find(p => p.id === selectedToken.id);
-    if (participant && combatState.active) {
-        info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-        info += `<p style="font-size: 12px; font-weight: bold; color: #4a9eff; margin-bottom: 8px;">⚔️ Combat Status</p>`;
-        info += `<div class="token-stat"><span>Initiative Roll:</span><span>${participant.initiative}</span></div>`;
-        if (combatState.currentTurn === selectedToken.id) {
-            info += `<p style="color: #ffaa44; font-weight: bold; margin-top: 8px;">🎯 CURRENT TURN!</p>`;
+    if (!enemySidebarRendered) {
+        // Add combat info if in combat
+        const participant = combatState.participants.find(p => p.id === selectedToken.id);
+        if (participant && combatState.active) {
+            info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+            info += `<p style="font-size: 12px; font-weight: bold; color: #4a9eff; margin-bottom: 8px;">⚔️ Combat Status</p>`;
+            info += `<div class="token-stat"><span>Initiative Roll:</span><span>${participant.initiative}</span></div>`;
+            if (combatState.currentTurn === selectedToken.id) {
+                info += `<p style="color: #ffaa44; font-weight: bold; margin-top: 8px;">🎯 CURRENT TURN!</p>`;
+            }
+        }
+        
+        // Add token size selector (DM only)
+        if (isDM) {
+            const currentSize = selectedToken.size || 1.0;
+            const sizeLabel = currentSize <= 1.0 ? 'Medium (1x1)' : 
+                             currentSize <= 2.0 ? 'Large (2x2)' : 
+                             currentSize <= 4.0 ? 'Huge (4x4)' : 
+                             'Gargantuan (8x8)';
+            info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+            info += `<div class="token-stat"><span>Token Size:</span><span>${sizeLabel}</span></div>`;
+            info += `<div style="margin-top: 10px;">`;
+            info += `<label style="display: block; font-size: 11px; margin-bottom: 5px; color: #aaa;">Change Size:</label>`;
+            info += `<select id="tokenSizeSelect" onchange="changeTokenSize('${selectedToken.id}', this.value)" style="width: 100%; padding: 5px; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 3px; font-size: 12px;">`;
+            info += `<option value="1.0" ${currentSize <= 1.0 ? 'selected' : ''}>Medium (1x1 square)</option>`;
+            info += `<option value="2.0" ${currentSize > 1.0 && currentSize <= 2.0 ? 'selected' : ''}>Large (2x2 = 4 squares)</option>`;
+            info += `<option value="4.0" ${currentSize > 2.0 && currentSize <= 4.0 ? 'selected' : ''}>Huge (4x4 = 16 squares)</option>`;
+            info += `<option value="8.0" ${currentSize > 4.0 ? 'selected' : ''}>Gargantuan (8x8 = 64 squares)</option>`;
+            info += `</select>`;
+            info += `</div>`;
         }
     }
     
-    // Add token size selector (DM only)
-    if (isDM) {
-        const currentSize = selectedToken.size || 1.0;
-        const sizeLabel = currentSize <= 1.0 ? 'Medium (1x1)' : 
-                         currentSize <= 2.0 ? 'Large (2x2)' : 
-                         currentSize <= 4.0 ? 'Huge (4x4)' : 
-                         'Gargantuan (8x8)';
-        info += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
-        info += `<div class="token-stat"><span>Token Size:</span><span>${sizeLabel}</span></div>`;
-        info += `<div style="margin-top: 10px;">`;
-        info += `<label style="display: block; font-size: 11px; margin-bottom: 5px; color: #aaa;">Change Size:</label>`;
-        info += `<select id="tokenSizeSelect" onchange="changeTokenSize('${selectedToken.id}', this.value)" style="width: 100%; padding: 5px; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 3px; font-size: 12px;">`;
-        info += `<option value="1.0" ${currentSize <= 1.0 ? 'selected' : ''}>Medium (1x1 square)</option>`;
-        info += `<option value="2.0" ${currentSize > 1.0 && currentSize <= 2.0 ? 'selected' : ''}>Large (2x2 = 4 squares)</option>`;
-        info += `<option value="4.0" ${currentSize > 2.0 && currentSize <= 4.0 ? 'selected' : ''}>Huge (4x4 = 16 squares)</option>`;
-        info += `<option value="8.0" ${currentSize > 4.0 ? 'selected' : ''}>Gargantuan (8x8 = 64 squares)</option>`;
-        info += `</select>`;
-        info += `</div>`;
-    }
-    
     infoDiv.innerHTML = info;
+    if (enemySidebarRendered) {
+        const enemy = enemies.find(e => e.id === selectedToken.entity_id);
+        windowEnemySidebarAfterRender((enemy && enemy.name) || 'Creature');
+    }
     
     // Show damage/heal buttons for DM (any token) or players (own token only); objects have no HP
     const canModifyToken = (isDM || (selectedToken && selectedToken.entity_type === 'Player' && selectedToken.entity_id === myCharacterId))
-        && selectedToken.entity_type !== 'Object';
+        && selectedToken.entity_type !== 'Object' && !enemySidebarRendered;
     if (canModifyToken && selectedToken) {
         actionsDiv.classList.remove('hidden');
     } else {
@@ -6823,7 +7419,7 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
     '<div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>' +
     '</div>' +
-    '<div class="player-bar-tab-panel" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">' +
+    '<div class="player-bar-tab-panel player-powers-console-shell" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">' +
     '<div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>' +
     '<div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>' +
     '</div>' +
@@ -9456,7 +10052,7 @@ function populatePlayerActionBar() {
             '<div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>' +
             '<div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>' +
             '</div>' +
-            '<div class="player-bar-tab-panel" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">' +
+            '<div class="player-bar-tab-panel player-powers-console-shell" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">' +
             '<div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>' +
             '<div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>' +
             '</div>' +
@@ -9785,6 +10381,32 @@ function populatePlayerActionBar() {
     const showTechSection = allTechPowers.length > 0 || hasTechPoints;
     const showForceSection = allForcePowers.length > 0 || hasForcePoints;
 
+    function getPowerConsoleTierSummary(powerList, kind) {
+        var maxTier = null;
+        var hasUnknown = false;
+        powerList.forEach(function (powerName) {
+            var meta = resolvePowerTierForUi(powerName, kind, charData);
+            if (meta.unknown) {
+                hasUnknown = true;
+            } else if (typeof meta.tier === 'number' && !isNaN(meta.tier)) {
+                maxTier = maxTier === null ? meta.tier : Math.max(maxTier, meta.tier);
+            }
+        });
+        if (maxTier !== null) {
+            return {
+                value: String(maxTier),
+                label: maxTier === 0 ? 'At-will' : 'Max level'
+            };
+        }
+        return { value: hasUnknown ? '?' : '0', label: hasUnknown ? 'Unknown' : 'None' };
+    }
+
+    function getPowerCardLevelLabel(meta) {
+        if (!meta || meta.unknown) return 'Level ?';
+        if (meta.tier === 0) return 'At-will';
+        return 'Lvl ' + meta.tier;
+    }
+
     // Tech Powers (show section if character has any tech powers OR any tech point pool)
     const techPowersEl = document.getElementById('playerBarTechPowers');
     if (techPowersEl) {
@@ -9792,19 +10414,28 @@ function populatePlayerActionBar() {
             techPowersEl.style.display = 'none';
         } else {
             techPowersEl.style.display = '';
-            let html = '<span class="section-label">Tech Points</span>';
-            html += '<div class="player-bar-points-row">';
-            html += '<span class="points-display" style="color:#00d4ff;">&#9889; ' + techPts.current + '/' + techPts.max + '</span>';
-            html += '<button type="button" class="bar-point-btn" onclick="useTechPoint(); populatePlayerActionBar();" title="Use 1">−</button>';
-            html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreTechPoints();" title="Restore all">↺</button>';
-            html += '</div>';
+            var techTierSummaryPb = getPowerConsoleTierSummary(allTechPowers, 'tech');
+            let html = '<div class="player-power-console player-power-console--tech">';
+            html += '<div class="player-power-console-head">';
+            html += '<div class="player-power-heading"><span class="section-label">Tech Powers</span><span class="player-power-count">' + allTechPowers.length + ' known</span></div>';
+            html += '<div class="player-power-points-card player-power-points-card--tech">';
+            html += '<span class="player-power-points-label">Tech Points</span>';
+            html += '<span class="player-power-points-value">&#9889; ' + techPts.current + '<small>/' + techPts.max + '</small></span>';
+            html += '<span class="player-power-points-spent">' + Math.max(0, techPts.max - techPts.current) + ' spent</span>';
+            html += '<span class="player-power-point-actions">';
+            html += '<button type="button" class="bar-point-btn" onclick="useTechPoint(); populatePlayerActionBar();" title="Use 1 tech point">&minus;</button>';
+            html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreTechPoints();" title="Restore all tech points">&orarr;</button>';
+            html += '</span></div></div>';
             var tierKeysTechPb = [];
             var techFilterPb = 'all';
             if (allTechPowers.length > 0) {
                 tierKeysTechPb = orderedTierKeysForPowerList(allTechPowers, 'tech', charData);
                 techFilterPb = getStoredPowerLevelFilter('playerBar', 'tech');
                 if (techFilterPb !== 'all' && tierKeysTechPb.indexOf(techFilterPb) === -1) techFilterPb = 'all';
-                html += '<span class="section-label">Tech Powers</span>';
+                html += '<div class="player-power-console-body">';
+                html += '<div class="player-power-tier-badge player-power-tier-badge--tech"><span>' + escapeHtml(techTierSummaryPb.value) + '</span><small>' + escapeHtml(techTierSummaryPb.label) + '</small></div>';
+                html += '<div class="player-power-library">';
+                html += '<div class="player-power-filter-label">Tech Power Level</div>';
                 html += buildPowerLevelFilterRowHtml(
                     'playerBar',
                     'tech',
@@ -9812,13 +10443,19 @@ function populatePlayerActionBar() {
                     tierKeysTechPb,
                     true
                 );
-                html += '<div class="bar-scroll">';
+                html += '<div class="player-power-card-row">';
+            } else {
+                html += '<div class="player-power-console-body player-power-console-body--empty">';
+                html += '<div class="player-power-tier-badge player-power-tier-badge--tech"><span>' + escapeHtml(techTierSummaryPb.value) + '</span><small>' + escapeHtml(techTierSummaryPb.label) + '</small></div>';
+                html += '<div class="player-power-empty">No tech powers known.</div>';
             }
+            var renderedTechPowerCountPb = 0;
             allTechPowers.forEach(powerName => {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
                 var metaTf = resolvePowerTierForUi(safeName, 'tech', charData);
                 if (!powerTierPassesFilter(metaTf, techFilterPb)) return;
+                renderedTechPowerCountPb++;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
                 const metaT = typeof findTechPowerInCacheGlobal === 'function' ? findTechPowerInCacheGlobal(safeName) : null;
                 const icT =
@@ -9827,19 +10464,28 @@ function populatePlayerActionBar() {
                     ? '<img class="bar-power-icon" src="' + escapeHtml(icT) + '" alt="" loading="lazy" />'
                     : '<span class="bar-power-icon-fallback" aria-hidden="true">&#9889;</span>';
                 html +=
-                    '<button type="button" tabindex="-1" class="bar-tech-power-btn" data-power="' +
+                    '<button type="button" tabindex="-1" class="bar-tech-power-btn player-power-card player-power-card--tech" data-power="' +
                     escapeHtml(safeName) +
                     '" data-char-name="' +
                     escapeHtml(charName) +
                     '" onmouseover="showSpellTooltip(\'' +
                     attrPower +
                     '\', event)" onmouseout="hideSpellTooltip()">' +
-                    leftT +
-                    '<span class="bar-power-label">' +
+                    '<span class="player-power-card-name">' +
                     escapeHtml(safeName) +
+                    '</span>' +
+                    leftT +
+                    '<span class="bar-power-label player-power-card-level">' +
+                    escapeHtml(getPowerCardLevelLabel(metaTf)) +
                     '</span></button>';
             });
-            if (allTechPowers.length > 0) html += '</div>';
+            if (allTechPowers.length > 0) {
+                if (renderedTechPowerCountPb === 0) html += '<div class="player-power-empty">No tech powers match this level.</div>';
+                html += '</div></div></div>';
+            } else {
+                html += '</div>';
+            }
+            html += '</div>';
             techPowersEl.innerHTML = html;
             wirePowerLevelFilterButtons(techPowersEl, populatePlayerActionBar);
             techPowersEl.querySelectorAll('.bar-tech-power-btn').forEach(btn => {
@@ -9857,19 +10503,28 @@ function populatePlayerActionBar() {
             forcePowersEl.style.display = 'none';
         } else {
             forcePowersEl.style.display = '';
-            let html = '<span class="section-label">Force Points</span>';
-            html += '<div class="player-bar-points-row">';
-            html += '<span class="points-display" style="color:#ff00ff;">&#9733; ' + forcePts.current + '/' + forcePts.max + '</span>';
-            html += '<button type="button" class="bar-point-btn" onclick="useForcePoint(); populatePlayerActionBar();" title="Use 1">−</button>';
-            html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreForcePoints();" title="Restore all">↺</button>';
-            html += '</div>';
+            var forceTierSummaryPb = getPowerConsoleTierSummary(allForcePowers, 'force');
+            let html = '<div class="player-power-console player-power-console--force">';
+            html += '<div class="player-power-console-head">';
+            html += '<div class="player-power-heading"><span class="section-label">Force Powers</span><span class="player-power-count">' + allForcePowers.length + ' known</span></div>';
+            html += '<div class="player-power-points-card player-power-points-card--force">';
+            html += '<span class="player-power-points-label">Force Points</span>';
+            html += '<span class="player-power-points-value">&#10022; ' + forcePts.current + '<small>/' + forcePts.max + '</small></span>';
+            html += '<span class="player-power-points-spent">' + Math.max(0, forcePts.max - forcePts.current) + ' spent</span>';
+            html += '<span class="player-power-point-actions">';
+            html += '<button type="button" class="bar-point-btn" onclick="useForcePoint(); populatePlayerActionBar();" title="Use 1 force point">&minus;</button>';
+            html += '<button type="button" class="bar-point-btn bar-point-restore" onclick="restoreForcePoints();" title="Restore all force points">&orarr;</button>';
+            html += '</span></div></div>';
             var tierKeysForcePb = [];
             var forceFilterPb = 'all';
             if (allForcePowers.length > 0) {
                 tierKeysForcePb = orderedTierKeysForPowerList(allForcePowers, 'force', charData);
                 forceFilterPb = getStoredPowerLevelFilter('playerBar', 'force');
                 if (forceFilterPb !== 'all' && tierKeysForcePb.indexOf(forceFilterPb) === -1) forceFilterPb = 'all';
-                html += '<span class="section-label">Force Powers</span>';
+                html += '<div class="player-power-console-body">';
+                html += '<div class="player-power-tier-badge player-power-tier-badge--force"><span>' + escapeHtml(forceTierSummaryPb.value) + '</span><small>' + escapeHtml(forceTierSummaryPb.label) + '</small></div>';
+                html += '<div class="player-power-library">';
+                html += '<div class="player-power-filter-label">Force Power Level</div>';
                 html += buildPowerLevelFilterRowHtml(
                     'playerBar',
                     'force',
@@ -9877,13 +10532,19 @@ function populatePlayerActionBar() {
                     tierKeysForcePb,
                     true
                 );
-                html += '<div class="bar-scroll">';
+                html += '<div class="player-power-card-row">';
+            } else {
+                html += '<div class="player-power-console-body player-power-console-body--empty">';
+                html += '<div class="player-power-tier-badge player-power-tier-badge--force"><span>' + escapeHtml(forceTierSummaryPb.value) + '</span><small>' + escapeHtml(forceTierSummaryPb.label) + '</small></div>';
+                html += '<div class="player-power-empty">No force powers known.</div>';
             }
+            var renderedForcePowerCountPb = 0;
             allForcePowers.forEach(powerName => {
                 const safeName = (powerName || '').trim();
                 if (!safeName) return;
                 var metaFf = resolvePowerTierForUi(safeName, 'force', charData);
                 if (!powerTierPassesFilter(metaFf, forceFilterPb)) return;
+                renderedForcePowerCountPb++;
                 const attrPower = safeName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
                 const metaF = typeof findForcePowerInCacheGlobal === 'function' ? findForcePowerInCacheGlobal(safeName) : null;
                 const icF =
@@ -9892,19 +10553,28 @@ function populatePlayerActionBar() {
                     ? '<img class="bar-power-icon" src="' + escapeHtml(icF) + '" alt="" loading="lazy" />'
                     : '<span class="bar-power-icon-fallback" aria-hidden="true">&#9733;</span>';
                 html +=
-                    '<button type="button" tabindex="-1" class="bar-force-power-btn" data-power="' +
+                    '<button type="button" tabindex="-1" class="bar-force-power-btn player-power-card player-power-card--force" data-power="' +
                     escapeHtml(safeName) +
                     '" data-char-name="' +
                     escapeHtml(charName) +
                     '" onmouseover="showSpellTooltip(\'' +
                     attrPower +
                     '\', event)" onmouseout="hideSpellTooltip()">' +
-                    leftF +
-                    '<span class="bar-power-label">' +
+                    '<span class="player-power-card-name">' +
                     escapeHtml(safeName) +
+                    '</span>' +
+                    leftF +
+                    '<span class="bar-power-label player-power-card-level">' +
+                    escapeHtml(getPowerCardLevelLabel(metaFf)) +
                     '</span></button>';
             });
-            if (allForcePowers.length > 0) html += '</div>';
+            if (allForcePowers.length > 0) {
+                if (renderedForcePowerCountPb === 0) html += '<div class="player-power-empty">No force powers match this level.</div>';
+                html += '</div></div></div>';
+            } else {
+                html += '</div>';
+            }
+            html += '</div>';
             forcePowersEl.innerHTML = html;
             wirePowerLevelFilterButtons(forcePowersEl, populatePlayerActionBar);
             forcePowersEl.querySelectorAll('.bar-force-power-btn').forEach(btn => {
@@ -10933,9 +11603,14 @@ function sortParticipantsByInitiative() {
 
 function updateInitiativeList() {
     const list = document.getElementById('initiativeList');
+    const topTracker = document.getElementById('dmTopCombatTracker');
     
     if (!combatState.active || combatState.participants.length === 0) {
-        list.innerHTML = '<div style="padding: 10px;">No active combat</div>';
+        if (list) list.innerHTML = '<div style="padding: 10px;">No active combat</div>';
+        if (topTracker) {
+            topTracker.classList.add('hidden');
+            topTracker.innerHTML = '';
+        }
         return;
     }
 
@@ -10943,6 +11618,61 @@ function updateInitiativeList() {
     
     // FIX: Only DM sees full turn order, players see limited info
     if (isDM) {
+        if (topTracker) {
+            var topHtml =
+                '<div class="dm-top-combat-head">' +
+                '<span class="dm-top-combat-title">Combat Tracker</span>' +
+                '<span class="dm-top-combat-sub">Click initiative to edit. X removes from combat.</span>' +
+                '</div><div class="dm-top-combat-cards">';
+            combatState.participants.forEach((p, index) => {
+                const isActive = p.id === combatState.currentTurn;
+                const initVal = p.initiative !== undefined && p.initiative !== null ? p.initiative : '?';
+                const initNum = typeof p.initiative === 'number' ? p.initiative : null;
+                const escapedEntityId = escapeJs(p.entity_id);
+                const escapedParticipantId = escapeJs(p.id);
+                let displayCurrentHp = p.current_hp;
+                let displayMaxHp = p.max_hp;
+                let portraitUrl = '';
+                if (p.entity_type === 'Enemy' || p.entity_type === 'NPC') {
+                    const enemy = enemies.find(e => e.id === p.entity_id);
+                    if (enemy) {
+                        if (displayMaxHp === undefined && enemy.max_hp !== undefined) displayMaxHp = enemy.max_hp;
+                        if (displayCurrentHp === undefined && enemy.current_hp !== undefined) displayCurrentHp = enemy.current_hp;
+                        else if (displayCurrentHp === undefined && displayMaxHp !== undefined) displayCurrentHp = displayMaxHp;
+                        portraitUrl = normalizePortraitUrl(enemy.portrait_url || enemy.local_portrait || '') || '';
+                    }
+                } else if (p.entity_type === 'Player') {
+                    const char = characters.find(c => c.id === p.entity_id);
+                    if (char) {
+                        if (displayMaxHp === undefined && char.max_hp !== undefined) displayMaxHp = char.max_hp;
+                        if (displayCurrentHp === undefined && char.current_hp !== undefined) displayCurrentHp = char.current_hp;
+                        else if (displayCurrentHp === undefined && displayMaxHp !== undefined) displayCurrentHp = displayMaxHp;
+                        portraitUrl = normalizePortraitUrl(char.portrait_url || char.avatar || char.image || '') || '';
+                    }
+                }
+                const hpDisplay = (displayCurrentHp !== undefined && displayMaxHp !== undefined)
+                    ? `${displayCurrentHp}/${displayMaxHp}`
+                    : (displayMaxHp !== undefined ? `${displayMaxHp}/${displayMaxHp}` : '?/?');
+                const portraitHtml = portraitUrl
+                    ? '<img src="' + escapeHtml(portraitUrl) + '" alt="" loading="lazy">'
+                    : '<span>' + escapeHtml(String((p.name || '?').charAt(0)).toUpperCase()) + '</span>';
+                topHtml +=
+                    '<div class="dm-top-combat-card ' + (isActive ? 'is-active' : '') + '">' +
+                    '<button type="button" class="dm-top-combat-remove" onclick="event.stopPropagation(); removeFromCombat(\'' + escapedParticipantId + '\')" title="Remove from combat">x</button>' +
+                    '<div class="dm-top-combat-img">' + portraitHtml + '</div>' +
+                    '<div class="dm-top-combat-name" title="' + escapeHtml(p.name || 'Participant') + '">' + escapeHtml(p.name || 'Participant') + '</div>' +
+                    '<button type="button" class="dm-top-combat-init" onclick="promptSetInitiative(\'' + escapedEntityId + '\', ' + (initNum !== null ? initNum : 'null') + ', \'' + escapedParticipantId + '\')" title="Click to set initiative">Init ' + initVal + '</button>' +
+                    '<div class="dm-top-combat-hp">HP ' + escapeHtml(hpDisplay) + '</div>' +
+                    '</div>';
+            });
+            topHtml += '</div>';
+            topTracker.innerHTML = topHtml;
+            topTracker.classList.remove('hidden');
+        }
+        if (list) {
+            list.innerHTML = '<div style="padding: 10px; opacity: 0.75;">DM combat tracker is shown at the top of the map.</div>';
+        }
+        return;
         // DM sees full initiative list with clear header; initiative values are clickable to change
         let html = '<div style="font-weight: bold; color: #4a9eff; margin-bottom: 10px; padding: 8px; background: rgba(74,158,255,0.2); border-radius: 5px;">🎯 Full Turn Order (DM Only) — click initiative to change</div>';
         combatState.participants.forEach((p, index) => {
@@ -11014,6 +11744,10 @@ function updateInitiativeList() {
         });
         list.innerHTML = html;
     } else {
+        if (topTracker) {
+            topTracker.classList.add('hidden');
+            topTracker.innerHTML = '';
+        }
         // Players see limited info - just current turn and their character
         const currentParticipant = combatState.participants.find(p => p.id === combatState.currentTurn);
         const myParticipant = combatState.participants.find(p => p.entity_id === myCharacterId);
@@ -11947,7 +12681,7 @@ function clearCurrentMap() {
     measurementShapes = [];
     rulerStart = null;
     rulerEnd = null;
-    playerMapViewport = { enabled: false, x: 0, y: 0, width: 640, height: 480 };
+    playerMapViewport = { enabled: false, hidden: false, x: 0, y: 0, width: 640, height: 480 };
     dmPlayerViewportToolActive = false;
     playerViewportDrag = null;
     syncPlayerViewportCheckbox();
@@ -14195,12 +14929,12 @@ function useLegendaryAction(enemyId, storageKey, cost, actionName, enemyName) {
         remainingEl.textContent = `${newRemaining}/${legendaryUsage.max}`;
         remainingEl.style.color = newRemaining > 0 ? '#44ff44' : '#ff4444';
     }
-    const barRemainingEl = document.getElementById(`dmbar-legendary-remaining-${enemyId}`);
-    if (barRemainingEl) {
+    const barRemainingEls = Array.from(document.querySelectorAll('[id^="dmbar-legendary-remaining-"]')).filter((el) => el.id === `dmbar-legendary-remaining-${enemyId}`);
+    barRemainingEls.forEach((barRemainingEl) => {
         const newRemaining = legendaryUsage.max - legendaryUsage.used;
         barRemainingEl.textContent = `${newRemaining}/${legendaryUsage.max}`;
         barRemainingEl.style.color = newRemaining > 0 ? '#44ff44' : '#ff4444';
-    }
+    });
     
     // Log the action
     addLogEntry(`${enemyName} used legendary action: ${actionName} (Cost: ${cost})`, 'info');
@@ -14209,6 +14943,7 @@ function useLegendaryAction(enemyId, storageKey, cost, actionName, enemyName) {
     const enemy = enemies.find(e => e.id === enemyId);
     if (enemy && selectedToken && selectedToken.entity_id === enemyId) {
         if (typeof refreshSelectedDmEnemyActionBar === 'function') refreshSelectedDmEnemyActionBar();
+        updateTokenInfo();
         const sheetModal = document.getElementById('characterSheetModal');
         if (sheetModal && sheetModal.classList.contains('active')) {
             setTimeout(() => {
@@ -14230,16 +14965,17 @@ function resetLegendaryActions(enemyId, storageKey) {
         remainingEl.textContent = `${legendaryUsage.max}/${legendaryUsage.max}`;
         remainingEl.style.color = '#44ff44';
     }
-    const barRemainingEl = document.getElementById(`dmbar-legendary-remaining-${enemyId}`);
-    if (barRemainingEl) {
+    const barRemainingEls = Array.from(document.querySelectorAll('[id^="dmbar-legendary-remaining-"]')).filter((el) => el.id === `dmbar-legendary-remaining-${enemyId}`);
+    barRemainingEls.forEach((barRemainingEl) => {
         barRemainingEl.textContent = `${legendaryUsage.max}/${legendaryUsage.max}`;
         barRemainingEl.style.color = '#44ff44';
-    }
+    });
     
     // Refresh visible UI
     const enemy = enemies.find(e => e.id === enemyId);
     if (enemy && selectedToken && selectedToken.entity_id === enemyId) {
         if (typeof refreshSelectedDmEnemyActionBar === 'function') refreshSelectedDmEnemyActionBar();
+        updateTokenInfo();
         const sheetModal = document.getElementById('characterSheetModal');
         if (sheetModal && sheetModal.classList.contains('active')) {
             setTimeout(() => {
@@ -14586,9 +15322,42 @@ function renderConditionsSection() {
 // SW5e compendium in SQLite (hydrated from static/data/sw5e_compendium at Rust server startup)
 const SW5E_INFO_PAGE = 45;
 let sw5eInfoBrowse = { cat: '', offset: 0, total: 0, loading: false, done: false };
+let sw5eInfoSearchTimer = null;
+let sw5eInfoSearchSeq = 0;
+let sw5eInfoCategoryCache = {};
+
+function appendSw5eInfoEntry(listEl, it) {
+    if (!listEl || !it) return;
+    const wrap = document.createElement('details');
+    wrap.style.cssText = 'margin-bottom: 10px; border: 1px solid #444; border-radius: 6px; padding: 8px 10px; background: rgba(0,0,0,0.25);';
+    const sum = document.createElement('summary');
+    sum.style.cssText = 'cursor: pointer; font-weight: 600; color: #4a9eff; display: flex; align-items: center; gap: 8px;';
+    const j = it.json != null ? it.json : {};
+    const iconU = safeSw5eCompendiumIconUrl(j._icon_url_app);
+    if (iconU) {
+        const im = document.createElement('img');
+        im.src = iconU;
+        im.alt = '';
+        im.loading = 'lazy';
+        im.style.cssText = 'width:28px;height:28px;object-fit:contain;border-radius:4px;flex-shrink:0;border:1px solid #333;';
+        sum.appendChild(im);
+    }
+    const lab = document.createElement('span');
+    lab.textContent = it.name || it.id || 'Entry';
+    sum.appendChild(lab);
+    const pre = document.createElement('pre');
+    pre.style.cssText =
+        'margin: 10px 0 0 0; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; color: #ccc;';
+    pre.textContent = JSON.stringify(it.json != null ? it.json : {}, null, 2);
+    wrap.appendChild(sum);
+    wrap.appendChild(pre);
+    listEl.appendChild(wrap);
+}
 
 function onSw5eInfoScroll(ev) {
     const el = ev.target;
+    const search = document.getElementById('sw5eInfoSearchInput');
+    if (search && search.value.trim()) return;
     if (!el || sw5eInfoBrowse.loading || sw5eInfoBrowse.done) return;
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 140) loadMoreSw5eEntries();
 }
@@ -14611,30 +15380,7 @@ async function loadMoreSw5eEntries() {
         const items = data.items || [];
         sw5eInfoBrowse.total = data.total || 0;
         for (const it of items) {
-            const wrap = document.createElement('details');
-            wrap.style.cssText = 'margin-bottom: 10px; border: 1px solid #444; border-radius: 6px; padding: 8px 10px; background: rgba(0,0,0,0.25);';
-            const sum = document.createElement('summary');
-            sum.style.cssText = 'cursor: pointer; font-weight: 600; color: #4a9eff; display: flex; align-items: center; gap: 8px;';
-            const j = it.json != null ? it.json : {};
-            const iconU = safeSw5eCompendiumIconUrl(j._icon_url_app);
-            if (iconU) {
-                const im = document.createElement('img');
-                im.src = iconU;
-                im.alt = '';
-                im.loading = 'lazy';
-                im.style.cssText = 'width:28px;height:28px;object-fit:contain;border-radius:4px;flex-shrink:0;border:1px solid #333;';
-                sum.appendChild(im);
-            }
-            const lab = document.createElement('span');
-            lab.textContent = it.name || it.id || 'Entry';
-            sum.appendChild(lab);
-            const pre = document.createElement('pre');
-            pre.style.cssText =
-                'margin: 10px 0 0 0; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; color: #ccc;';
-            pre.textContent = JSON.stringify(it.json != null ? it.json : {}, null, 2);
-            wrap.appendChild(sum);
-            wrap.appendChild(pre);
-            listEl.appendChild(wrap);
+            appendSw5eInfoEntry(listEl, it);
         }
         sw5eInfoBrowse.offset += items.length;
         if (sw5eInfoBrowse.offset >= sw5eInfoBrowse.total || items.length === 0) sw5eInfoBrowse.done = true;
@@ -14655,9 +15401,87 @@ function resetSw5eInfoBrowse(cat) {
     sw5eInfoBrowse = { cat, offset: 0, total: 0, loading: false, done: false };
     const listEl = document.getElementById('sw5eInfoList');
     const footer = document.getElementById('sw5eInfoFooter');
+    const search = document.getElementById('sw5eInfoSearchInput');
     if (listEl) listEl.innerHTML = '';
     if (footer) footer.textContent = cat ? 'Loading…' : '';
+    if (search) search.value = '';
     if (cat) loadMoreSw5eEntries();
+}
+
+async function fetchAllSw5eInfoCategory(cat) {
+    if (!cat) return [];
+    if (sw5eInfoCategoryCache[cat]) return sw5eInfoCategoryCache[cat];
+
+    const pageSize = 500;
+    let offset = 0;
+    let total = Infinity;
+    const rows = [];
+    while (offset < total) {
+        const u = new URL('/api/compendium/sw5e/browse', window.location.origin);
+        u.searchParams.set('category', cat);
+        u.searchParams.set('offset', String(offset));
+        u.searchParams.set('limit', String(pageSize));
+        const r = await fetch(u.toString());
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || r.statusText);
+        const items = data.items || [];
+        total = Number.isFinite(data.total) ? data.total : rows.length + items.length;
+        rows.push(...items);
+        offset += items.length;
+        if (!items.length) break;
+    }
+    sw5eInfoCategoryCache[cat] = rows;
+    return rows;
+}
+
+function sw5eInfoEntryMatches(it, query) {
+    if (!query) return true;
+    const haystack = [
+        it && it.name,
+        it && it.id,
+        it && it.json ? JSON.stringify(it.json) : ''
+    ].join(' ').toLowerCase();
+    return query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean)
+        .every((term) => haystack.includes(term));
+}
+
+async function runSw5eInfoSearch() {
+    const seq = ++sw5eInfoSearchSeq;
+    const sel = document.getElementById('sw5eInfoCategorySelect');
+    const input = document.getElementById('sw5eInfoSearchInput');
+    const listEl = document.getElementById('sw5eInfoList');
+    const footer = document.getElementById('sw5eInfoFooter');
+    const cat = sel ? sel.value : sw5eInfoBrowse.cat;
+    const query = input ? input.value.trim() : '';
+    if (!listEl || !footer || !cat) return;
+
+    listEl.innerHTML = '';
+    if (!query) {
+        resetSw5eInfoBrowse(cat);
+        return;
+    }
+
+    footer.textContent = 'Searching…';
+    try {
+        const rows = await fetchAllSw5eInfoCategory(cat);
+        if (seq !== sw5eInfoSearchSeq) return;
+        const matches = rows.filter((it) => sw5eInfoEntryMatches(it, query)).slice(0, 150);
+        matches.forEach((it) => appendSw5eInfoEntry(listEl, it));
+        footer.textContent = matches.length
+            ? `Found ${matches.length}${matches.length === 150 ? '+' : ''} matching entries for "${query}"`
+            : `No entries found for "${query}" in this category.`;
+    } catch (e) {
+        console.error(e);
+        footer.textContent = 'Search error: ' + (e.message || e);
+    }
+}
+
+function queueSw5eInfoSearch() {
+    if (sw5eInfoSearchTimer) clearTimeout(sw5eInfoSearchTimer);
+    sw5eInfoSearchTimer = setTimeout(runSw5eInfoSearch, 180);
 }
 
 function renderSw5eCompendiumSection() {
@@ -14690,6 +15514,10 @@ function renderSw5eCompendiumSection() {
                         <select id="sw5eInfoCategorySelect" style="flex:1;min-width:200px;padding:8px;background:#1a1a2e;color:#eee;border:1px solid #444;border-radius:5px;">${opts}</select>
                         <button type="button" id="sw5eInfoReloadBtn" style="padding:8px 14px;background:#4a9eff;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:bold;">↻ Reload list</button>
                     </label>
+                    <label style="display:flex;align-items:center;gap:10px;margin-top:10px;">
+                        <span style="opacity:0.9;white-space:nowrap;">Search</span>
+                        <input type="search" id="sw5eInfoSearchInput" placeholder="Search names, rules text, item data..." autocomplete="off" style="flex:1;min-width:220px;padding:9px 10px;background:#101827;color:#eee;border:1px solid #4a9eff;border-radius:5px;">
+                    </label>
                     <p id="sw5eInfoMeta" style="margin-top:8px;font-size:12px;opacity:0.75;">Total rows in DB (all categories): <strong>${escapeHtml(String(totalRows))}</strong></p>
                 </div>
                 <div id="sw5eInfoScroll" onscroll="onSw5eInfoScroll(event)" style="max-height:48vh;overflow-y:auto;border:1px solid #333;border-radius:8px;padding:10px;background:#111119;">
@@ -14699,6 +15527,7 @@ function renderSw5eCompendiumSection() {
             `;
             const sel = document.getElementById('sw5eInfoCategorySelect');
             const btn = document.getElementById('sw5eInfoReloadBtn');
+            const search = document.getElementById('sw5eInfoSearchInput');
             const pickInitial = () => {
                 let v = (sel && sel.value) || '';
                 if (!v && cats.length) {
@@ -14711,6 +15540,7 @@ function renderSw5eCompendiumSection() {
             const run = () => resetSw5eInfoBrowse(pickInitial());
             if (sel) sel.addEventListener('change', run);
             if (btn) btn.addEventListener('click', run);
+            if (search) search.addEventListener('input', queueSw5eInfoSearch);
             run();
         })
         .catch((e) => {
@@ -22171,6 +23001,7 @@ async function saveGameState() {
         
         playerMapViewport: {
             enabled: playerMapViewport.enabled,
+            hidden: !!playerMapViewport.hidden,
             x: playerMapViewport.x,
             y: playerMapViewport.y,
             width: playerMapViewport.width,

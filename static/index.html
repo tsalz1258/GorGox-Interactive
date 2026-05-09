@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=163">
+    <link rel="stylesheet" href="/static/style.css?v=171">
 </head>
 <body>
     <div id="app">
@@ -85,6 +85,8 @@
                 </div>
             </header>
 
+            <div id="dmTopCombatTracker" class="dm-top-combat-tracker hidden" aria-label="DM combat tracker"></div>
+
             <!-- Main Content -->
             <div class="main-container">
                 <!-- Left Sidebar - Controls -->
@@ -126,8 +128,12 @@
                                     <input type="checkbox" id="playerViewportEnabled" onchange="onPlayerViewportEnabledChange()">
                                     <span>Players only see inside the box</span>
                                 </label>
+                                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px;">
+                                    <input type="checkbox" id="playerMapHidden" onchange="onPlayerMapHiddenChange()">
+                                    <span>Hide entire map from players</span>
+                                </label>
                                 <button type="button" id="playerViewportToolBtn" onclick="togglePlayerViewportTool()" style="width:100%;margin-bottom:6px;background:#2a3a5a;color:#fff;">📐 Move / resize box</button>
-                                <p style="font-size:10px;opacity:0.7;margin:0;line-height:1.35;">You always see the full map. Turn on, then use the tool to drag the cyan window. Players get fog outside it.</p>
+                                <p style="font-size:10px;opacity:0.7;margin:0;line-height:1.35;">You always see the full map. Use the box for fog, or hide the map entirely while you add things.</p>
                             </div>
                         </div>
 
@@ -1126,7 +1132,7 @@
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=20"></script>
-    <script src="/static/app.js?v=163"></script>
+    <script src="/static/app.js?v=171"></script>
     <script type="module" src="/static/js/sw5e-builder/bootstrap.js?v=2"></script>
     <script>
         // Verify connect function is available
@@ -1172,7 +1178,7 @@
                     <div class="player-bar-section player-bar-saves" id="playerBarSaves"></div>
                     <div class="player-bar-section player-bar-skills" id="playerBarSkills"></div>
                 </div>
-                <div class="player-bar-tab-panel" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">
+                <div class="player-bar-tab-panel player-powers-console-shell" id="playerBarPanelPowers" data-tab="powers" role="tabpanel">
                     <div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>
                     <div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>
                 </div>

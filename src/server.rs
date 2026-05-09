@@ -810,6 +810,7 @@ async fn handle_client_message(
             let vp = gs.player_map_viewport.clone();
             let vp_msg = ServerMessage::PlayerMapViewportUpdated {
                 enabled: vp.enabled,
+                hidden: vp.hidden,
                 x: vp.x,
                 y: vp.y,
                 width: vp.width,
@@ -1399,6 +1400,7 @@ async fn handle_client_message(
             let vp = gs.player_map_viewport.clone();
             let vp_msg = ServerMessage::PlayerMapViewportUpdated {
                 enabled: vp.enabled,
+                hidden: vp.hidden,
                 x: vp.x,
                 y: vp.y,
                 width: vp.width,
@@ -1679,6 +1681,7 @@ async fn handle_client_message(
             broadcast_message(clients, &map_loaded).await;
             let vp_msg = ServerMessage::PlayerMapViewportUpdated {
                 enabled: vp.enabled,
+                hidden: vp.hidden,
                 x: vp.x,
                 y: vp.y,
                 width: vp.width,
@@ -2066,6 +2069,7 @@ async fn handle_client_message(
                 broadcast_message(clients, &map_loaded).await;
                 let vp_msg = ServerMessage::PlayerMapViewportUpdated {
                     enabled: player_map_viewport.enabled,
+                    hidden: player_map_viewport.hidden,
                     x: player_map_viewport.x,
                     y: player_map_viewport.y,
                     width: player_map_viewport.width,
@@ -2138,6 +2142,7 @@ async fn handle_client_message(
             broadcast_message(clients, &token_update).await;
             let vp_msg = ServerMessage::PlayerMapViewportUpdated {
                 enabled: vp.enabled,
+                hidden: vp.hidden,
                 x: vp.x,
                 y: vp.y,
                 width: vp.width,
@@ -2227,6 +2232,7 @@ async fn handle_client_message(
         
         ClientMessage::SetPlayerMapViewport {
             enabled,
+            hidden,
             x,
             y,
             width,
@@ -2259,6 +2265,7 @@ async fn handle_client_message(
             }
             let mut gs = game_state.write().await;
             gs.player_map_viewport.enabled = enabled;
+            gs.player_map_viewport.hidden = hidden;
             gs.player_map_viewport.x = vx;
             gs.player_map_viewport.y = vy;
             gs.player_map_viewport.width = w;
@@ -2267,6 +2274,7 @@ async fn handle_client_message(
             drop(gs);
             let msg = ServerMessage::PlayerMapViewportUpdated {
                 enabled: vp.enabled,
+                hidden: vp.hidden,
                 x: vp.x,
                 y: vp.y,
                 width: vp.width,

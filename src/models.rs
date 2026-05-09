@@ -148,6 +148,8 @@ pub struct PlayerConnection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerMapViewport {
     pub enabled: bool,
+    #[serde(default)]
+    pub hidden: bool,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -158,6 +160,7 @@ impl Default for PlayerMapViewport {
     fn default() -> Self {
         Self {
             enabled: false,
+            hidden: false,
             x: 0.0,
             y: 0.0,
             width: 640.0,
@@ -230,6 +233,8 @@ pub enum ClientMessage {
     // Player map viewport (DM): fog-of-war style window for non-DM clients
     SetPlayerMapViewport {
         enabled: bool,
+        #[serde(default)]
+        hidden: bool,
         x: f32,
         y: f32,
         width: f32,
@@ -310,6 +315,7 @@ pub enum ServerMessage {
     },
     PlayerMapViewportUpdated {
         enabled: bool,
+        hidden: bool,
         x: f32,
         y: f32,
         width: f32,
