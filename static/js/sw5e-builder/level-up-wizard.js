@@ -14,7 +14,9 @@ import {
     getOtherItemChoicesAtLevel,
     getArchetypeItemGrantsAtLevel,
     extractTechPowersKnownCount,
-    extractForcePowersKnownCount
+    extractForcePowersKnownCount,
+    getTechPowersLearnedAtLevel,
+    getMaxTechPowerLevelForClassLevel
 } from './progression.js';
 
 function esc(s) {
@@ -34,7 +36,108 @@ function plainSnippet(text, max) {
     return t.slice(0, max) + '…';
 }
 
+function rowDescription(row) {
+    return (
+        row?.description ||
+        row?.Description ||
+        row?.Descrption ||
+        (row?.system && row.system.description && row.system.description.value) ||
+        ''
+    );
+}
+
+function renderChoicePreview(title, metaBits, description, emptyText) {
+    const cleanTitle = String(title || '').trim();
+    const cleanDesc = plainSnippet(description, 1200);
+    if (!cleanTitle && !cleanDesc) {
+        return `<p class="sw5e-wiz-hint">${esc(emptyText || 'Choose an option to preview details.')}</p>`;
+    }
+    const meta = (metaBits || []).filter(Boolean);
+    return `<div class="sw5e-lu-preview-title">${esc(cleanTitle || 'Details')}</div>
+      ${meta.length ? `<div class="sw5e-lu-preview-meta">${meta.map((x) => `<span>${esc(x)}</span>`).join('')}</div>` : ''}
+      <p>${esc(cleanDesc || 'No description available in the bundled compendium.')}</p>`;
+}
+
 const ABILITIES = ['Strength', 'Dexterity', 'Constitution', 'Intelligence', 'Wisdom', 'Charisma'];
+const COMPENDIUM_BASE = '/static/data/sw5e_compendium';
+let techPowerRowsPromise = null;
+
+async function getTechPowerRows() {
+    if (!techPowerRowsPromise) {
+        techPowerRowsPromise = fetch(`${COMPENDIUM_BASE}/techpowers_from_packs.json`, { cache: 'no-cache' })
+            .then((r) => {
+                if (!r.ok) throw new Error(`Failed to load tech powers: ${r.status}`);
+                return r.json();
+            })
+            .catch(() => []);
+    }
+    return techPowerRowsPromise;
+}
+
+function normalizePowerName(s) {
+    return String(s || '')
+        .trim()
+        .toLowerCase();
+}
+
+function powerLevelNumber(raw) {
+    const s = String(raw ?? '')
+        .trim()
+        .toLowerCase();
+    if (!s || s === 'at-will' || s === 'at will' || s === '0') return 0;
+    const m = s.match(/\d+/);
+    return m ? parseInt(m[0], 10) : 99;
+}
+
+function collectKnownPowerNames(charData, kind) {
+    const out = new Set();
+    const listKey = kind === 'force' ? 'forcePowers' : 'techPowers';
+    const detailKey = kind === 'force' ? 'forcePowerDetails' : 'techPowerDetails';
+    function add(v) {
+        const name = typeof v === 'string' ? v : v && (v.name || v.Name);
+        if (name) out.add(normalizePowerName(name));
+    }
+    if (Array.isArray(charData[listKey])) charData[listKey].forEach(add);
+    if (Array.isArray(charData[detailKey])) charData[detailKey].forEach(add);
+    (charData.classes || []).forEach((cls) => {
+        if (Array.isArray(cls[listKey])) cls[listKey].forEach(add);
+        if (Array.isArray(cls[detailKey])) cls[detailKey].forEach(add);
+    });
+    return out;
+}
+
+function addKnownTechPower(charData, powerRow) {
+    if (!powerRow || !powerRow.name) return;
+    const name = powerRow.name;
+    if (!Array.isArray(charData.techPowers)) charData.techPowers = [];
+    if (!Array.isArray(charData.techPowerDetails)) charData.techPowerDetails = [];
+    if (!charData.classes) charData.classes = [{}];
+    if (!charData.classes[0]) charData.classes[0] = {};
+    if (!Array.isArray(charData.classes[0].techPowers)) charData.classes[0].techPowers = [];
+    if (!Array.isArray(charData.classes[0].techPowerDetails)) charData.classes[0].techPowerDetails = [];
+
+    const known = collectKnownPowerNames(charData, 'tech');
+    if (known.has(normalizePowerName(name))) return;
+    const detail = {
+        name,
+        level: powerRow.level ?? '',
+        source: powerRow.source || '',
+        _stable_id: powerRow._stable_id || '',
+        _fvtt_id: powerRow._fvtt_id || ''
+    };
+    charData.techPowers.push(name);
+    charData.techPowerDetails.push(detail);
+    charData.classes[0].techPowers.push(name);
+    charData.classes[0].techPowerDetails.push(detail);
+}
+
+function addLevelUpFeat(charData, featName, level) {
+    if (!featName) return;
+    if (!Array.isArray(charData.feats)) charData.feats = [];
+    const key = normalizePowerName(featName);
+    const exists = charData.feats.some((feat) => normalizePowerName(typeof feat === 'string' ? feat : feat && (feat.name || feat.Name)) === key);
+    if (!exists) charData.feats.push({ name: featName, source: 'level-up', level });
+}
 
 function deriveClassStemFromSheet(charData, charRow) {
     const raw =
@@ -52,31 +155,65 @@ function findClassDoc(charData, registry, charRow) {
         charData.classes &&
         charData.classes[0] &&
         (charData.classes[0].classSlug || charData.classes[0]._class_slug || charData.classes[0]._classSlug);
+    const first = stem.split(/\s+/)[0]?.toLowerCase() || '';
+    const slugGuess = first.replace(/[^a-z0-9]/g, '');
+    const stemTokens = stem
+        .toLowerCase()
+        .split(/\s+/)
+        .map((x) => x.replace(/[^a-z0-9]/g, ''))
+        .filter(Boolean);
     if (slugFromChar) {
         const doc = registry.classesBySlug.get(String(slugFromChar).toLowerCase());
         if (doc) return doc;
     }
-    const first = stem.split(/\s+/)[0]?.toLowerCase() || '';
     for (let i = 0; i < registry.classes.length; i++) {
         const c = registry.classes[i];
         if (String(c.name).toLowerCase() === first || String(c._class_slug).toLowerCase() === first) return c;
     }
-    const slugGuess = first.replace(/[^a-z0-9]/g, '');
-    return registry.classesBySlug.get(slugGuess) || registry.classesBySlug.get(first.replace(/\s+/g, '')) || null;
+    const tokenMatches = (registry.classes || [])
+        .map((c) => {
+            const nameKey = String(c.name || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, '');
+            const slugKey = String(c._class_slug || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, '');
+            const nameIdx = nameKey ? stemTokens.lastIndexOf(nameKey) : -1;
+            const slugIdx = slugKey ? stemTokens.lastIndexOf(slugKey) : -1;
+            return { doc: c, idx: Math.max(nameIdx, slugIdx) };
+        })
+        .filter((x) => x.idx >= 0)
+        .sort((a, b) => b.idx - a.idx);
+    const finalMatch =
+        registry.classesBySlug.get(slugGuess) ||
+        registry.classesBySlug.get(first.replace(/\s+/g, '')) ||
+        (tokenMatches[0] ? tokenMatches[0].doc : null);
+    return finalMatch;
 }
 
-function getTotalLevel(charData) {
-    if (!charData || !Array.isArray(charData.classes)) return 1;
-    return charData.classes.reduce((s, c) => s + (Number(c.levels) || 0), 0) || 1;
+function getTotalLevel(charData, charRow) {
+    if (!charData) return 1;
+    if (Array.isArray(charData.classes) && charData.classes.length) {
+        const classTotal = charData.classes.reduce((s, c) => {
+            const lv = Number(c.levels ?? c.level ?? c.lvl);
+            return s + (Number.isFinite(lv) ? lv : 0);
+        }, 0);
+        if (classTotal > 0) return classTotal;
+    }
+    const topLevel = Number(charData.level ?? charRow?.level);
+    return Number.isFinite(topLevel) && topLevel > 0 ? topLevel : 1;
 }
 
-function setTotalLevelSingleClass(charData, newLevel) {
+function setTotalLevelSingleClass(charData, newLevel, classDoc) {
     if (!charData.classes) charData.classes = [{}];
     if (!charData.classes[0]) charData.classes[0] = { name: 'Adventurer', levels: 1 };
     charData.classes[0].levels = newLevel;
-    const nm = charData.classes[0].name || 'Class';
-    const baseName = String(nm).replace(/\s+\d+$/, '').split(/\s+/)[0] || nm;
+    charData.classes[0].level = newLevel;
+    const matchedName = classDoc && classDoc.name ? String(classDoc.name) : '';
+    const nm = matchedName || charData.classes[0].name || 'Class';
+    const baseName = matchedName || String(nm).replace(/\s+\d+$/, '').split(/\s+/)[0] || nm;
     charData.classes[0].name = baseName;
+    if (classDoc && classDoc._class_slug) charData.classes[0]._class_slug = String(classDoc._class_slug).toLowerCase();
     charData.level = newLevel;
     charData.class = `${baseName} ${newLevel}`;
 }
@@ -164,10 +301,11 @@ export async function mountSw5eLevelUpWizard(characterId) {
             return;
         }
 
-        const [registry, invMap, archetypeFeatNames] = await Promise.all([
+        const [registry, invMap, archetypeFeatNames, techPowerRows] = await Promise.all([
             loadSw5eRegistry(),
             getInvocationFvttToNameMap(),
-            getArchetypeFeatureFvttToNameMap()
+            getArchetypeFeatureFvttToNameMap(),
+            getTechPowerRows()
         ]);
 
         const classDoc = findClassDoc(charData, registry, charRow);
@@ -177,7 +315,7 @@ export async function mountSw5eLevelUpWizard(characterId) {
             return;
         }
 
-        const currentLevel = getTotalLevel(charData);
+        const currentLevel = getTotalLevel(charData, charRow);
         if (currentLevel >= 20) {
             body.innerHTML = '<p>Already level 20.</p>';
             return;
@@ -204,6 +342,24 @@ export async function mountSw5eLevelUpWizard(characterId) {
         const classGrantsTable = getClassItemGrantsAtLevel(classDoc, nextLevel);
         const otherChoices = getOtherItemChoicesAtLevel(classDoc, nextLevel);
         const cfRowsLvl = featuresFromCompendiumForLevel(registry, classSlug, nextLevel);
+        const techPowersToLearn = getTechPowersLearnedAtLevel(classSlug, currentLevel, nextLevel);
+        const maxTechPowerLevel = getMaxTechPowerLevelForClassLevel(classSlug, nextLevel);
+        const knownTechPowerNames = collectKnownPowerNames(charData, 'tech');
+        const eligibleTechPowers = (techPowerRows || [])
+            .filter((p) => p && p.name && powerLevelNumber(p.level) <= (maxTechPowerLevel ?? 9))
+            .filter((p) => !knownTechPowerNames.has(normalizePowerName(p.name)))
+            .sort((a, b) => powerLevelNumber(a.level) - powerLevelNumber(b.level) || String(a.name).localeCompare(String(b.name)));
+        const featOptions = (registry.feats || [])
+            .filter((f) => f && (f.name || f.Name))
+            .map((f) => ({ name: f.name || f.Name, source: f.source || f.Source || '' }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        const featByName = new Map();
+        (registry.feats || []).forEach((f) => {
+            const name = f && (f.name || f.Name);
+            if (name && !featByName.has(name)) featByName.set(name, f);
+        });
+        const techPowerByChoiceId = new Map();
+        eligibleTechPowers.forEach((p) => techPowerByChoiceId.set(String(p._stable_id || p.name), p));
 
         let archetypeGrantNames = [];
         if (archetypeDoc && !subChoice) {
@@ -230,9 +386,11 @@ export async function mountSw5eLevelUpWizard(characterId) {
         const techHints = cfRowsLvl.length ? extractTechPowersKnownCount(cfRowsLvl) : null;
         const forceHints = cfRowsLvl.length ? extractForcePowersKnownCount(cfRowsLvl) : null;
         const techLine =
-            pc.tech && pc.tech !== 'none' && techHints != null
-                ? `You may gain <strong>${techHints}</strong> new tech power(s) known (see level features text). Update known powers on your sheet after applying.`
-                : '';
+            pc.tech && pc.tech !== 'none' && techPowersToLearn > 0
+                ? `You learn <strong>${techPowersToLearn}</strong> new tech power(s) known. Choose ${techPowersToLearn === 1 ? 'it' : 'them'} below.`
+                : pc.tech && pc.tech !== 'none' && techHints != null
+                  ? `Tech powers known are governed by the ${esc(classDoc.name)} table.`
+                  : '';
         const forceLine =
             pc.force && pc.force !== 'none' && forceHints != null
                 ? `You may gain <strong>${forceHints}</strong> new force power(s) known. Update on sheet after applying.`
@@ -256,7 +414,7 @@ export async function mountSw5eLevelUpWizard(characterId) {
                     `<strong>Hit points:</strong> roll <strong>d${hd} + ${conMod}</strong> (CON), or take the average from the class table — then enter the amount below. Draft default assumes maximum die roll (${hd}+${conMod}).`
                 );
             if (g.type === 'AbilityScoreImprovement')
-                bulletLines.push('<strong>Ability Score Improvement:</strong> +2 to one score, +1/+1 split, or a feat.');
+                bulletLines.push('<strong>Ability Score Improvement:</strong> choose either +2 to one score, +1/+1 split, or one feat.');
         });
 
         if (grantNamesFromAdv.length) {
@@ -323,15 +481,37 @@ export async function mountSw5eLevelUpWizard(characterId) {
       </section>`;
 
         const fieldsAsi = isAsi
-            ? `<section class="sw5e-lu-section sw5e-lu-action"><h4>Ability Score Improvement</h4>
-           <p class="sw5e-wiz-hint">+2 one ability or +1/+1 (same ability twice picks +2). Leave both empty if you take a feat only.</p>
-           <label>First adjustment <select id="sw5eLuAsi1" class="sw5e-wiz-select"><option value="">— none —</option>
+            ? `<section class="sw5e-lu-section sw5e-lu-action"><h4>Ability Score Improvement or Feat</h4>
+           <p class="sw5e-wiz-hint">Choose ability increases <strong>or</strong> one feat. If you select a feat, leave both ability adjustments empty.</p>
+           <div class="sw5e-lu-choice-grid">
+           <label>First ability adjustment <select id="sw5eLuAsi1" class="sw5e-wiz-select"><option value="">— none —</option>
              <option>Strength</option><option>Dexterity</option><option>Constitution</option>
              <option>Intelligence</option><option>Wisdom</option><option>Charisma</option></select></label>
-           <label>Second adjustment <select id="sw5eLuAsi2" class="sw5e-wiz-select"><option value="">— none —</option>
+           <label>Second ability adjustment <select id="sw5eLuAsi2" class="sw5e-wiz-select"><option value="">— none —</option>
              <option>Strength</option><option>Dexterity</option><option>Constitution</option>
-             <option>Intelligence</option><option>Wisdom</option><option>Charisma</option></select></label></section>`
+             <option>Intelligence</option><option>Wisdom</option><option>Charisma</option></select></label>
+           <label>Feat instead <select id="sw5eLuFeat" class="sw5e-wiz-select"><option value="">— no feat / use ASI —</option>
+             ${featOptions.map((f) => `<option value="${esc(f.name)}">${esc(f.name)}${f.source ? ` (${esc(f.source)})` : ''}</option>`).join('')}</select></label>
+           </div>
+           <div id="sw5eLuFeatPreview" class="sw5e-lu-choice-preview">${renderChoicePreview('', [], '', 'Choose a feat to preview what it does.')}</div></section>`
             : '';
+
+        const fieldsTechPowers =
+            techPowersToLearn > 0
+                ? `<section class="sw5e-lu-section sw5e-lu-action"><h4>New Tech Power${techPowersToLearn > 1 ? 's' : ''}</h4>
+           <p class="sw5e-wiz-hint">${esc(classDoc.name)} ${nextLevel} learns ${techPowersToLearn} new tech power${techPowersToLearn > 1 ? 's' : ''}. Max power level: <strong>${maxTechPowerLevel}</strong>.</p>
+           <div class="sw5e-lu-choice-grid">
+           ${Array.from({ length: techPowersToLearn })
+               .map(
+                   (_, i) => `<label>Tech power ${i + 1}<select id="sw5eLuTechPower${i}" class="sw5e-wiz-select"><option value="">— choose tech power —</option>
+             ${eligibleTechPowers
+                 .map((p) => `<option value="${esc(p._stable_id || p.name)}">${esc(p.name)} (${esc(p.level || 'At-will')})</option>`)
+                 .join('')}</select></label>
+             <div id="sw5eLuTechPowerPreview${i}" class="sw5e-lu-choice-preview">${renderChoicePreview('', [], '', 'Choose a tech power to preview what it does.')}</div>`
+               )
+               .join('')}
+           </div></section>`
+                : '';
 
         const fieldsSub = subChoice
             ? `<section class="sw5e-lu-section sw5e-lu-action"><h4>${esc(classDoc.name)} specialty / archetype</h4>
@@ -353,8 +533,43 @@ export async function mountSw5eLevelUpWizard(characterId) {
            </section>`
             : '';
 
-        body.innerHTML = `${summaryHtml}${fieldsHp}${fieldsAsi}${fieldsSub}
-      <p class="sw5e-wiz-hint">Apply updates your numeric sheet (HP, level, proficiency, subclass, optional ASI). Strategy / power / maneuver picks remain on the full character sheet.</p>`;
+        body.innerHTML = `${summaryHtml}${fieldsHp}${fieldsAsi}${fieldsTechPowers}${fieldsSub}
+      <p class="sw5e-wiz-hint">Apply updates your numeric sheet (HP, level, proficiency, subclass, optional ASI/feat, and selected tech powers). Strategy / maneuver picks remain on the full character sheet.</p>`;
+
+        const featSelect = document.getElementById('sw5eLuFeat');
+        const featPreview = document.getElementById('sw5eLuFeatPreview');
+        if (featSelect && featPreview) {
+            featSelect.onchange = () => {
+                const row = featByName.get(featSelect.value);
+                featPreview.innerHTML = row
+                    ? renderChoicePreview(row.name || row.Name, [row.source || row.Source || 'Feat'], rowDescription(row), 'Choose a feat to preview what it does.')
+                    : renderChoicePreview('', [], '', 'Choose a feat to preview what it does.');
+            };
+        }
+
+        for (let i = 0; i < techPowersToLearn; i++) {
+            const powerSelect = document.getElementById(`sw5eLuTechPower${i}`);
+            const powerPreview = document.getElementById(`sw5eLuTechPowerPreview${i}`);
+            if (!powerSelect || !powerPreview) continue;
+            powerSelect.onchange = () => {
+                const row = techPowerByChoiceId.get(String(powerSelect.value));
+                powerPreview.innerHTML = row
+                    ? renderChoicePreview(
+                          row.name,
+                          [
+                              `Level: ${row.level || 'At-will'}`,
+                              row.casting_time || row.casting_period ? `Cast: ${row.casting_time || row.casting_period}` : '',
+                              row.range ? `Range: ${row.range}` : '',
+                              row.duration ? `Duration: ${row.duration}` : '',
+                              row.damage ? `Damage: ${row.damage}` : '',
+                              row.saving_throw ? `Save: ${row.saving_throw}` : ''
+                          ],
+                          rowDescription(row),
+                          'Choose a tech power to preview what it does.'
+                      )
+                    : renderChoicePreview('', [], '', 'Choose a tech power to preview what it does.');
+            };
+        }
 
         const btnApply = document.getElementById('sw5eLevelUpApply');
         if (btnApply) {
@@ -374,14 +589,46 @@ export async function mountSw5eLevelUpWizard(characterId) {
                 ensureHitPointsArray(charData, charRow, currentLevel, hd);
                 charData.classes[0].hitPoints.push(Math.max(1, hpGain));
 
-                setTotalLevelSingleClass(charData, nextLevel);
+                setTotalLevelSingleClass(charData, nextLevel, classDoc);
 
                 if (isAsi) {
                     const a1 = document.getElementById('sw5eLuAsi1');
                     const a2 = document.getElementById('sw5eLuAsi2');
+                    const feat = document.getElementById('sw5eLuFeat');
                     const k1 = a1 && a1.value;
                     const k2 = a2 && a2.value;
+                    const featName = feat && feat.value;
+                    if (featName && (k1 || k2)) {
+                        alert('Choose either ability score improvements or a feat, not both.');
+                        return;
+                    }
+                    if (!featName && !k1 && !k2) {
+                        alert('Choose ability score improvements or a feat for this level.');
+                        return;
+                    }
                     if (k1 || k2) applyAsi(charData, k1, k2);
+                    if (featName) addLevelUpFeat(charData, featName, nextLevel);
+                }
+
+                if (techPowersToLearn > 0) {
+                    const selectedPowerRows = [];
+                    const seenPowerIds = new Set();
+                    for (let i = 0; i < techPowersToLearn; i++) {
+                        const sel = document.getElementById(`sw5eLuTechPower${i}`);
+                        const val = sel && sel.value;
+                        if (!val) {
+                            alert(`Choose ${techPowersToLearn === 1 ? 'a tech power' : 'all tech powers'} for this level.`);
+                            return;
+                        }
+                        if (seenPowerIds.has(val)) {
+                            alert('Choose different tech powers for each new power slot.');
+                            return;
+                        }
+                        seenPowerIds.add(val);
+                        const row = eligibleTechPowers.find((p) => String(p._stable_id || p.name) === String(val));
+                        if (row) selectedPowerRows.push(row);
+                    }
+                    selectedPowerRows.forEach((row) => addKnownTechPower(charData, row));
                 }
 
                 if (subChoice) {

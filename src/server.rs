@@ -3357,6 +3357,26 @@ fn unique_arena_glb_filename_for_token(entry_name: &str) -> String {
     format!("{}_{}.glb", base, Uuid::new_v4())
 }
 
+fn meshy_texture_prompt(entry_name: &str, kind: &str) -> String {
+    let safe_name: String = entry_name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(80)
+        .collect();
+    let subject = if safe_name.trim().is_empty() {
+        "the subject".to_string()
+    } else {
+        safe_name.trim().to_string()
+    };
+    let noun = match kind {
+        "enemy" | "npc_catalog" => "creature or NPC tabletop miniature",
+        _ => "player character tabletop miniature",
+    };
+    format!(
+        "Create a high quality full-color {noun} of {subject}. Preserve the portrait's visible colors, clothing, armor, skin, markings, and material details. Use rich painted miniature textures, clean readable colors, non-grayscale albedo, subtle roughness/normal detail, and avoid flat gray or untextured surfaces."
+    )
+}
+
 /// Portrait → Meshy → GLB saved under `static/arena_stl`. Requires env `MESHY_API_KEY` (see [Meshy docs](https://docs.meshy.ai/api/image-to-3d)).
 /// Streams newline-delimited JSON: `{"progress":N}` lines, then `{"url":"...","name":"...","filename":"..."}` or `{"error":"..."}`.
 async fn meshy_generate_arena_stl(
@@ -3484,6 +3504,7 @@ async fn meshy_generate_arena_stl(
     let entry_for_file = entry_name.clone();
     let key_meshy = key.clone();
     let image_meshy = image_for_meshy;
+    let texture_prompt_meshy = meshy_texture_prompt(&entry_name, &kind);
     let kind_log = kind.clone();
     let id_log = id.clone();
 
@@ -3492,7 +3513,13 @@ async fn meshy_generate_arena_stl(
     tokio::spawn(async move {
         let (prog_tx, mut prog_rx) = mpsc::unbounded_channel::<u8>();
         let meshy_handle = tokio::spawn(async move {
-            crate::meshy::image_to_3d_download_glb(&key_meshy, image_meshy, Some(prog_tx)).await
+            crate::meshy::image_to_3d_download_glb(
+                &key_meshy,
+                image_meshy,
+                texture_prompt_meshy,
+                Some(prog_tx),
+            )
+            .await
         });
 
         while let Some(p) = prog_rx.recv().await {

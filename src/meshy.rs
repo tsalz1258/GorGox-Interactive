@@ -85,6 +85,7 @@ fn meshy_progress_to_u8(v: &Value) -> Option<u8> {
 pub async fn image_to_3d_download_glb(
     api_key: &str,
     image_url: String,
+    texture_prompt: String,
     progress_tx: Option<UnboundedSender<u8>>,
 ) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
@@ -95,9 +96,15 @@ pub async fn image_to_3d_download_glb(
     let body = serde_json::json!({
         "image_url": image_url,
         "target_formats": ["glb"],
-        "ai_model": "latest",
-        "model_type": "lowpoly",
+        "ai_model": "meshy-6",
+        "model_type": "standard",
         "should_texture": true,
+        "texture_prompt": texture_prompt,
+        "enable_pbr": true,
+        "hd_texture": true,
+        "should_remesh": true,
+        "target_polycount": 100000,
+        "pose_mode": "a-pose",
     });
 
     let create = client

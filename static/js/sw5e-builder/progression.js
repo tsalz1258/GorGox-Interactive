@@ -116,3 +116,38 @@ export function extractForcePowersKnownCount(classFeaturesForLevelRows) {
     }
     return null;
 }
+
+const TECH_POWERS_KNOWN_BY_CLASS = {
+    // SW5e PHB full techcaster progression. Engineer learns one additional
+    // tech power each class level after 1st (6 at level 1, 9 at level 4).
+    engineer: [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+};
+
+export function getTechPowersKnownForClassLevel(classSlug, level) {
+    const table = TECH_POWERS_KNOWN_BY_CLASS[String(classSlug || '').toLowerCase()];
+    const lv = Number(level);
+    if (!table || !Number.isFinite(lv) || lv < 1) return null;
+    return table[Math.min(20, Math.max(1, Math.floor(lv)))] ?? null;
+}
+
+export function getTechPowersLearnedAtLevel(classSlug, currentLevel, nextLevel) {
+    const before = getTechPowersKnownForClassLevel(classSlug, currentLevel);
+    const after = getTechPowersKnownForClassLevel(classSlug, nextLevel);
+    if (before == null || after == null) return 0;
+    return Math.max(0, after - before);
+}
+
+export function getMaxTechPowerLevelForClassLevel(classSlug, level) {
+    const slug = String(classSlug || '').toLowerCase();
+    if (slug !== 'engineer') return null;
+    const lv = Math.max(1, Math.min(20, Math.floor(Number(level) || 1)));
+    if (lv >= 17) return 9;
+    if (lv >= 15) return 8;
+    if (lv >= 13) return 7;
+    if (lv >= 11) return 6;
+    if (lv >= 9) return 5;
+    if (lv >= 7) return 4;
+    if (lv >= 5) return 3;
+    if (lv >= 3) return 2;
+    return 1;
+}
