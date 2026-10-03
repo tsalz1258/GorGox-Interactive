@@ -1,6 +1,10 @@
 use crate::combat::CombatState;
-use crate::models::{Character, EnemyInstance, Map, PlayerConnection, PlayerMapViewport, Token};
+use crate::models::{
+    Character, EnemyInstance, LogHistoryEntry, Map, PlayerConnection, PlayerMapViewport, Token,
+};
 use std::collections::HashMap;
+
+const LOG_HISTORY_CAP: usize = 200;
 
 #[derive(Debug, Clone)]
 pub struct GameState {
@@ -12,6 +16,8 @@ pub struct GameState {
     pub combat: CombatState,
     /// Region of the map (pixel coords) visible to non-DM clients when enabled
     pub player_map_viewport: PlayerMapViewport,
+    /// Recent rolls/chat lines for late join / refresh
+    pub log_history: Vec<LogHistoryEntry>,
 }
 
 impl GameState {
@@ -24,6 +30,15 @@ impl GameState {
             enemy_instances: HashMap::new(),
             combat: CombatState::new(),
             player_map_viewport: PlayerMapViewport::default(),
+            log_history: Vec::new(),
+        }
+    }
+
+    pub fn push_log_entry(&mut self, entry: LogHistoryEntry) {
+        self.log_history.push(entry);
+        if self.log_history.len() > LOG_HISTORY_CAP {
+            let excess = self.log_history.len() - LOG_HISTORY_CAP;
+            self.log_history.drain(0..excess);
         }
     }
 

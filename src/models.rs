@@ -112,6 +112,13 @@ pub struct Token {
     /// When true, non-DM clients should not draw this token (DM-only secrets; typically used for Object tokens).
     #[serde(default)]
     pub hidden_from_players: bool,
+    /// When false, non-DM clients see the label "Enemy" instead of display_name (default true).
+    #[serde(default = "default_true")]
+    pub show_name: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -183,6 +190,7 @@ pub enum ClientMessage {
     LoadMap { map_id: String, clear_tokens: Option<bool> },
     DeleteMap { map_id: String },
     ClearMap, // Clear current map and all tokens
+    ClearTokens, // DM only: clear all tokens, keep map image/viewport
     
     // Token management
     PlaceToken {
@@ -201,10 +209,32 @@ pub enum ClientMessage {
     MoveToken { token_id: String, x: f32, y: f32 },
     RemoveToken { token_id: String },
     UpdateTokenSize { token_id: String, size: f32 },
+    /// DM only: temporary rename shown on the map / combat for all clients.
+    UpdateTokenDisplayName {
+        token_id: String,
+        display_name: String,
+    },
+    /// DM only: whether players see the real token name (default true).
+    UpdateTokenShowName {
+        token_id: String,
+        show_name: bool,
+    },
     /// DM only: toggle object visibility for players (token must be Object).
     UpdateTokenHiddenFromPlayers {
         token_id: String,
         hidden_from_players: bool,
+    },
+    /// Shared rolls/chat entry — server stores history and broadcasts to all clients.
+    AddLogEntry {
+        id: String,
+        pane: String,
+        message: String,
+        #[serde(default)]
+        entry_type: Option<String>,
+        #[serde(default)]
+        is_nat20: bool,
+        #[serde(default)]
+        is_nat1: bool,
     },
     
     // Combat
@@ -323,6 +353,20 @@ pub enum ServerMessage {
     },
     MapCleared, // Map and tokens cleared
     TokenUpdate { tokens: Vec<Token> },
+    /// Broadcast a single rolls/chat log line to all clients.
+    AddLogEntry {
+        id: String,
+        pane: String,
+        message: String,
+        #[serde(default)]
+        entry_type: Option<String>,
+        #[serde(default)]
+        is_nat20: bool,
+        #[serde(default)]
+        is_nat1: bool,
+    },
+    /// Full log history for late join / refresh (capped on server).
+    LogHistory { entries: Vec<LogHistoryEntry> },
     
     // Combat updates
     CombatStarted { participants: Vec<CombatParticipant> },
@@ -387,5 +431,19 @@ pub enum ServerMessage {
     
     // Errors
     Error { message: String },
+}
+
+/// One rolls/chat line stored for join/refresh replay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogHistoryEntry {
+    pub id: String,
+    pub pane: String,
+    pub message: String,
+    #[serde(default)]
+    pub entry_type: Option<String>,
+    #[serde(default)]
+    pub is_nat20: bool,
+    #[serde(default)]
+    pub is_nat1: bool,
 }
 

@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v170'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v176'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -26,7 +26,7 @@ let dmActionBarEnabled = (function () {
 })(); // DM: show/hide token action bar when it blocks the map
 const PLAYER_ACTION_BAR_HEIGHT_MIN = 80;
 const PLAYER_ACTION_BAR_HEIGHT_MAX = 520;
-const PLAYER_ACTION_BAR_HEIGHT_DEFAULT = 100;
+const PLAYER_ACTION_BAR_HEIGHT_DEFAULT = 180;
 const DM_ACTION_BAR_HEIGHT_COMPACT = 286;
 let playerActionBarHeight = PLAYER_ACTION_BAR_HEIGHT_DEFAULT; // Resizable; persisted in localStorage
 let dmEnemyActionBarHeight = (function () {
@@ -155,6 +155,11 @@ let panY = 0;
 let isDragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
+/** Empty-space press: wait for a small drag before panning so a click can still MoveToken. */
+let mapPanCandidate = false;
+let panPointerClientX = 0;
+let panPointerClientY = 0;
+const MAP_PAN_THRESHOLD_PX = 6;
 let gridSize = 50;
 let rulerStart = null; // For ruler tool
 let rulerEnd = null;
@@ -326,6 +331,7 @@ async function refreshSavedMapsListFromHttp() {
 let activePings = []; // Array of active pings: [{x, y, timestamp, playerName, id}]
 let contextMenuVisible = false;
 let contextMenuPosition = { x: 0, y: 0 };
+let contextMenuTokenId = null;
 
 // Character highlighting system (for Discord integration)
 let highlightedTokens = new Map(); // Map of token_id -> {timestamp, duration, color, discordUsername}
@@ -371,6 +377,15 @@ window.addEventListener('DOMContentLoaded', () => {
     setupCanvas();
     loadNPCs(); // Load NPCs from npc.json
     applyPlayerActionBarHeight(); // Apply saved action bar height (sets CSS var for main content)
+    if (typeof ActionDock !== 'undefined') {
+        var dockBar = document.getElementById('playerActionBar');
+        if (dockBar) ActionDock.init(dockBar);
+    }
+    if (typeof UIShell !== 'undefined') {
+        UIShell.initActionBarToggle();
+        UIShell.syncActionBarToggleUI();
+        UIShell.initSidebarResize();
+    }
     var badge = document.getElementById('appVersionBadge');
     if (badge) badge.textContent = typeof APP_UI_VERSION !== 'undefined' ? APP_UI_VERSION : 'v29';
     if (typeof APP_UI_VERSION !== 'undefined') document.title = 'Gorgox Interactive (' + APP_UI_VERSION + ')';
@@ -580,9 +595,7 @@ function buildMeasurementOverlayForArena3d() {
     }
     if (conePlacementState && measurementToolType === 'cone' && canvas) {
         if (lastMouseX !== 0 || lastMouseY !== 0) {
-            const rect = canvas.getBoundingClientRect();
-            const mouseX = (lastMouseX - rect.left - panX) / zoom;
-            const mouseY = (lastMouseY - rect.top - panY) / zoom;
+            const { mouseX, mouseY } = clientToWorld(lastMouseX, lastMouseY);
             const dx = mouseX - conePlacementState.startX;
             const dy = mouseY - conePlacementState.startY;
             const direction = Math.atan2(dy, dx) * (180 / Math.PI);
@@ -841,7 +854,11 @@ function notifyArenaTokenMovedFrom3d(tokenId, gridX, gridY) {
         token.y = gy;
         const idx = tokens.findIndex((t) => t && t.id === token.id);
         if (idx !== -1) {
-            tokens[idx] = { ...tokens[idx], x: gx, y: gy };
+            tokens[idx].x = gx;
+            tokens[idx].y = gy;
+            if (selectedToken && selectedToken.id === token.id) {
+                selectedToken = tokens[idx];
+            }
         }
         renderCanvas();
         updateTokenInfo();
@@ -2609,7 +2626,9 @@ function handleServerMessage(message) {
                 measurementShapes = [];
                 rulerStart = null;
                 rulerEnd = null;
-                playerMapViewport = { enabled: false, hidden: false, x: 0, y: 0, width: 640, height: 480 };
+                // Preserve hide-entire-map across map swaps; only reset fog-box defaults.
+                var keepHidden = !!(playerMapViewport && playerMapViewport.hidden);
+                playerMapViewport = { enabled: false, hidden: keepHidden, x: 0, y: 0, width: 640, height: 480 };
                 dmPlayerViewportToolActive = false;
                 playerViewportDrag = null;
                 syncPlayerViewportCheckbox();
@@ -2649,7 +2668,8 @@ function handleServerMessage(message) {
             measurementShapes = [];
             rulerStart = null;
             rulerEnd = null;
-            playerMapViewport = { enabled: false, hidden: false, x: 0, y: 0, width: 640, height: 480 };
+            var keepHiddenClear = !!(playerMapViewport && playerMapViewport.hidden);
+            playerMapViewport = { enabled: false, hidden: keepHiddenClear, x: 0, y: 0, width: 640, height: 480 };
             dmPlayerViewportToolActive = false;
             playerViewportDrag = null;
             syncPlayerViewportCheckbox();
@@ -2831,13 +2851,13 @@ function handleServerMessage(message) {
             if (isDiceRoll) {
                 // Flat dice roll - add once from server broadcast (we no longer add locally to avoid duplicates)
                 const diceType = abilityName;
-                addRollEntry(`🎲 ${formatRollCharacterName(message.character_name)} rolled ${diceType}: ${message.roll}`, false, false);
+                appendSharedRollLine(`🎲 ${formatRollCharacterName(message.character_name)} rolled ${diceType}: ${message.roll}`, false, false);
             } else {
                 const rollDisplay = `${message.roll} ${message.modifier >= 0 ? '+' : ''}${message.modifier}`;
                 const isAbilityNat20 = message.roll === 20;
                 const isAbilityNat1 = message.roll === 1;
                 const abilityNatText = isAbilityNat20 ? ' ✨ NATURAL 20!' : (isAbilityNat1 ? ' ❌ NATURAL 1!' : '');
-                addRollEntry(`🎲 ${formatRollCharacterName(message.character_name)} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
+                appendSharedRollLine(`🎲 ${formatRollCharacterName(message.character_name)} rolled ${abilityName} check: ${rollDisplay} = ${message.total}${abilityNatText}`, isAbilityNat20, isAbilityNat1);
                 if (isAbilityNat20) playNat20Sound();
                 else if (isAbilityNat1) playNat1Sound();
             }
@@ -2850,7 +2870,7 @@ function handleServerMessage(message) {
             const isSaveNat20 = message.roll === 20;
             const isSaveNat1 = message.roll === 1;
             const saveNatText = isSaveNat20 ? ' ✨ NATURAL 20!' : (isSaveNat1 ? ' ❌ NATURAL 1!' : '');
-            addRollEntry(`🛡️ ${formatRollCharacterName(message.character_name)} rolled ${saveName} save: ${saveDisplay} = ${message.total}${saveNatText}`, isSaveNat20, isSaveNat1);
+            appendSharedRollLine(`🛡️ ${formatRollCharacterName(message.character_name)} rolled ${saveName} save: ${saveDisplay} = ${message.total}${saveNatText}`, isSaveNat20, isSaveNat1);
             if (isSaveNat20) playNat20Sound();
             else if (isSaveNat1) playNat1Sound();
             break;
@@ -2861,7 +2881,7 @@ function handleServerMessage(message) {
             const isSkillNat20 = message.roll === 20;
             const isSkillNat1 = message.roll === 1;
             const skillNatText = isSkillNat20 ? ' ✨ NATURAL 20!' : (isSkillNat1 ? ' ❌ NATURAL 1!' : '');
-            addRollEntry(`🎯 ${formatRollCharacterName(message.character_name)} rolled ${message.skill}: ${skillDisplay} = ${message.total}${skillNatText}`, isSkillNat20, isSkillNat1);
+            appendSharedRollLine(`🎯 ${formatRollCharacterName(message.character_name)} rolled ${message.skill}: ${skillDisplay} = ${message.total}${skillNatText}`, isSkillNat20, isSkillNat1);
             if (isSkillNat20) playNat20Sound();
             else if (isSkillNat1) playNat1Sound();
             break;
@@ -2872,10 +2892,33 @@ function handleServerMessage(message) {
             const isCrit = message.to_hit_roll === 20;
             const isFail = message.to_hit_roll === 1;
             const critText = isCrit ? ' 🎉 CRITICAL HIT! ✨ NATURAL 20!' : (isFail ? ' ❌ CRITICAL MISS! NATURAL 1!' : '');
-            addRollEntry(`⚔️ ${formatRollCharacterName(message.character_name)} attacks with ${message.weapon}: To Hit ${hitDisplay} = ${message.to_hit_total} | Damage: ${message.damage} ${message.damage_type}${critText}`, isCrit, isFail);
+            appendSharedRollLine(`⚔️ ${formatRollCharacterName(message.character_name)} attacks with ${message.weapon}: To Hit ${hitDisplay} = ${message.to_hit_total} | Damage: ${message.damage} ${message.damage_type}${critText}`, isCrit, isFail);
             if (isCrit) playNat20Sound();
             else if (isFail) playNat1Sound();
             break;
+
+        case 'AddLogEntry':
+            {
+                const beforeSeen = message.id && seenSharedLogEntryIds.has(message.id);
+                applySharedLogEntryFromServer(message, true);
+                // Only play sounds when this client actually appended (not a duplicate echo)
+                if (!beforeSeen && message.id && seenSharedLogEntryIds.has(message.id)) {
+                    if (message.is_nat20) playNat20Sound();
+                    else if (message.is_nat1) playNat1Sound();
+                }
+            }
+            break;
+
+        case 'LogHistory': {
+            // Never wipe existing Rolls panes on sync/refresh catchup — that was clearing rolls every ~12s.
+            // Merge server history in by id; empty history is a no-op (keep what players already see).
+            const hist = message.entries || [];
+            if (!hist.length) break;
+            hist.forEach(function (entry) {
+                applySharedLogEntryFromServer(entry, true);
+            });
+            break;
+        }
             
         case 'TokenUpdate': {
             // Update tokens array - this is authoritative from server (avoid heavy console on hot path)
@@ -2901,7 +2944,10 @@ function handleServerMessage(message) {
                     ...t,
                     image_url: t.image_url != null && t.image_url !== '' ? t.image_url : (prev && prev.image_url) ? prev.image_url : t.image_url,
                     display_name: t.display_name != null && t.display_name !== '' ? t.display_name : (prev && prev.display_name) ? prev.display_name : t.display_name,
-                    hidden_from_players: t.hidden_from_players === true
+                    hidden_from_players: t.hidden_from_players === true,
+                    show_name: typeof t.show_name === 'boolean'
+                        ? t.show_name
+                        : (prev && typeof prev.show_name === 'boolean' ? prev.show_name : true)
                 };
                 // Check if we have a manually set size for this token
                 const preservedSize = localTokenSizes.get(t.id);
@@ -3005,8 +3051,11 @@ function handleServerMessage(message) {
             console.log('📊 Number of participants:', Array.isArray(message.participants) ? message.participants.length : 0);
             
             if (!message.participants || message.participants.length === 0) {
-                console.error('❌ NO PARTICIPANTS IN COMBAT!');
-                alert('Error: No tokens found to start combat!');
+                // Empty CombatStarted can arrive from catchup/RequestFullState while combat was
+                // never validly started — never alert repeatedly and never mark combat active.
+                console.warn('CombatStarted with no participants — ignoring');
+                combatState.active = false;
+                combatState.participants = [];
                 return;
             }
             
@@ -3953,13 +4002,13 @@ function handleServerMessage(message) {
 
 function updateConnectionStatus(connected) {
     const status = document.getElementById('connectionStatus');
-    if (connected) {
-        status.textContent = 'Connected';
-        status.classList.add('connected');
-    } else {
-        status.textContent = 'Disconnected';
-        status.classList.remove('connected');
+    if (status) {
+        status.textContent = connected ? 'Connected' : 'Disconnected';
+        status.classList.toggle('connected', !!connected);
+        status.classList.toggle('vtt-connection--online', !!connected);
+        status.classList.toggle('vtt-connection--offline', !connected);
     }
+    if (typeof UIShell !== 'undefined') UIShell.updateConnectionStatus(connected);
 }
 
 // Load NPCs from npc.json
@@ -4066,7 +4115,10 @@ function isPlayerMapHiddenForThisClient() {
 function applyPlayerMapViewportFromServer(msg) {
     if (!msg || typeof msg !== 'object') return;
     playerMapViewport.enabled = viewportEnabledFromServer(msg.enabled);
-    playerMapViewport.hidden = viewportEnabledFromServer(msg.hidden);
+    // Only apply hidden when the server actually sent it (avoid stale binaries / partial echoes unchecking).
+    if (Object.prototype.hasOwnProperty.call(msg, 'hidden')) {
+        playerMapViewport.hidden = viewportEnabledFromServer(msg.hidden);
+    }
     playerMapViewport.x = Number(msg.x) || 0;
     playerMapViewport.y = Number(msg.y) || 0;
     playerMapViewport.width = Math.max(32, Number(msg.width) || 640);
@@ -4258,6 +4310,35 @@ function applyPlayerViewportDrag(mx, my) {
     clampPlayerMapViewportToMap();
 }
 
+/** CSS may scale #mapCanvas (max-width/height); map mouse coords from client → canvas buffer → world. */
+function getCanvasCssScale() {
+    if (!canvas) return { sx: 1, sy: 1, rect: { left: 0, top: 0, width: 1, height: 1 } };
+    const rect = canvas.getBoundingClientRect();
+    const rw = rect.width > 0 ? rect.width : 1;
+    const rh = rect.height > 0 ? rect.height : 1;
+    return {
+        sx: (canvas.width > 0 ? canvas.width : rw) / rw,
+        sy: (canvas.height > 0 ? canvas.height : rh) / rh,
+        rect
+    };
+}
+
+function clientToCanvasBuffer(clientX, clientY) {
+    const { sx, sy, rect } = getCanvasCssScale();
+    return {
+        x: (clientX - rect.left) * sx,
+        y: (clientY - rect.top) * sy
+    };
+}
+
+function clientToWorld(clientX, clientY) {
+    const buf = clientToCanvasBuffer(clientX, clientY);
+    return {
+        mouseX: (buf.x - panX) / zoom,
+        mouseY: (buf.y - panY) / zoom
+    };
+}
+
 function setupCanvas() {
     if (!canvas) {
         console.error('❌ [SETUP CANVAS] Canvas is null!');
@@ -4282,11 +4363,24 @@ function setupCanvas() {
         if (isDragging) {
             isDragging = false;
         }
+        mapPanCandidate = false;
     });
     
     // Right-click context menu - MUST be added for all users
     canvas.addEventListener('contextmenu', onCanvasRightClick);
     console.log('✅ Context menu event listener added to canvas');
+
+    // DM: Delete/Backspace removes selected map token (not when typing in inputs)
+    document.addEventListener('keydown', (e) => {
+        if (!isDM || !selectedToken) return;
+        if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+        const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) {
+            return;
+        }
+        e.preventDefault();
+        removeSelectedToken();
+    });
     
     // Add double-click handler for ruler tool
     canvas.addEventListener('dblclick', (e) => {
@@ -4319,9 +4413,10 @@ function renderCanvas() {
     const vp = playerMapViewport;
     const mapReadyForFog = currentMap && currentMap.image && currentMap.width && currentMap.height;
     const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
-    const playerMapHidden = viewerIsPlayer && !!vp.hidden && mapReadyForFog;
-    const playerFogActive = viewerIsPlayer && vp.enabled && mapReadyForFog;
-    const dmVpGuide = isDM && vp.enabled && mapReadyForFog;
+    // Hide-entire-map must work even before the map image finishes loading.
+    const playerMapHidden = viewerIsPlayer && !!vp.hidden;
+    const playerFogActive = viewerIsPlayer && vp.enabled && mapReadyForFog && !vp.hidden;
+    const dmVpGuide = isDM && vp.enabled && mapReadyForFog && !vp.hidden;
     // Draw map image if loaded
     // CRITICAL: Double-check currentMap is not null and has an image before drawing
     // This prevents drawing a cleared map
@@ -4343,6 +4438,7 @@ function renderCanvas() {
     
     // Draw tokens
     tokens.forEach(token => {
+        if (!isTokenVisibleToViewer(token)) return;
         drawToken(token);
     });
     
@@ -4371,9 +4467,7 @@ function renderCanvas() {
     if (conePlacementState && measurementToolType === 'cone') {
         // Show preview cone with direction towards mouse
         if (lastMouseX !== 0 || lastMouseY !== 0) {
-            const rect = canvas.getBoundingClientRect();
-            const mouseX = (lastMouseX - rect.left - panX) / zoom;
-            const mouseY = (lastMouseY - rect.top - panY) / zoom;
+            const { mouseX, mouseY } = clientToWorld(lastMouseX, lastMouseY);
             
             const dx = mouseX - conePlacementState.startX;
             const dy = mouseY - conePlacementState.startY;
@@ -5297,11 +5391,13 @@ function applyOptimisticPlaceToken(fields) {
         image_url: img,
         display_name: dn || null,
         hidden_from_players: entity_type === 'Object' && hidden_from_players === true,
+        show_name: true,
     });
     renderCanvas();
 }
 
 function drawToken(token) {
+    if (!isTokenVisibleToViewer(token)) return;
     // Calculate token dimensions based on size - always use circles
     // size = 1.0: Medium (1x1 square, circle radius = gridSize/2)
     // size = 2.0: Large (2x2 = 4 squares, circle radius = gridSize)
@@ -5509,6 +5605,11 @@ function drawToken(token) {
     } else {
         displayName = token.display_name && String(token.display_name).trim() ? String(token.display_name).trim() : token.entity_type;
     }
+
+    const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+    if (viewerIsPlayer && token.show_name === false && (token.entity_type === 'Enemy' || token.entity_type === 'NPC')) {
+        displayName = 'Enemy';
+    }
     
     ctx.fillText(displayName, x, y + radius + 18);
     ctx.shadowBlur = 0;
@@ -5576,14 +5677,13 @@ function onCanvasMouseDown(e) {
         e.preventDefault();
         e.stopPropagation();
         isDragging = false;
+        mapPanCandidate = false;
         selectedToken = null;
         updateTokenInfo();
         return;
     }
 
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = (e.clientX - rect.left - panX) / zoom;
-    const mouseY = (e.clientY - rect.top - panY) / zoom;
+    const { mouseX, mouseY } = clientToWorld(e.clientX, e.clientY);
     
     // Mouseup was missed (e.g. off-canvas); don't leave skip stuck forever
     if (pendingSkipTokenMoveOnNextMouseUp && !pendingTargetAttack && !pendingTargetPower) {
@@ -5708,6 +5808,7 @@ function onCanvasMouseDown(e) {
     // Token hit first: viewport tool used to steal every click inside the box (including on tokens).
     let clickedToken = null;
     for (let token of tokens) {
+        if (!isTokenVisibleToViewer(token)) continue;
         const tokenSize = token.size || 1.0;
         const radius = gridSize * tokenSize / 2;
         const tokenX = token.x * gridSize + gridSize / 2;
@@ -5780,12 +5881,20 @@ function onCanvasMouseDown(e) {
             return;
         }
         selectedToken = clickedToken;
+        isDragging = false;
+        mapPanCandidate = false;
         updateTokenInfo();
         renderCanvas();
     } else {
-        isDragging = true;
-        dragStartX = e.clientX - panX;
-        dragStartY = e.clientY - panY;
+        // Empty cell: don't pan immediately — a click with a selected token should MoveToken on mouseup.
+        // Only convert to map pan after the pointer moves past a small threshold.
+        isDragging = false;
+        mapPanCandidate = true;
+        panPointerClientX = e.clientX;
+        panPointerClientY = e.clientY;
+        const buf = clientToCanvasBuffer(e.clientX, e.clientY);
+        dragStartX = buf.x - panX;
+        dragStartY = buf.y - panY;
     }
 }
 
@@ -5814,23 +5923,32 @@ function onCanvasMouseMove(e) {
         }
         // Prevent token dragging when measurement tools are active
         isDragging = false;
+        mapPanCandidate = false;
         return;
     }
     
     if (playerViewportDrag && isDM) {
-        const rect = canvas.getBoundingClientRect();
-        const mx = (e.clientX - rect.left - panX) / zoom;
-        const my = (e.clientY - rect.top - panY) / zoom;
+        const { mouseX: mx, mouseY: my } = clientToWorld(e.clientX, e.clientY);
         applyPlayerViewportDrag(mx, my);
         scheduleSendPlayerMapViewport();
         renderCanvas();
         return;
     }
+
+    if (mapPanCandidate && !isDragging) {
+        const dx = e.clientX - panPointerClientX;
+        const dy = e.clientY - panPointerClientY;
+        if (Math.hypot(dx, dy) >= MAP_PAN_THRESHOLD_PX) {
+            isDragging = true;
+            mapPanCandidate = false;
+        }
+    }
     
     // Normal token/pan dragging when no measurement tool is active
     if (isDragging) {
-        panX = e.clientX - dragStartX;
-        panY = e.clientY - dragStartY;
+        const buf = clientToCanvasBuffer(e.clientX, e.clientY);
+        panX = buf.x - dragStartX;
+        panY = buf.y - dragStartY;
         renderCanvas();
     } else if (selectedToken) {
         canvas.style.cursor = 'move';
@@ -5843,11 +5961,13 @@ function onCanvasMouseUp(e) {
     // If any measurement tool is active, don't process token movement
     if (measurementToolType) {
         isDragging = false;
+        mapPanCandidate = false;
         return;
     }
     
     if (playerViewportDrag) {
         playerViewportDrag = null;
+        mapPanCandidate = false;
         if (isDM) sendPlayerMapViewportToServer();
         renderCanvas();
         return;
@@ -5855,7 +5975,9 @@ function onCanvasMouseUp(e) {
     
     if (isDragging) {
         isDragging = false;
+        mapPanCandidate = false;
     } else if (selectedToken && e.button === 0) {
+        mapPanCandidate = false;
         if (pendingSkipTokenMoveOnNextMouseUp) {
             pendingSkipTokenMoveOnNextMouseUp = false;
             return;
@@ -5880,9 +6002,7 @@ function onCanvasMouseUp(e) {
         // DM has no restrictions - can move any token anytime
         
         // Move selected token
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = (e.clientX - rect.left - panX) / zoom;
-        const mouseY = (e.clientY - rect.top - panY) / zoom;
+        const { mouseX, mouseY } = clientToWorld(e.clientX, e.clientY);
         
         const gridX = Math.floor(mouseX / gridSize);
         const gridY = Math.floor(mouseY / gridSize);
@@ -5890,11 +6010,14 @@ function onCanvasMouseUp(e) {
         // Only move if position actually changed
         if (selectedToken.x !== gridX || selectedToken.y !== gridY) {
             // Optimistic local move so it feels instant; server TokenUpdate will reconcile.
+            // Keep selectedToken as the same object in tokens[] so sidebar edits stick.
             selectedToken.x = gridX;
             selectedToken.y = gridY;
             const idx = tokens.findIndex(t => t && t.id === selectedToken.id);
             if (idx !== -1) {
-                tokens[idx] = { ...tokens[idx], x: gridX, y: gridY };
+                tokens[idx].x = gridX;
+                tokens[idx].y = gridY;
+                selectedToken = tokens[idx];
             }
             renderCanvas();
             updateTokenInfo();
@@ -5905,6 +6028,8 @@ function onCanvasMouseUp(e) {
                 y: gridY
             });
         }
+    } else {
+        mapPanCandidate = false;
     }
 }
 
@@ -5919,15 +6044,34 @@ function onCanvasRightClick(e) {
         return;
     }
     
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = (e.clientX - rect.left - panX) / zoom;
-    const mouseY = (e.clientY - rect.top - panY) / zoom;
+    const { mouseX, mouseY } = clientToWorld(e.clientX, e.clientY);
     
     // Store the canvas coordinates for ping
     contextMenuPosition = { x: mouseX, y: mouseY };
+
+    let hitToken = null;
+    for (let i = tokens.length - 1; i >= 0; i--) {
+        const token = tokens[i];
+        if (!isTokenVisibleToViewer(token)) continue;
+        const tokenSize = token.size || 1.0;
+        const radius = gridSize * tokenSize / 2;
+        const tokenX = token.x * gridSize + gridSize / 2;
+        const tokenY = token.y * gridSize + gridSize / 2;
+        const dist = Math.sqrt(Math.pow(mouseX - tokenX, 2) + Math.pow(mouseY - tokenY, 2));
+        if (dist <= radius) {
+            hitToken = token;
+            break;
+        }
+    }
+    contextMenuTokenId = hitToken ? hitToken.id : null;
     
     // Show context menu at mouse position
     const contextMenu = document.getElementById('contextMenu');
+    const removeBtn = document.getElementById('contextMenuRemoveToken');
+    if (removeBtn) {
+        const showRemove = !!(isDM && hitToken);
+        removeBtn.style.display = showRemove ? 'block' : 'none';
+    }
     if (contextMenu) {
         contextMenu.style.display = 'block';
         contextMenu.style.left = e.clientX + 'px';
@@ -5937,6 +6081,20 @@ function onCanvasRightClick(e) {
     } else {
         console.warn('⚠️ Context menu element not found!');
     }
+}
+
+function removeTokenFromContextMenu() {
+    if (!isDM || !contextMenuTokenId) {
+        closeContextMenu();
+        return;
+    }
+    const tok = tokens.find(t => t && t.id === contextMenuTokenId);
+    if (tok) {
+        selectedToken = tok;
+        updateTokenInfo();
+        removeSelectedToken();
+    }
+    closeContextMenu();
 }
 
 function closeContextMenu() {
@@ -6054,9 +6212,8 @@ function resetZoom() {
 
 function fitMapToViewport() {
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const vw = rect.width;
-    const vh = rect.height;
+    const vw = canvas.width;
+    const vh = canvas.height;
     const mapW = currentMap && currentMap.width ? currentMap.width : canvas.width;
     const mapH = currentMap && currentMap.height ? currentMap.height : canvas.height;
     if (!mapW || !mapH || !vw || !vh) return;
@@ -6076,9 +6233,8 @@ function centerOnSelectedToken() {
         typeof gridSize === 'number' && gridSize > 0 && !isNaN(gridSize) ? gridSize : 50;
     const cx = selectedToken.x * g + g / 2;
     const cy = selectedToken.y * g + g / 2;
-    const rect = canvas.getBoundingClientRect();
-    const vw = rect.width;
-    const vh = rect.height;
+    const vw = canvas.width;
+    const vh = canvas.height;
     panX = vw / 2 - zoom * cx;
     panY = vh / 2 - zoom * cy;
     renderCanvas();
@@ -6357,7 +6513,8 @@ function buildEnemySidebarActionsHtml(enemy, token, ctx) {
     var creatureName = enemy.name || 'Creature';
     var attackRows = mergeEnemyAttackRowsForDmBar(enemy);
     var actionItems = normalizeSidebarChunks(npc && npc.sw5e_action_items, 'Action');
-    var compactActions = actionItems.length ? actionItems : attackRows;
+    // Prefer structured attack rows (same as action bar) so weapon/save tiles target+roll correctly.
+    var compactActions = attackRows.length ? attackRows : actionItems;
     var html = '<div class="enemy-sidebar-section"><span class="enemy-sidebar-section-title">Actions</span><div class="enemy-sidebar-compact-actions">';
     var seenActions = {};
     compactActions.forEach(function (atk) {
@@ -6570,7 +6727,7 @@ function updateTokenInfo() {
     const actionsDiv = document.getElementById('tokenActions');
     
     if (!selectedToken) {
-        infoDiv.innerHTML = 'No token selected';
+        infoDiv.innerHTML = '<div class="token-panel token-panel--empty"><span class="token-panel__empty-icon" aria-hidden="true">◎</span><p class="token-panel__empty-text">Select a token on the map</p></div>';
         actionsDiv.classList.add('hidden');
         return;
     }
@@ -6599,8 +6756,8 @@ function updateTokenInfo() {
                          (participant ? participant.max_hp : entityData.max_hp);
             
             const escapedEntityId = escapeJs(selectedToken.entity_id);
-            info += `<h4>⚔️ ${entityData.name}</h4>`;
-            info += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${entityData.class} Level ${entityData.level}</p>`;
+            info += `<div class="token-panel__name">⚔️ ${entityData.name}</div>`;
+            info += `<p class="token-panel__subtitle">${entityData.class} Level ${entityData.level}</p>`;
             info += `<div class="token-stat"><span>Player:</span><span>${entityData.player_name}</span></div>`;
             const hpColor = currentHp < maxHp * 0.3 ? '#ff4444' : '#44ff44';
             if (canEditSelectedPlayerHp) {
@@ -6678,9 +6835,9 @@ function updateTokenInfo() {
             const ac = instance ? instance.armor_class : (enemy ? enemy.armor_class : 0);
             
             let statsHtml = '';
-            statsHtml += `<h4>👹 ${displayName}</h4>`;
+            statsHtml += `<div class="token-panel__name">👹 ${displayName}</div>`;
             if (enemy) {
-                statsHtml += `<p style="font-size: 11px; opacity: 0.8; margin: 4px 0 12px 0;">${enemy.creature_type} (CR ${enemy.challenge_rating})</p>`;
+                statsHtml += `<p class="token-panel__subtitle">${enemy.creature_type} (CR ${enemy.challenge_rating})</p>`;
             }
             statsHtml += `<div class="token-stat"><span>HP:</span><span style="color: ${currentHp < maxHp * 0.3 ? '#ff4444' : '#ff8844'}; font-weight: bold;">${currentHp}/${maxHp}</span></div>`;
             const hpPercent = maxHp > 0 ? (currentHp / maxHp) * 100 : 0;
@@ -6752,7 +6909,17 @@ function updateTokenInfo() {
                                  currentSize <= 2.0 ? 'Large (2x2)' :
                                  currentSize <= 4.0 ? 'Huge (4x4)' :
                                  'Gargantuan (8x8)';
+                const renameVal = escapeHtml(selectedToken.display_name || displayName || '');
+                const showNameChecked = selectedToken.show_name !== false ? 'checked' : '';
                 statsHtml += `<hr style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.2);">`;
+                statsHtml += `<div style="margin-bottom: 10px;">`;
+                statsHtml += `<label style="display: block; font-size: 11px; margin-bottom: 5px; color: #aaa;">Token Name:</label>`;
+                statsHtml += `<div style="display: flex; gap: 6px;">`;
+                statsHtml += `<input id="tokenDisplayNameInput" type="text" value="${renameVal}" style="flex:1; padding: 5px; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 3px; font-size: 12px;">`;
+                statsHtml += `<button type="button" onclick="applyTokenDisplayNameFromSidebar()" style="padding: 5px 10px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">Apply</button>`;
+                statsHtml += `</div></div>`;
+                statsHtml += `<label style="display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 10px; color: #ccc; cursor: pointer;">`;
+                statsHtml += `<input type="checkbox" ${showNameChecked} onchange="onTokenShowNameChange(this.checked)"> Show enemy name</label>`;
                 statsHtml += `<div class="token-stat"><span>Token Size:</span><span>${sizeLabel}</span></div>`;
                 statsHtml += `<div style="margin-top: 10px;">`;
                 statsHtml += `<label style="display: block; font-size: 11px; margin-bottom: 5px; color: #aaa;">Change Size:</label>`;
@@ -6800,6 +6967,13 @@ function updateTokenInfo() {
             info += `<input type="checkbox" ${hid ? 'checked' : ''} onchange="sendObjectHiddenFromPlayers('${selectedToken.id}', this.checked)"/>`;
             info += `<span>Hidden from players</span></label>`;
             info += `<p style="font-size:10px;opacity:0.75;margin-top:8px;line-height:1.4;">Players will not see this token on the map until you turn this off.</p>`;
+            const renameVal = escapeHtml(label || '');
+            info += `<div style="margin: 10px 0;">`;
+            info += `<label style="display: block; font-size: 11px; margin-bottom: 5px; color: #aaa;">Token Name:</label>`;
+            info += `<div style="display: flex; gap: 6px;">`;
+            info += `<input id="tokenDisplayNameInput" type="text" value="${renameVal}" style="flex:1; padding: 5px; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 3px; font-size: 12px;">`;
+            info += `<button type="button" onclick="applyTokenDisplayNameFromSidebar()" style="padding: 5px 10px; background: #4a9eff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;">Apply</button>`;
+            info += `</div></div>`;
         }
         info += `<div class="token-stat"><span>Position:</span><span>(${selectedToken.x}, ${selectedToken.y})</span></div>`;
     } else {
@@ -6878,17 +7052,17 @@ function toggleCombat() {
         }
     } else {
         const tokenList = Array.isArray(tokens) ? tokens.slice() : [];
-        if (tokenList.length === 0) {
-            console.warn('⚠️ No tokens detected locally when starting combat. Attempting to start anyway.');
-            addLogEntry('⚠️ No tokens detected locally — requesting combat start anyway.', 'warning');
-            requestTokenRefresh();
-        }
         // Combat v2: one participant per token. Use unique id per token so multiple enemies get separate turns.
         // Prefer t.id (server UUID); never use entity_id for multiple tokens or we get duplicate ids and one turn.
         // Map objects are never combatants.
         const tokenIds = tokenList
             .filter(t => t && t.entity_type !== 'Object')
             .map((t, i) => (t && t.id) ? t.id : ('token-' + i));
+        if (tokenIds.length === 0) {
+            alert('Error: No tokens found to start combat!');
+            addLogEntry('No tokens found to start combat.', 'warning');
+            return;
+        }
         console.log('[Combat v2] Starting combat with', tokenIds.length, 'tokens. IDs:', tokenIds.slice(0, 20).join(', ') + (tokenIds.length > 20 ? '...' : ''));
         tokenList.forEach((t, i) => {
             if (t) console.log(`  Token ${i + 1}: id=${t.id} entity_id=${t.entity_id} type=${t.entity_type}`);
@@ -7391,9 +7565,17 @@ function populateCombatActionPanel() {
     populatePlayerActionBar();
 }
 
-// Full HTML for player action bar (resize handle + tabs + panels). Used when creating or when existing bar lacks handles.
-var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player-action-bar-resize-height" id="playerActionBarResizeHandle" title="Drag to resize height">' +
-    '<span class="player-action-bar-resize-grip" aria-hidden="true">...</span></div>' +
+// Full HTML for player action bar (chrome + tabs + panels).
+var ACTION_DOCK_CHROME_HTML =
+    '<div class="action-dock__chrome">' +
+    '<div class="action-dock__resize-strip" id="actionDockResizeEdge" aria-label="Resize action dock"></div>' +
+    '<div class="action-dock__drag-handle" id="actionDockDragHandle" title="Drag when floating" aria-label="Drag handle"></div>' +
+    '<div class="action-dock__chrome-actions">' +
+    '<button type="button" class="action-dock__chrome-btn" id="actionDockCollapseBtn" aria-expanded="true" aria-label="Collapse action dock">▼</button>' +
+    '<button type="button" class="action-dock__chrome-btn" id="actionDockUndockBtn" aria-label="Toggle floating dock" title="Float / dock">⬚</button>' +
+    '<button type="button" class="action-dock__chrome-btn" id="actionDockResetBtn" aria-label="Reset dock position" title="Reset position">↺</button>' +
+    '</div></div>';
+var PLAYER_ACTION_BAR_HTML = ACTION_DOCK_CHROME_HTML +
     '<div class="player-bar-tabs" role="tablist">' +
     '<button type="button" class="player-bar-tab-btn active" data-tab="combat" role="tab" tabindex="-1">Combat</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="abilities" role="tab" tabindex="-1">Abilities</button>' +
@@ -7431,7 +7613,7 @@ var PLAYER_ACTION_BAR_HTML = '<div class="player-action-bar-resize-handle player
     '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
     '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
     '</div>' +
-    '<div class="player-bar-tab-panel" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">' +
+    '<div class="player-bar-tab-panel vtt-notes-tab-shell" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">' +
     '<div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>' +
     '</div>' +
     '</div></div></div>';
@@ -7901,23 +8083,25 @@ async function populatePlayerSw5eClassKit(charData, myCharacterRow) {
 function ensurePlayerActionBarExists() {
     let bar = document.getElementById('playerActionBar');
     if (bar) {
-        if (!document.getElementById('playerActionBarResizeHandle') || !bar.querySelector('.player-bar-tabs')) {
+        if (!bar.querySelector('.action-dock__chrome') || !bar.querySelector('.player-bar-tabs')) {
             bar.style.display = 'flex';
             bar.style.flexDirection = 'column';
             bar.innerHTML = PLAYER_ACTION_BAR_HTML;
         }
-        setupPlayerActionBarResize(bar);
+        if (typeof ActionDock !== 'undefined') ActionDock.init(bar);
+        else setupPlayerActionBarResize(bar);
         return bar;
     }
     bar = document.createElement('div');
     bar.id = 'playerActionBar';
-    bar.className = 'player-action-bar hidden';
+    bar.className = 'player-action-bar action-dock hidden';
     bar.setAttribute('aria-label', 'Player action bar');
     bar.style.display = 'flex';
     bar.style.flexDirection = 'column';
     bar.innerHTML = PLAYER_ACTION_BAR_HTML;
     document.body.appendChild(bar);
-    setupPlayerActionBarResize(bar);
+    if (typeof ActionDock !== 'undefined') ActionDock.init(bar);
+    else setupPlayerActionBarResize(bar);
     bar.addEventListener('mousedown', function(e) {
         if (e.target.closest('button')) {
             e.preventDefault(); /* stop browser from focusing button and scrolling view to show it */
@@ -7988,7 +8172,12 @@ function rollDmEnemyAbilityCheck(enemyName, ability, score) {
     var roll = Math.floor(Math.random() * 20) + 1;
     var total = roll + mod;
     var natText = roll === 20 ? ' ✨ NATURAL 20!' : roll === 1 ? ' ❌ NATURAL 1!' : '';
-    addRollEntry('🎲 ' + (enemyName || 'Enemy') + ' rolled ' + String(ability).toUpperCase() + ' check: ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText, roll === 20, roll === 1);
+    broadcastRollOrChatEntry({
+        pane: 'rolls',
+        message: '🎲 ' + (enemyName || 'Enemy') + ' rolled ' + String(ability).toUpperCase() + ' check: ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText,
+        isNat20: roll === 20,
+        isNat1: roll === 1
+    });
 }
 
 function rollDmEnemySavingThrow(enemyName, ability, score) {
@@ -7997,7 +8186,12 @@ function rollDmEnemySavingThrow(enemyName, ability, score) {
     var roll = Math.floor(Math.random() * 20) + 1;
     var total = roll + mod;
     var natText = roll === 20 ? ' ✨ NATURAL 20!' : roll === 1 ? ' ❌ NATURAL 1!' : '';
-    addRollEntry('🛡️ ' + (enemyName || 'Enemy') + ' rolled ' + String(ability).toUpperCase() + ' save: ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText, roll === 20, roll === 1);
+    broadcastRollOrChatEntry({
+        pane: 'rolls',
+        message: '🛡️ ' + (enemyName || 'Enemy') + ' rolled ' + String(ability).toUpperCase() + ' save: ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText,
+        isNat20: roll === 20,
+        isNat1: roll === 1
+    });
 }
 
 function rollDmEnemySkillCheck(enemyName, skillName, modifier) {
@@ -8006,14 +8200,22 @@ function rollDmEnemySkillCheck(enemyName, skillName, modifier) {
     var roll = Math.floor(Math.random() * 20) + 1;
     var total = roll + mod;
     var natText = roll === 20 ? ' ✨ NATURAL 20!' : roll === 1 ? ' ❌ NATURAL 1!' : '';
-    addRollEntry('🎯 ' + (enemyName || 'Enemy') + ' rolled ' + (skillName || 'Skill') + ': ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText, roll === 20, roll === 1);
+    broadcastRollOrChatEntry({
+        pane: 'rolls',
+        message: '🎯 ' + (enemyName || 'Enemy') + ' rolled ' + (skillName || 'Skill') + ': ' + roll + ' ' + formatSignedMod(mod) + ' = ' + total + natText,
+        isNat20: roll === 20,
+        isNat1: roll === 1
+    });
 }
 
 function rollDmEnemyFlatDie(sides, enemyName) {
     showRollsLogPane();
     var n = Number(sides) || 20;
     var result = rollDice('1d' + n);
-    addRollEntry('🎲 ' + (enemyName || 'Enemy') + ' rolled d' + n + ': ' + result.breakdown, false, false);
+    broadcastRollOrChatEntry({
+        pane: 'rolls',
+        message: '🎲 ' + (enemyName || 'Enemy') + ' rolled d' + n + ': ' + result.breakdown
+    });
 }
 
 function wireDmEnemyRollPanel(panel, enemyName) {
@@ -8048,12 +8250,18 @@ function applyPlayerActionBarHeight() {
         }
     } catch (e) {}
     const bar = document.getElementById('playerActionBar');
-    const dmEnemyBar = isDM && selectedToken && selectedToken.entity_type === 'Enemy';
-    const effectiveH = getEffectiveActionBarHeight(dmEnemyBar);
     if (bar && !bar.classList.contains('hidden')) {
-        bar.style.height = effectiveH + 'px';
+        if (typeof ActionDock !== 'undefined') {
+            ActionDock.syncHeight(playerActionBarHeight, false);
+        } else {
+            const dmEnemyBar = isDM && selectedToken && selectedToken.entity_type === 'Enemy';
+            const effectiveH = getEffectiveActionBarHeight(dmEnemyBar);
+            bar.style.height = effectiveH + 'px';
+            document.body.style.setProperty('--player-action-bar-height', effectiveH + 'px');
+        }
+    } else if (typeof ActionDock !== 'undefined') {
+        document.body.style.setProperty('--player-action-bar-height', ActionDock.getEffectiveHeight() + 'px');
     }
-    document.body.style.setProperty('--player-action-bar-height', effectiveH + 'px');
 }
 
 // Resize handles: height (top grip) and width (left edge grip)
@@ -8103,6 +8311,15 @@ function switchPlayerActionBarTab(tabId) {
     if (!bar) return;
     const tabBar = bar.querySelector('.player-bar-tabs');
     const panels = bar.querySelectorAll('.player-bar-tab-panel');
+    var prevTab = null;
+    if (tabBar) {
+        const activeBtn = tabBar.querySelector('.player-bar-tab-btn.active');
+        if (activeBtn) prevTab = activeBtn.dataset.tab;
+    }
+    if (prevTab === 'notes' && tabId !== 'notes') {
+        campaignNotesFlushPendingAutosave();
+        campaignNotesFlushPendingServerSave();
+    }
     if (tabBar) {
         tabBar.querySelectorAll('.player-bar-tab-btn').forEach(btn => {
             if (btn.dataset.tab === tabId) btn.classList.add('active'); else btn.classList.remove('active');
@@ -8113,7 +8330,17 @@ function switchPlayerActionBarTab(tabId) {
             if (panel.dataset.tab === tabId) panel.classList.add('active'); else panel.classList.remove('active');
         });
     }
-    if (tabId === 'notes') renderNotesTabContent();
+    if (tabId === 'notes') {
+        const notesTargetH = Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, Math.max(playerActionBarHeight, 340));
+        if (notesTargetH > playerActionBarHeight) {
+            playerActionBarHeight = notesTargetH;
+            try {
+                localStorage.setItem('playerActionBarHeight', String(playerActionBarHeight));
+            } catch (e2) {}
+        }
+        applyPlayerActionBarHeight();
+        renderNotesTabContent();
+    }
     if (tabId === 'class') {
         const targetH = Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, Math.max(playerActionBarHeight, 360));
         if (targetH > playerActionBarHeight) {
@@ -8134,6 +8361,15 @@ function switchPlayerActionBarTab(tabId) {
 }
 
 const CAMPAIGN_NOTES_KEY_PREFIX = 'campaignNotesData_';
+var CAMPAIGN_NOTES_SECTIONS = [
+    { id: 'sessions', label: 'Sessions', icon: '📜', addLabel: 'New Session', header: 'Session Log' },
+    { id: 'npcs', label: 'NPCs', icon: '👤', addLabel: 'Add NPC', header: 'NPC Registry' },
+    { id: 'planets', label: 'Planets', icon: '🪐', addLabel: 'Add Planet', header: 'Planetary Index' },
+    { id: 'locations', label: 'Locations', icon: '🏰', addLabel: 'Add Location', header: 'Location Index' },
+    { id: 'quests', label: 'Quests', icon: '📋', addLabel: 'New Quest', header: 'Quest Tracker' }
+];
+var campaignNotesSaveState = 'saved';
+var campaignNotesSearchQuery = '';
 function notesUid() { return Math.random().toString(36).slice(2, 10); }
 function emptyCampaignNotesData() {
     return { sessions: [], npcs: [], planets: [], locations: [], quests: [] };
@@ -8152,6 +8388,51 @@ function isCampaignNotesDataEmpty(d) {
     if (!d) return true;
     return (!d.sessions || !d.sessions.length) && (!d.npcs || !d.npcs.length) && (!d.planets || !d.planets.length) &&
         (!d.locations || !d.locations.length) && (!d.quests || !d.quests.length);
+}
+function getCampaignNotesSectionMeta(sectionId) {
+    for (var i = 0; i < CAMPAIGN_NOTES_SECTIONS.length; i++) {
+        if (CAMPAIGN_NOTES_SECTIONS[i].id === sectionId) return CAMPAIGN_NOTES_SECTIONS[i];
+    }
+    return CAMPAIGN_NOTES_SECTIONS[0];
+}
+function getNotesEntryTitle(entry, sectionId) {
+    if (!entry) return 'Untitled';
+    if (sectionId === 'sessions' || sectionId === 'quests') return entry.title || 'Untitled';
+    return entry.name || 'Unnamed';
+}
+function getNotesEntrySubtitle(entry, sectionId) {
+    if (!entry) return '';
+    if (sectionId === 'sessions') return entry.date || '';
+    if (sectionId === 'npcs') return entry.role || entry.location || '';
+    if (sectionId === 'planets') return entry.type || '';
+    if (sectionId === 'locations') return entry.type || '';
+    if (sectionId === 'quests') return entry.status || '';
+    return '';
+}
+function filterNotesList(list, sectionId, query) {
+    if (!query) return list;
+    var q = String(query).toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(function(item) {
+        var parts = [getNotesEntryTitle(item, sectionId), getNotesEntrySubtitle(item, sectionId)];
+        if (item.content) parts.push(item.content);
+        if (item.notes) parts.push(item.notes);
+        if (item.description) parts.push(item.description);
+        if (item.personality) parts.push(item.personality);
+        if (item.threads) parts.push(item.threads);
+        return parts.join(' ').toLowerCase().indexOf(q) >= 0;
+    });
+}
+function setCampaignNotesSaveState(state) {
+    campaignNotesSaveState = state;
+    updateCampaignNotesSaveStatusUI();
+}
+function updateCampaignNotesSaveStatusUI() {
+    var el = document.getElementById('vttNotesSyncStatus');
+    if (!el) return;
+    el.className = 'vtt-notes-sync vtt-notes-sync--' + campaignNotesSaveState;
+    var labels = { idle: '—', saving: 'SAVING…', saved: 'SYNCED', error: 'OFFLINE' };
+    el.textContent = labels[campaignNotesSaveState] || '—';
 }
 /** SW5e / builder JSON often has character.id — stable across re-imports; server row id can change. */
 function getCharacterSheetStableIdFromCharacterId(characterId) {
@@ -8209,6 +8490,13 @@ function readLocalStorageCampaignNotesMigration(characterId) {
     }
     return emptyCampaignNotesData();
 }
+function writeCampaignNotesLocalStorage(characterId, data) {
+    var lsKey = getCampaignNotesCanonicalStorageKey(characterId);
+    if (!lsKey) return;
+    try {
+        localStorage.setItem(lsKey, JSON.stringify(normalizeCampaignNotesRaw(data)));
+    } catch (e) {}
+}
 function campaignNotesPutToServer(fid, data) {
     return fetch('/api/campaign-notes/' + encodeURIComponent(fid), {
         method: 'PUT',
@@ -8221,11 +8509,18 @@ function campaignNotesPutToServer(fid, data) {
 function scheduleCampaignNotesServerSave(fid) {
     if (!fid) return;
     if (campaignNotesServerSaveTimer) clearTimeout(campaignNotesServerSaveTimer);
+    setCampaignNotesSaveState('saving');
     campaignNotesServerSaveTimer = setTimeout(function() {
         campaignNotesServerSaveTimer = null;
         var d = campaignNotesMem[fid];
         if (!d) return;
-        campaignNotesPutToServer(fid, d).catch(function(e) { console.warn('[Campaign notes] server save', e); });
+        setCampaignNotesSaveState('saving');
+        campaignNotesPutToServer(fid, d).then(function() {
+            setCampaignNotesSaveState('saved');
+        }).catch(function(e) {
+            console.warn('[Campaign notes] server save', e);
+            setCampaignNotesSaveState('error');
+        });
     }, 450);
 }
 function campaignNotesFlushPendingServerSave() {
@@ -8238,14 +8533,20 @@ function campaignNotesFlushPendingServerSave() {
     if (!fid) return;
     var d = campaignNotesMem[fid];
     if (d == null) return;
+    setCampaignNotesSaveState('saving');
     try {
         fetch('/api/campaign-notes/' + encodeURIComponent(fid), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(normalizeCampaignNotesRaw(d)),
             keepalive: true
-        }).catch(function() {});
-    } catch (e) {}
+        }).then(function(r) {
+            if (r.ok) setCampaignNotesSaveState('saved');
+            else setCampaignNotesSaveState('error');
+        }).catch(function() { setCampaignNotesSaveState('error'); });
+    } catch (e) {
+        setCampaignNotesSaveState('error');
+    }
 }
 function ensureCampaignNotesLoaded(characterId) {
     var fid = getCampaignNotesFileId(characterId);
@@ -8268,6 +8569,7 @@ function ensureCampaignNotesLoaded(characterId) {
         .then(function(json) {
             if (json !== undefined && json !== null && typeof json === 'object') {
                 campaignNotesMem[fid] = normalizeCampaignNotesRaw(json);
+                writeCampaignNotesLocalStorage(characterId, campaignNotesMem[fid]);
             }
         })
         .catch(function(e) {
@@ -8294,6 +8596,7 @@ function saveCampaignNotes(characterId, data) {
     var fid = getCampaignNotesFileId(characterId);
     if (!fid) return;
     campaignNotesMem[fid] = normalizeCampaignNotesRaw(data);
+    writeCampaignNotesLocalStorage(characterId, campaignNotesMem[fid]);
     scheduleCampaignNotesServerSave(fid);
 }
 
@@ -8316,6 +8619,7 @@ function campaignNotesFlushPendingAutosave() {
 }
 function scheduleCampaignNotesAutosave() {
     if (!myCharacterId || isDM) return;
+    setCampaignNotesSaveState('saving');
     if (campaignNotesAutosaveTimer) clearTimeout(campaignNotesAutosaveTimer);
     campaignNotesAutosaveTimer = setTimeout(function() {
         campaignNotesAutosaveTimer = null;
@@ -8339,43 +8643,167 @@ function initCampaignNotesPersistence() {
     window._campaignNotesPersistenceInit = true;
     document.addEventListener('input', campaignNotesAutosaveDelegate, true);
     document.addEventListener('change', campaignNotesAutosaveDelegate, true);
-    window.addEventListener('pagehide', function() { campaignNotesFlushPendingAutosave(); });
-    window.addEventListener('beforeunload', function() { campaignNotesFlushPendingAutosave(); });
+    window.addEventListener('pagehide', function() {
+        campaignNotesFlushPendingAutosave();
+        campaignNotesFlushPendingServerSave();
+    });
+    window.addEventListener('beforeunload', function() {
+        campaignNotesFlushPendingAutosave();
+        campaignNotesFlushPendingServerSave();
+    });
     document.addEventListener('visibilitychange', function() {
-        if (document.visibilityState === 'hidden') campaignNotesFlushPendingAutosave();
+        if (document.visibilityState === 'hidden') {
+            campaignNotesFlushPendingAutosave();
+            campaignNotesFlushPendingServerSave();
+        }
     });
 }
 
+function campaignNotesSwitchSection(sectionId) {
+    campaignNotesFlushPendingAutosave();
+    try { localStorage.setItem('campaignNotesSubTab', sectionId); } catch (e) {}
+    campaignNotesSearchQuery = '';
+    renderNotesTabContent();
+}
+
+function campaignNotesSelectEntry(sectionId, entryId) {
+    campaignNotesFlushPendingAutosave();
+    var characterId = myCharacterId;
+    if (!characterId) return;
+    try { localStorage.setItem('campaignNotesActive_' + characterId + '_' + sectionId, entryId); } catch (e) {}
+    renderNotesTabContent();
+}
+
+function buildNotesEditorHtml(sectionId, cur) {
+    if (!cur) return '<p class="vtt-notes-empty">Select or create an entry</p>';
+    var delArg = escapeHtml(cur.id);
+    if (sectionId === 'sessions') {
+        return '<div class="vtt-notes-editor">' +
+            '<div class="vtt-notes-editor-top">' +
+            '<div class="vtt-notes-field vtt-notes-field--grow"><label class="vtt-notes-micro-label">Title</label>' +
+            '<input type="text" id="notesSessionTitle" value="' + escapeHtml(cur.title || '') + '" placeholder="Session title"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Date</label>' +
+            '<input type="text" id="notesSessionDate" value="' + escapeHtml(cur.date || '') + '" placeholder="Date"></div>' +
+            '<button type="button" class="vtt-notes-del-btn" onclick="campaignNotesDelete(\'sessions\', \'' + delArg + '\')">Delete</button>' +
+            '</div>' +
+            '<div class="vtt-notes-editor-main"><label class="vtt-notes-micro-label">Session notes</label>' +
+            '<textarea id="notesSessionContent" class="vtt-notes-main-textarea" placeholder="What happened this session…">' + escapeHtml(cur.content || '') + '</textarea></div>' +
+            '</div>';
+    }
+    if (sectionId === 'npcs') {
+        return '<div class="vtt-notes-editor">' +
+            '<div class="vtt-notes-editor-top">' +
+            '<div class="vtt-notes-field vtt-notes-field--grow"><label class="vtt-notes-micro-label">Name</label>' +
+            '<input type="text" id="notesNpcName" value="' + escapeHtml(cur.name || '') + '" placeholder="NPC name"></div>' +
+            '<button type="button" class="vtt-notes-del-btn" onclick="campaignNotesDelete(\'npcs\', \'' + delArg + '\')">Delete</button>' +
+            '</div>' +
+            '<div class="vtt-notes-editor-main"><label class="vtt-notes-micro-label">Notes</label>' +
+            '<textarea id="notesNpcNotes" class="vtt-notes-main-textarea" placeholder="Your notes about this NPC…">' + escapeHtml(cur.notes || '') + '</textarea></div>' +
+            '<details class="vtt-notes-details"><summary class="vtt-notes-details-summary">Details</summary>' +
+            '<div class="vtt-notes-details-body">' +
+            '<div class="vtt-notes-details-grid">' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Race</label><input type="text" id="notesNpcRace" value="' + escapeHtml(cur.race || '') + '"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Role</label><input type="text" id="notesNpcRole" value="' + escapeHtml(cur.role || '') + '"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Location</label><input type="text" id="notesNpcLocation" value="' + escapeHtml(cur.location || '') + '"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Disposition</label>' +
+            '<select id="notesNpcDisposition"><option value="Friendly"' + (cur.disposition === 'Friendly' ? ' selected' : '') + '>Friendly</option>' +
+            '<option value="Neutral"' + (cur.disposition === 'Neutral' ? ' selected' : '') + '>Neutral</option>' +
+            '<option value="Hostile"' + (cur.disposition === 'Hostile' ? ' selected' : '') + '>Hostile</option></select></div>' +
+            '</div>' +
+            '<label class="vtt-notes-check"><input type="checkbox" id="notesNpcAlive" ' + (cur.alive !== false ? 'checked' : '') + '> Alive</label>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Personality</label>' +
+            '<textarea id="notesNpcPersonality" class="vtt-notes-sub-textarea" placeholder="Mannerisms, voice, quirks…">' + escapeHtml(cur.personality || '') + '</textarea></div>' +
+            '</div></details></div>';
+    }
+    if (sectionId === 'planets') {
+        return '<div class="vtt-notes-editor">' +
+            '<div class="vtt-notes-editor-top">' +
+            '<div class="vtt-notes-field vtt-notes-field--grow"><label class="vtt-notes-micro-label">Name</label>' +
+            '<input type="text" id="notesPlanetName" value="' + escapeHtml(cur.name || '') + '" placeholder="Planet name"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Type</label>' +
+            '<select id="notesPlanetType"><option value="Planet"' + (cur.type === 'Planet' ? ' selected' : '') + '>Planet</option>' +
+            '<option value="Moon"' + (cur.type === 'Moon' ? ' selected' : '') + '>Moon</option>' +
+            '<option value="Station"' + (cur.type === 'Station' ? ' selected' : '') + '>Station</option>' +
+            '<option value="Other"' + (cur.type === 'Other' ? ' selected' : '') + '>Other</option></select></div>' +
+            '<button type="button" class="vtt-notes-del-btn" onclick="campaignNotesDelete(\'planets\', \'' + delArg + '\')">Delete</button>' +
+            '</div>' +
+            '<div class="vtt-notes-editor-main"><label class="vtt-notes-micro-label">Notes</label>' +
+            '<textarea id="notesPlanetNotes" class="vtt-notes-main-textarea" placeholder="Your notes…">' + escapeHtml(cur.notes || '') + '</textarea></div>' +
+            '<details class="vtt-notes-details"><summary class="vtt-notes-details-summary">Description</summary>' +
+            '<div class="vtt-notes-details-body"><textarea id="notesPlanetDescription" class="vtt-notes-sub-textarea" placeholder="World description…">' + escapeHtml(cur.description || '') + '</textarea></div>' +
+            '</details></div>';
+    }
+    if (sectionId === 'locations') {
+        return '<div class="vtt-notes-editor">' +
+            '<div class="vtt-notes-editor-top">' +
+            '<div class="vtt-notes-field vtt-notes-field--grow"><label class="vtt-notes-micro-label">Name</label>' +
+            '<input type="text" id="notesLocName" value="' + escapeHtml(cur.name || '') + '" placeholder="Location name"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Type</label>' +
+            '<select id="notesLocType"><option value="Town"' + (cur.type === 'Town' ? ' selected' : '') + '>Town</option>' +
+            '<option value="City"' + (cur.type === 'City' ? ' selected' : '') + '>City</option>' +
+            '<option value="Dungeon"' + (cur.type === 'Dungeon' ? ' selected' : '') + '>Dungeon</option>' +
+            '<option value="Forest"' + (cur.type === 'Forest' ? ' selected' : '') + '>Forest</option>' +
+            '<option value="Other"' + (cur.type === 'Other' ? ' selected' : '') + '>Other</option></select></div>' +
+            '<button type="button" class="vtt-notes-del-btn" onclick="campaignNotesDelete(\'locations\', \'' + delArg + '\')">Delete</button>' +
+            '</div>' +
+            '<div class="vtt-notes-editor-main"><label class="vtt-notes-micro-label">Notes</label>' +
+            '<textarea id="notesLocNotes" class="vtt-notes-main-textarea" placeholder="Your notes…">' + escapeHtml(cur.notes || '') + '</textarea></div>' +
+            '<details class="vtt-notes-details"><summary class="vtt-notes-details-summary">Description</summary>' +
+            '<div class="vtt-notes-details-body"><textarea id="notesLocDescription" class="vtt-notes-sub-textarea" placeholder="Location description…">' + escapeHtml(cur.description || '') + '</textarea></div>' +
+            '</details></div>';
+    }
+    if (sectionId === 'quests') {
+        return '<div class="vtt-notes-editor">' +
+            '<div class="vtt-notes-editor-top">' +
+            '<div class="vtt-notes-field vtt-notes-field--grow"><label class="vtt-notes-micro-label">Quest</label>' +
+            '<input type="text" id="notesQuestTitle" value="' + escapeHtml(cur.title || '') + '" placeholder="Quest title"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Status</label>' +
+            '<select id="notesQuestStatus"><option value="Active"' + (cur.status === 'Active' ? ' selected' : '') + '>Active</option>' +
+            '<option value="Completed"' + (cur.status === 'Completed' ? ' selected' : '') + '>Completed</option>' +
+            '<option value="Failed"' + (cur.status === 'Failed' ? ' selected' : '') + '>Failed</option>' +
+            '<option value="Paused"' + (cur.status === 'Paused' ? ' selected' : '') + '>Paused</option></select></div>' +
+            '<button type="button" class="vtt-notes-del-btn" onclick="campaignNotesDelete(\'quests\', \'' + delArg + '\')">Delete</button>' +
+            '</div>' +
+            '<div class="vtt-notes-editor-main"><label class="vtt-notes-micro-label">Description</label>' +
+            '<textarea id="notesQuestDescription" class="vtt-notes-main-textarea" placeholder="Quest details…">' + escapeHtml(cur.description || '') + '</textarea></div>' +
+            '<details class="vtt-notes-details"><summary class="vtt-notes-details-summary">More details</summary>' +
+            '<div class="vtt-notes-details-body">' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Quest giver</label>' +
+            '<input type="text" id="notesQuestGiver" value="' + escapeHtml(cur.giver || '') + '" placeholder="Who gave this quest"></div>' +
+            '<div class="vtt-notes-field"><label class="vtt-notes-micro-label">Unresolved threads</label>' +
+            '<textarea id="notesQuestThreads" class="vtt-notes-sub-textarea" placeholder="Loose ends, clues, follow-ups…">' + escapeHtml(cur.threads || '') + '</textarea></div>' +
+            '</div></details></div>';
+    }
+    return '';
+}
+
 function renderNotesTabContent() {
+    campaignNotesFlushPendingAutosave();
     var container = document.getElementById('playerBarNotesContent');
     if (!container) return;
     var characterId = myCharacterId || null;
     if (!characterId) {
-        container.innerHTML = '<div class="player-bar-notes-wrap"><p class="notes-detail-empty" style="padding:12px;">Select a character to view and edit your notes. Your notes are private to that character.</p></div>';
+        container.innerHTML = '<div class="vtt-notes-console vtt-notes-console--empty"><p class="vtt-notes-empty">Select a character to view and edit your campaign log. Notes are private to that character.</p></div>';
         return;
     }
     var subTab = localStorage.getItem('campaignNotesSubTab') || 'sessions';
-    var sections = [
-        { id: 'sessions', label: 'Session Notes', icon: '📜' },
-        { id: 'npcs', label: 'NPCs', icon: '👤' },
-        { id: 'planets', label: 'Planets', icon: '🪐' },
-        { id: 'locations', label: 'Locations', icon: '🏰' },
-        { id: 'quests', label: 'Quests', icon: '📋' }
-    ];
-    var html = '<div class="player-bar-notes-wrap">';
-    html += '<div class="player-bar-notes-subtabs" role="tablist">';
-    sections.forEach(function(s) {
-        html += '<button type="button" class="player-bar-notes-subtab' + (subTab === s.id ? ' active' : '') + '" data-notes-section="' + s.id + '">' + s.icon + ' ' + s.label + '</button>';
-    });
+    var meta = getCampaignNotesSectionMeta(subTab);
+    var html = '<div class="vtt-notes-console">';
+    html += '<div class="vtt-notes-header">';
+    html += '<span id="vttNotesSyncStatus" class="vtt-notes-sync vtt-notes-sync--' + campaignNotesSaveState + '">SYNCED</span>';
+    html += '<span class="vtt-notes-header-title">' + escapeHtml(meta.header) + '</span>';
+    html += '<button type="button" class="vtt-notes-add-btn" onclick="campaignNotesAdd(\'' + escapeHtml(subTab) + '\')">+ ' + escapeHtml(meta.addLabel) + '</button>';
     html += '</div>';
-    html += '<div class="player-bar-notes-body" id="playerBarNotesBody"><p class="notes-detail-empty" style="padding:12px;">Loading notes from server…</p></div></div>';
-    container.innerHTML = html;
-    container.querySelectorAll('.player-bar-notes-subtab').forEach(function(btn) {
-        btn.onclick = function() {
-            try { localStorage.setItem('campaignNotesSubTab', this.dataset.notesSection); } catch (e) {}
-            renderNotesTabContent();
-        };
+    html += '<div class="vtt-notes-workspace">';
+    html += '<nav class="vtt-notes-rail" role="tablist" aria-label="Note categories">';
+    CAMPAIGN_NOTES_SECTIONS.forEach(function(s) {
+        html += '<button type="button" class="vtt-notes-rail-btn' + (subTab === s.id ? ' active' : '') + '" title="' + escapeHtml(s.label) + '" data-notes-section="' + s.id + '" onclick="campaignNotesSwitchSection(\'' + s.id + '\')">' + s.icon + '</button>';
     });
+    html += '</nav>';
+    html += '<div class="vtt-notes-body" id="playerBarNotesBody"><p class="vtt-notes-empty">Loading…</p></div>';
+    html += '</div></div>';
+    container.innerHTML = html;
+    updateCampaignNotesSaveStatusUI();
     var loadFor = characterId;
     ensureCampaignNotesLoaded(characterId).then(function() {
         if (loadFor !== myCharacterId) return;
@@ -8399,163 +8827,55 @@ function renderNotesSection(characterId, sectionId, data, container) {
     if (!Array.isArray(list)) list = [];
     var activeKey = 'campaignNotesActive_' + (characterId || '') + '_' + sectionId;
     var activeId = localStorage.getItem(activeKey) || null;
+    var filtered = filterNotesList(list, sectionId, campaignNotesSearchQuery);
     var cur = activeId ? list.find(function(x) { return x.id === activeId; }) : null;
-
-    if (sectionId === 'sessions') {
-        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
-        var listEl = document.getElementById('notesList');
-        var detailEl = document.getElementById('notesDetail');
-        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'sessions\')">+ New Session</button>';
-        list.forEach(function(s) {
-            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === s.id ? ' active' : '') + '" data-id="' + escapeHtml(s.id) + '"><span>' + escapeHtml(s.title || 'Untitled') + '</span><span class="notes-date">' + escapeHtml(s.date || '') + '</span></div>';
-        });
-        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
-            el.onclick = function() {
-                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
-                renderNotesTabContent();
-            };
-        });
-        if (cur) {
-            detailEl.innerHTML = '<div class="notes-detail-fields">' +
-                '<span class="notes-field-label">Title</span><input type="text" class="notes-detail-title" id="notesSessionTitle" value="' + escapeHtml(cur.title || '') + '" placeholder="Session title">' +
-                '<span class="notes-field-label">Date</span><input type="text" class="notes-detail-meta" id="notesSessionDate" value="' + escapeHtml(cur.date || '') + '" placeholder="Date">' +
-                '<span class="notes-field-label">Session notes</span><textarea class="notes-detail-text notes-detail-textarea-big" id="notesSessionContent" placeholder="Session notes...">' + escapeHtml(cur.content || '') + '</textarea>' +
-                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveSession()">Save</button>' +
-                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'sessions\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
-                '</div>';
-            detailEl.scrollTop = 0;
-        } else {
-            detailEl.innerHTML = '<p class="notes-detail-empty">Select or create a session</p>';
-        }
-        return;
+    if (!cur && filtered.length) {
+        cur = filtered[0];
+        try { localStorage.setItem(activeKey, cur.id); } catch (e) {}
+    } else if (cur && filtered.length && !filtered.find(function(x) { return x.id === cur.id; })) {
+        cur = filtered[0];
+        try { localStorage.setItem(activeKey, cur.id); } catch (e) {}
     }
 
-    if (sectionId === 'npcs') {
-        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
-        var listEl = document.getElementById('notesList');
-        var detailEl = document.getElementById('notesDetail');
-        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'npcs\')">+ Add NPC</button>';
-        list.forEach(function(n) {
-            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === n.id ? ' active' : '') + '" data-id="' + escapeHtml(n.id) + '">' + (n.alive !== false ? '👤' : '💀') + ' ' + escapeHtml(n.name || 'Unnamed') + '</div>';
+    var listHtml = '<div class="vtt-notes-list-panel">';
+    listHtml += '<input type="search" id="vttNotesSearchInput" class="vtt-notes-search" placeholder="Search…" value="' + escapeHtml(campaignNotesSearchQuery) + '">';
+    listHtml += '<div class="vtt-notes-list" id="notesList">';
+    if (!filtered.length) {
+        listHtml += '<p class="vtt-notes-list-empty">No entries yet</p>';
+    } else {
+        filtered.forEach(function(item) {
+            var isActive = cur && cur.id === item.id;
+            var icon = sectionId === 'npcs' ? (item.alive !== false ? '👤' : '💀') : '';
+            listHtml += '<button type="button" class="vtt-notes-list-item' + (isActive ? ' active' : '') + '" data-id="' + escapeHtml(item.id) + '">';
+            if (icon) listHtml += '<span class="vtt-notes-list-icon">' + icon + '</span>';
+            listHtml += '<span class="vtt-notes-list-text"><span class="vtt-notes-list-title">' + escapeHtml(getNotesEntryTitle(item, sectionId)) + '</span>';
+            var sub = getNotesEntrySubtitle(item, sectionId);
+            if (sub) listHtml += '<span class="vtt-notes-list-sub">' + escapeHtml(sub) + '</span>';
+            listHtml += '</span></button>';
         });
-        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
-            el.onclick = function() {
-                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
-                renderNotesTabContent();
-            };
-        });
-        if (cur) {
-            detailEl.innerHTML = '<div class="notes-detail-fields">' +
-                '<span class="notes-field-label">Name</span><input type="text" id="notesNpcName" value="' + escapeHtml(cur.name || '') + '" placeholder="Name">' +
-                '<span class="notes-field-label">Race</span><input type="text" id="notesNpcRace" value="' + escapeHtml(cur.race || '') + '" placeholder="Race">' +
-                '<span class="notes-field-label">Role</span><input type="text" id="notesNpcRole" value="' + escapeHtml(cur.role || '') + '" placeholder="Role">' +
-                '<span class="notes-field-label">Location</span><input type="text" id="notesNpcLocation" value="' + escapeHtml(cur.location || '') + '" placeholder="Location">' +
-                '<span class="notes-field-label">Disposition</span><select id="notesNpcDisposition"><option value="Friendly"' + (cur.disposition === 'Friendly' ? ' selected' : '') + '>Friendly</option><option value="Neutral"' + (cur.disposition === 'Neutral' ? ' selected' : '') + '>Neutral</option><option value="Hostile"' + (cur.disposition === 'Hostile' ? ' selected' : '') + '>Hostile</option></select>' +
-                '<label><input type="checkbox" id="notesNpcAlive" ' + (cur.alive !== false ? 'checked' : '') + '> Alive</label>' +
-                '<span class="notes-field-label">Personality</span><textarea class="notes-detail-textarea-big" id="notesNpcPersonality" placeholder="Personality / mannerisms">' + escapeHtml(cur.personality || '') + '</textarea>' +
-                '<span class="notes-field-label">Notes</span><textarea class="notes-detail-textarea-big" id="notesNpcNotes" placeholder="Your notes about this NPC">' + escapeHtml(cur.notes || '') + '</textarea>' +
-                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveNpc()">Save</button>' +
-                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'npcs\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
-                '</div>';
-            detailEl.scrollTop = 0;
-        } else {
-            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add an NPC</p>';
-        }
-        return;
     }
+    listHtml += '</div></div>';
+    listHtml += '<div class="vtt-notes-detail-panel" id="notesDetail">' + buildNotesEditorHtml(sectionId, cur) + '</div>';
 
-    if (sectionId === 'planets') {
-        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
-        var listEl = document.getElementById('notesList');
-        var detailEl = document.getElementById('notesDetail');
-        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'planets\')">+ Add Planet</button>';
-        list.forEach(function(p) {
-            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === p.id ? ' active' : '') + '" data-id="' + escapeHtml(p.id) + '">🪐 ' + escapeHtml(p.name || 'Unnamed') + '</div>';
-        });
-        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
-            el.onclick = function() {
-                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
-                renderNotesTabContent();
-            };
-        });
-        if (cur) {
-            detailEl.innerHTML = '<div class="notes-detail-fields">' +
-                '<span class="notes-field-label">Name</span><input type="text" id="notesPlanetName" value="' + escapeHtml(cur.name || '') + '" placeholder="Name">' +
-                '<span class="notes-field-label">Type</span><select id="notesPlanetType"><option value="Planet"' + (cur.type === 'Planet' ? ' selected' : '') + '>Planet</option><option value="Moon"' + (cur.type === 'Moon' ? ' selected' : '') + '>Moon</option><option value="Station"' + (cur.type === 'Station' ? ' selected' : '') + '>Station</option><option value="Other"' + (cur.type === 'Other' ? ' selected' : '') + '>Other</option></select>' +
-                '<span class="notes-field-label">Description</span><textarea class="notes-detail-textarea-big" id="notesPlanetDescription" placeholder="Description">' + escapeHtml(cur.description || '') + '</textarea>' +
-                '<span class="notes-field-label">Notes</span><textarea class="notes-detail-textarea-big" id="notesPlanetNotes" placeholder="Your notes">' + escapeHtml(cur.notes || '') + '</textarea>' +
-                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSavePlanet()">Save</button>' +
-                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'planets\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
-                '</div>';
-            detailEl.scrollTop = 0;
-        } else {
-            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add a planet</p>';
-        }
-        return;
-    }
-
-    if (sectionId === 'locations') {
-        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
-        var listEl = document.getElementById('notesList');
-        var detailEl = document.getElementById('notesDetail');
-        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'locations\')">+ Add Location</button>';
-        list.forEach(function(l) {
-            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === l.id ? ' active' : '') + '" data-id="' + escapeHtml(l.id) + '">🏰 ' + escapeHtml(l.name || 'Unnamed') + '</div>';
-        });
-        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
-            el.onclick = function() {
-                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
-                renderNotesTabContent();
-            };
-        });
-        if (cur) {
-            detailEl.innerHTML = '<div class="notes-detail-fields">' +
-                '<span class="notes-field-label">Name</span><input type="text" id="notesLocName" value="' + escapeHtml(cur.name || '') + '" placeholder="Name">' +
-                '<span class="notes-field-label">Type</span><select id="notesLocType"><option value="Town"' + (cur.type === 'Town' ? ' selected' : '') + '>Town</option><option value="City"' + (cur.type === 'City' ? ' selected' : '') + '>City</option><option value="Dungeon"' + (cur.type === 'Dungeon' ? ' selected' : '') + '>Dungeon</option><option value="Forest"' + (cur.type === 'Forest' ? ' selected' : '') + '>Forest</option><option value="Other"' + (cur.type === 'Other' ? ' selected' : '') + '>Other</option></select>' +
-                '<span class="notes-field-label">Description</span><textarea class="notes-detail-textarea-big" id="notesLocDescription" placeholder="Description">' + escapeHtml(cur.description || '') + '</textarea>' +
-                '<span class="notes-field-label">Notes</span><textarea class="notes-detail-textarea-big" id="notesLocNotes" placeholder="Your notes">' + escapeHtml(cur.notes || '') + '</textarea>' +
-                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveLocation()">Save</button>' +
-                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'locations\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
-                '</div>';
-            detailEl.scrollTop = 0;
-        } else {
-            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add a location</p>';
-        }
-        return;
-    }
-
-    if (sectionId === 'quests') {
-        container.innerHTML = '<div class="player-bar-notes-list" id="notesList"></div><div class="player-bar-notes-detail" id="notesDetail"></div>';
-        var listEl = document.getElementById('notesList');
-        var detailEl = document.getElementById('notesDetail');
-        listEl.innerHTML = '<button type="button" class="player-bar-notes-add" onclick="campaignNotesAdd(\'quests\')">+ New Quest</button>';
-        list.forEach(function(q) {
-            listEl.innerHTML += '<div class="player-bar-notes-item' + (cur && cur.id === q.id ? ' active' : '') + '" data-id="' + escapeHtml(q.id) + '">📋 ' + escapeHtml(q.title || 'Untitled') + '</div>';
-        });
-        listEl.querySelectorAll('.player-bar-notes-item').forEach(function(el) {
-            el.onclick = function() {
-                try { localStorage.setItem(activeKey, this.dataset.id); } catch (e) {}
-                renderNotesTabContent();
-            };
-        });
-        if (cur) {
-            detailEl.innerHTML = '<div class="notes-detail-fields">' +
-                '<span class="notes-field-label">Quest title</span><input type="text" id="notesQuestTitle" value="' + escapeHtml(cur.title || '') + '" placeholder="Quest title">' +
-                '<span class="notes-field-label">Status</span><select id="notesQuestStatus"><option value="Active"' + (cur.status === 'Active' ? ' selected' : '') + '>Active</option><option value="Completed"' + (cur.status === 'Completed' ? ' selected' : '') + '>Completed</option><option value="Failed"' + (cur.status === 'Failed' ? ' selected' : '') + '>Failed</option><option value="Paused"' + (cur.status === 'Paused' ? ' selected' : '') + '>Paused</option></select>' +
-                '<span class="notes-field-label">Quest giver</span><input type="text" id="notesQuestGiver" value="' + escapeHtml(cur.giver || '') + '" placeholder="Quest giver">' +
-                '<span class="notes-field-label">Description</span><textarea class="notes-detail-textarea-big" id="notesQuestDescription" placeholder="Description">' + escapeHtml(cur.description || '') + '</textarea>' +
-                '<span class="notes-field-label">Unresolved threads</span><textarea class="notes-detail-textarea-big" id="notesQuestThreads" placeholder="Unresolved threads">' + escapeHtml(cur.threads || '') + '</textarea>' +
-                '<button type="button" class="player-bar-notes-save" onclick="campaignNotesSaveQuest()">Save</button>' +
-                '<button type="button" class="player-bar-notes-del" onclick="campaignNotesDelete(\'quests\', \'' + escapeHtml(cur.id) + '\')">Delete</button>' +
-                '</div>';
-            detailEl.scrollTop = 0;
-        } else {
-            detailEl.innerHTML = '<p class="notes-detail-empty">Select or add a quest</p>';
-        }
+    container.innerHTML = listHtml;
+    container.querySelectorAll('.vtt-notes-list-item').forEach(function(el) {
+        el.onclick = function() {
+            campaignNotesSelectEntry(sectionId, this.dataset.id);
+        };
+    });
+    var searchEl = document.getElementById('vttNotesSearchInput');
+    if (searchEl) {
+        searchEl.oninput = function() {
+            campaignNotesSearchQuery = this.value || '';
+            campaignNotesFlushPendingAutosave();
+            var dataNow = getCampaignNotes(characterId);
+            renderNotesSection(characterId, sectionId, dataNow, container);
+        };
     }
 }
 
 function campaignNotesAdd(sectionId) {
+    campaignNotesFlushPendingAutosave();
     var characterId = myCharacterId;
     if (!characterId) return;
     var data = getCampaignNotes(characterId);
@@ -8578,6 +8898,8 @@ function campaignNotesAdd(sectionId) {
     renderNotesTabContent();
 }
 function campaignNotesDelete(sectionId, id) {
+    if (!confirm('Delete this entry? This cannot be undone.')) return;
+    campaignNotesFlushPendingAutosave();
     var characterId = myCharacterId;
     if (!characterId) return;
     var data = getCampaignNotes(characterId);
@@ -8669,6 +8991,7 @@ function updateActionBarButtonLabel() {
         var on = isDmBtn ? dmActionBarEnabled : playerActionBarVisible;
         btn.textContent = on ? '📊 Action Bar (On)' : '📊 Action Bar (Off)';
     });
+    if (typeof UIShell !== 'undefined') UIShell.syncActionBarToggleUI();
 }
 
 function toggleDmActionBarExpanded() {
@@ -8692,27 +9015,20 @@ function updatePlayerActionBarVisibility() {
         bar.classList.toggle('player-action-bar--compact', false);
         bar.classList.toggle('player-action-bar--expanded', !!dmEnemyBar);
         applyPlayerActionBarHeight();
-        const effectiveH = getEffectiveActionBarHeight(dmEnemyBar);
-        const dockStyle = dmEnemyBar
-            ? 'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;max-width:none!important;height:' +
-              effectiveH +
-              'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;'
-            : 'position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100%!important;height:' +
-              effectiveH +
-              'px!important;display:flex!important;flex-direction:column!important;visibility:visible!important;z-index:99999!important;background:linear-gradient(180deg,#070b14 0%,#050814 45%,#03050c 100%)!important;border-top:3px solid rgba(74,158,255,0.55)!important;border-left:3px solid rgba(201,162,39,0.45)!important;box-shadow:0 -8px 40px rgba(0,0,0,.55)!important;';
-        bar.style.cssText =
-            dockStyle;
-        document.body.style.setProperty('--player-action-bar-height', effectiveH + 'px');
+        if (typeof ActionDock !== 'undefined') {
+            ActionDock.onVisibilityChange(true);
+        }
         document.body.classList.add('player-action-bar-visible');
         populatePlayerActionBar();
     } else {
         bar.classList.add('hidden');
         bar.classList.remove('player-action-bar--dm-enemy');
         bar.classList.remove('player-action-bar--compact', 'player-action-bar--expanded');
-        bar.style.cssText = 'display:none!important;visibility:hidden!important;';
+        if (typeof ActionDock !== 'undefined') ActionDock.onVisibilityChange(false);
         document.body.classList.remove('player-action-bar-visible');
     }
     updateActionBarButtonLabel();
+    if (typeof UIShell !== 'undefined') UIShell.syncActionBarToggleUI();
     updateArmstechPlayerButtonVisibility();
 }
 
@@ -9103,15 +9419,17 @@ function rollDmEnemyNamedChunk(creatureName, blockName, description) {
     var diceMatch = desc.match(/(\d+)d(\d+)([+-]\d+)?/i);
     if (diceMatch) {
         var result = rollDice(diceMatch[0]);
-        addLogEntry(
-            creatureName + ' — ' + blockName + ': ' + diceMatch[0] + ' \u2192 ' + result.breakdown + ' = ' + result.total,
-            'damage'
-        );
+        broadcastRollOrChatEntry({
+            pane: 'rolls',
+            message: creatureName + ' — ' + blockName + ': ' + diceMatch[0] + ' \u2192 ' + result.breakdown + ' = ' + result.total,
+            entryType: 'damage'
+        });
     } else {
-        addLogEntry(
-            creatureName + ' — ' + blockName + (desc ? ': ' + desc.substring(0, 160) + (desc.length > 160 ? '...' : '') : ''),
-            'info'
-        );
+        broadcastRollOrChatEntry({
+            pane: 'system',
+            message: creatureName + ' — ' + blockName + (desc ? ': ' + desc.substring(0, 160) + (desc.length > 160 ? '...' : '') : ''),
+            entryType: 'info'
+        });
     }
 }
 
@@ -9126,8 +9444,10 @@ function wireDmEnemySaveAttackTiles(scopeEl, creatureName) {
             var nm = this.dataset.label || 'Save';
             if (dmg) {
                 var dmgResult = rollDice(dmg);
-                addLogEntry(
-                    nm +
+                broadcastRollOrChatEntry({
+                    pane: 'rolls',
+                    message:
+                        nm +
                         ': DC ' +
                         dc +
                         ' ' +
@@ -9140,10 +9460,14 @@ function wireDmEnemySaveAttackTiles(scopeEl, creatureName) {
                         dmgResult.total +
                         ' ' +
                         dmgType,
-                    'damage'
-                );
+                    entryType: 'damage'
+                });
             } else {
-                addLogEntry(nm + ': DC ' + dc + ' ' + st.toUpperCase() + ' saving throw', 'info');
+                broadcastRollOrChatEntry({
+                    pane: 'system',
+                    message: nm + ': DC ' + dc + ' ' + st.toUpperCase() + ' saving throw',
+                    entryType: 'info'
+                });
             }
         };
     });
@@ -11932,6 +12256,112 @@ function updateCombatParticipantHP(targetId, newHp) {
 }
 
 // Map Management
+function sanitizeMapDownloadFilename(name) {
+    var s = String(name || 'map')
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!s) s = 'map';
+    if (!/\.png$/i.test(s)) s += '.png';
+    return s;
+}
+
+function triggerBlobDownload(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+    }, 2500);
+}
+
+function loadHtmlImage(src) {
+    return new Promise(function (resolve, reject) {
+        var img = new Image();
+        img.onload = function () { resolve(img); };
+        img.onerror = function () { reject(new Error('Failed to load image')); };
+        img.src = src;
+    });
+}
+
+function imageElementToPngBlob(img) {
+    var w = img.naturalWidth || img.width || 0;
+    var h = img.naturalHeight || img.height || 0;
+    if (!w || !h) return Promise.reject(new Error('Invalid image dimensions'));
+    var c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    var cx = c.getContext('2d');
+    if (!cx) return Promise.reject(new Error('Canvas unsupported'));
+    cx.drawImage(img, 0, 0);
+    return new Promise(function (resolve, reject) {
+        c.toBlob(function (blob) {
+            if (blob) resolve(blob);
+            else reject(new Error('PNG encode failed'));
+        }, 'image/png');
+    });
+}
+
+function resolveMapRecordForDownload(mapId) {
+    if (mapId) {
+        if (currentMap && currentMap.id === mapId) return currentMap;
+        if (Array.isArray(savedMapsCache)) {
+            var hit = savedMapsCache.find(function (m) { return m && m.id === mapId; });
+            if (hit) return hit;
+        }
+        return null;
+    }
+    return currentMap || null;
+}
+
+/**
+ * DM: download a map's artwork as PNG.
+ * @param {string} [mapId] - Optional map id from the saved list; omit to use the currently loaded map.
+ */
+async function downloadMapAsPng(mapId) {
+    if (!isDM) {
+        alert('Only the DM can download maps.');
+        return;
+    }
+    var map = resolveMapRecordForDownload(mapId || null);
+    if (!map) {
+        alert(mapId ? 'Map not found in the list. Refresh Maps and try again.' : 'No map is loaded. Load a map first, or download one from the Maps list.');
+        return;
+    }
+
+    var name = map.name || 'map';
+    var imagePath = map.image_path || '';
+    try {
+        var imgEl = null;
+        if (
+            currentMap &&
+            currentMap.id === map.id &&
+            currentMap.image &&
+            currentMap.image.complete &&
+            (currentMap.image.naturalWidth || 0) > 0
+        ) {
+            imgEl = currentMap.image;
+        }
+        if (!imgEl) {
+            if (!imagePath) throw new Error('This map has no image path');
+            var dataUrl = await fetchImageAsDataUrl(imagePath);
+            if (!dataUrl) throw new Error('Could not fetch map image from server');
+            imgEl = await loadHtmlImage(dataUrl);
+        }
+        var blob = await imageElementToPngBlob(imgEl);
+        triggerBlobDownload(blob, sanitizeMapDownloadFilename(name));
+        addLogEntry('📥 Downloaded map PNG: ' + name, 'success');
+    } catch (err) {
+        console.error('❌ downloadMapAsPng failed:', err);
+        alert('Failed to download map PNG: ' + (err && err.message ? err.message : String(err)));
+    }
+}
+
 function showMapUpload() {
     const modal = document.getElementById('mapUploadModal');
     if (!modal) return;
@@ -12051,6 +12481,10 @@ function renderSavedMapsList(maps) {
                             style="flex: 1; min-width: 100px; padding: 6px; background: #44ff44; color: #000; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
                         🖼️ Load with State
                     </button>
+                    ${isDM ? `<button type="button" onclick="downloadMapAsPng('${map.id}')"
+                            style="flex: 1; min-width: 100px; padding: 6px; background: #2a3a5a; color: #eaf2ff; border: 1px solid #4a9eff; border-radius: 3px; cursor: pointer; font-size: 12px;">
+                        📥 PNG
+                    </button>` : ''}
                     ${isDM && isCurrentMap ? `<button onclick="saveMap('${map.id}')" 
                             style="flex: 1; min-width: 100px; padding: 6px; background: #ffaa44; color: #000; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: bold;">
                         💾 Save State
@@ -15836,6 +16270,7 @@ function selectCharacterForPlay(charId) {
     console.log('   Setting myCharacterId to:', charId);
     
     myCharacterId = charId;
+    ensureCampaignNotesLoaded(charId);
     
     // Save to localStorage for refresh persistence
     if (!isDM) {
@@ -16866,6 +17301,91 @@ function getLogPaneIdForAddLogEntry(message, type) {
     return 'systemLog';
 }
 
+/** Ids already applied locally (sender + history replay) to avoid double-append. */
+var seenSharedLogEntryIds = new Set();
+
+function markSharedLogEntrySeen(id) {
+    if (!id) return false;
+    if (seenSharedLogEntryIds.has(id)) return true;
+    seenSharedLogEntryIds.add(id);
+    if (seenSharedLogEntryIds.size > 500) {
+        var first = seenSharedLogEntryIds.values().next().value;
+        seenSharedLogEntryIds.delete(first);
+    }
+    return false;
+}
+
+/** Stable-ish id so RollAttack echo + AddLogEntry don't double-append the same line. */
+function sharedRollContentId(messageText) {
+    var s = String(messageText || '');
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return 'rollfp_' + (h >>> 0) + '_' + s.length;
+}
+
+/** Append a roll line locally only (no WS) — used when receiving Roll* server broadcasts. */
+function appendSharedRollLine(message, isNat20, isNat1) {
+    var id = sharedRollContentId(message);
+    if (markSharedLogEntrySeen(id)) return;
+    addRollEntry(message, !!isNat20, !!isNat1, id, true);
+}
+
+/**
+ * Write a rolls/chat line locally and broadcast so all clients (and join/refresh history) see it.
+ * opts: { pane: 'rolls'|'system', message, entryType, isNat20, isNat1, id?, localOnly? }
+ */
+function broadcastRollOrChatEntry(opts) {
+    opts = opts || {};
+    var message = opts.message != null ? String(opts.message) : '';
+    if (!message) return;
+    var pane = opts.pane === 'system' ? 'system' : 'rolls';
+    var id = opts.id || sharedRollContentId(message) || ('log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10));
+    var isNat20 = !!opts.isNat20;
+    var isNat1 = !!opts.isNat1;
+    var entryType = opts.entryType || (pane === 'rolls' ? 'info' : 'info');
+    if (markSharedLogEntrySeen(id)) return;
+    if (pane === 'rolls') {
+        addRollEntry(message, isNat20, isNat1, id, true);
+    } else {
+        addLogEntry(message, entryType, id, true);
+    }
+    if (opts.localOnly) return;
+    sendMessage({
+        type: 'AddLogEntry',
+        id: id,
+        pane: pane,
+        message: message,
+        entry_type: entryType,
+        is_nat20: isNat20,
+        is_nat1: isNat1
+    });
+}
+
+function applySharedLogEntryFromServer(entry, skipIfSeen) {
+    if (!entry || !entry.message) return;
+    var id = entry.id || '';
+    if (skipIfSeen !== false && id && markSharedLogEntrySeen(id)) return;
+    if (id && skipIfSeen === false) markSharedLogEntrySeen(id);
+    var pane = entry.pane === 'system' ? 'system' : 'rolls';
+    if (pane === 'rolls') {
+        addRollEntry(entry.message, !!entry.is_nat20, !!entry.is_nat1, id, true);
+    } else {
+        addLogEntry(entry.message, entry.entry_type || 'info', id, true);
+    }
+}
+
+function clearLogPanesForHistoryReplay() {
+    ['rollsLog', 'systemLog', 'chatLog'].forEach(function (paneId) {
+        var log = document.getElementById(paneId);
+        if (!log) return;
+        log.innerHTML = '';
+    });
+    seenSharedLogEntryIds.clear();
+}
+
 function updateCampaignTitle() {
     const el = document.getElementById('campaignTitle');
     const name = currentMap && currentMap.name ? currentMap.name : null;
@@ -16885,9 +17405,11 @@ function openDmToolMenu(category) {
             title: 'Maps',
             items: [
                 { label: '📍 Upload Map', action: 'showMapUpload()' },
+                { label: '📥 Download Map PNG', action: 'downloadMapAsPng()' },
                 { label: '💾 Save Map State', action: 'saveCurrentMapState()' },
                 { label: '💾 Save/Load Game', action: 'showSaveLoadModal()' },
-                { label: '⚙️ Map Settings', action: 'showMapSettings()' }
+                { label: '⚙️ Map Settings', action: 'showMapSettings()' },
+                { label: '🗑️ Clear All Tokens', action: 'clearAllTokensKeepMap()' }
             ]
         },
         tokens: {
@@ -16965,6 +17487,8 @@ function toggleLeftSidebarCollapsed() {
             m.classList.contains('sidebar-left-collapsed') ? '1' : '0'
         );
     } catch (e) {}
+    if (typeof ActionDock !== 'undefined') ActionDock.scheduleLayout();
+    if (typeof UIShell !== 'undefined') UIShell.updateSidebarResizeHandles();
 }
 
 function toggleRightSidebarCollapsed() {
@@ -16977,9 +17501,15 @@ function toggleRightSidebarCollapsed() {
             m.classList.contains('sidebar-right-collapsed') ? '1' : '0'
         );
     } catch (e) {}
+    if (typeof ActionDock !== 'undefined') ActionDock.scheduleLayout();
+    if (typeof UIShell !== 'undefined') UIShell.updateSidebarResizeHandles();
 }
 
-function addLogEntry(message, type = 'info') {
+function addLogEntry(message, type = 'info', entryId = null, fromShared = false) {
+    if (entryId) {
+        const existing = document.querySelector('[data-log-entry-id="' + entryId + '"]');
+        if (existing) return;
+    }
     const paneId = getLogPaneIdForAddLogEntry(message, type);
     const log = document.getElementById(paneId);
     if (!log) return;
@@ -16998,6 +17528,7 @@ function addLogEntry(message, type = 'info') {
     
     const entry = document.createElement('div');
     entry.className = `log-entry ${type}`;
+    if (entryId) entry.setAttribute('data-log-entry-id', entryId);
     const timestamp = new Date().toLocaleTimeString();
     const baseStyle = 'padding: 10px 14px; margin: 5px 0; border-radius: 6px; font-size: 14px; line-height: 1.5;';
     let entryStyle = baseStyle + ' border-left: 4px solid #666; background: rgba(255,255,255,0.06); color: #ddd;';
@@ -17012,7 +17543,7 @@ function addLogEntry(message, type = 'info') {
     }
     entry.style.cssText = entryStyle;
     const formattedMessage = formatLogMessage(message);
-    entry.innerHTML = `<span style="opacity: 0.7; font-size: 11px; margin-right: 8px;">[${timestamp}]</span> ${formattedMessage}`;
+    entry.innerHTML = `<span class="log-entry__time">[${timestamp}]</span><span class="log-entry__body">${formattedMessage}</span>`;
     
     const placeholder = log.querySelector('.log-empty-placeholder');
     if (placeholder) placeholder.remove();
@@ -17025,13 +17556,18 @@ function addLogEntry(message, type = 'info') {
 }
 
 // Add roll-specific log entry with support for nat 20/1 styling
-function addRollEntry(message, isNat20 = false, isNat1 = false) {
+function addRollEntry(message, isNat20 = false, isNat1 = false, entryId = null, fromShared = false) {
     console.log('🎲 Adding to rolls log:', message);
     
     const log = document.getElementById('rollsLog');
     if (!log) {
         console.error('❌ Rolls log element not found!');
         return;
+    }
+
+    if (entryId) {
+        const existing = log.querySelector('[data-log-entry-id="' + entryId + '"]');
+        if (existing) return;
     }
     
     // Remove placeholder message if it exists
@@ -17042,6 +17578,7 @@ function addRollEntry(message, isNat20 = false, isNat1 = false) {
     
     const entry = document.createElement('div');
     entry.className = 'log-entry info';
+    if (entryId) entry.setAttribute('data-log-entry-id', entryId);
     
     // Enhanced styling with animations and better visibility
     const baseStyle = 'padding: 12px 15px; margin: 6px 0; border-radius: 6px; font-size: 15px; line-height: 1.5; transition: all 0.3s ease; animation: slideIn 0.3s ease-out;';
@@ -17050,7 +17587,7 @@ function addRollEntry(message, isNat20 = false, isNat1 = false) {
     if (isNat20) {
         entry.style.cssText = baseStyle + 'border-left: 5px solid #44ff44; background: linear-gradient(135deg, rgba(68, 255, 68, 0.35) 0%, rgba(34, 200, 34, 0.25) 100%); color: #88ff88; font-weight: bold; box-shadow: 0 0 15px rgba(68, 255, 68, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2); text-shadow: 0 0 5px rgba(68, 255, 68, 0.5);';
     } else if (isNat1) {
-        entry.style.cssText = baseStyle + 'border-left: 5px solid #ff4444; background: linear-gradient(135deg, rgba(255, 68, 68, 0.35) 0%, rgba(200, 34, 34, 0.25) 100%); color: #ff8888; font-weight: bold; box-shadow: 0 0 15px rgba(255, 68, 68, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2); text-shadow: 0 0 5px rgba(255, 68, 68, 0.5);';
+        entry.style.cssText = baseStyle + 'border-left: 5px solid #ff4444; background: linear-gradient(135deg, rgba(255, 68, 68, 0.35) 0%, rgba(200, 34, 34, 0.12) 100%); color: #ff8888; font-weight: bold; box-shadow: 0 0 15px rgba(255, 68, 68, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2); text-shadow: 0 0 5px rgba(255, 68, 68, 0.5);';
     } else {
         entry.style.cssText = baseStyle + 'border-left: 4px solid #ffaa44; background: linear-gradient(135deg, rgba(255, 170, 68, 0.25) 0%, rgba(255, 140, 40, 0.15) 100%); color: #ffd4a0; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);';
     }
@@ -18107,6 +18644,10 @@ function rollAbilityCheck(ability, modifier, characterName) {
     
     console.log(`   Roll: ${roll} + ${mod} = ${total}`);
     
+    const abilityNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
+    const abilityLine = `🎲 ${formatRollCharacterName(characterName)} rolled ${ability.toUpperCase()} check: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${abilityNatText}`;
+    // Persist to shared history so LogHistory sync / refresh keep the line
+    broadcastRollOrChatEntry({ pane: 'rolls', message: abilityLine, isNat20: roll === 20, isNat1: roll === 1 });
     if (ws && ws.readyState === WebSocket.OPEN) {
         sendMessage({
             type: 'RollAbilityCheck',
@@ -18116,9 +18657,6 @@ function rollAbilityCheck(ability, modifier, characterName) {
             modifier: mod,
             total: total
         });
-    } else {
-        const abilityNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
-        addRollEntry(`🎲 ${characterName} rolled ${ability.toUpperCase()} check: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${abilityNatText}`, roll === 20, roll === 1);
     }
 }
 
@@ -18134,6 +18672,9 @@ function rollSavingThrow(ability, modifier, characterName) {
     
     console.log(`   Roll: ${roll} + ${mod} = ${total}`);
     
+    const saveNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
+    const saveLine = `🛡️ ${formatRollCharacterName(characterName)} rolled ${ability.toUpperCase()} save: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${saveNatText}`;
+    broadcastRollOrChatEntry({ pane: 'rolls', message: saveLine, isNat20: roll === 20, isNat1: roll === 1 });
     if (ws && ws.readyState === WebSocket.OPEN) {
         sendMessage({
             type: 'RollSavingThrow',
@@ -18143,9 +18684,6 @@ function rollSavingThrow(ability, modifier, characterName) {
             modifier: mod,
             total: total
         });
-    } else {
-        const saveNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
-        addRollEntry(`🛡️ ${characterName} rolled ${ability.toUpperCase()} save: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${saveNatText}`, roll === 20, roll === 1);
     }
 }
 
@@ -18273,8 +18811,9 @@ function rollFlatDice(sides, characterName) {
     
     console.log(`   Roll: ${roll} (D${sides})`);
     
-    // Do NOT add to log here - we add once when we receive AbilityCheckRolled from server (avoids duplicate entries)
-    // Broadcast to all players via WebSocket
+    // Persist + show for everyone; AbilityCheckRolled echo dedupes via sharedRollContentId
+    const flatLine = `🎲 ${formatRollCharacterName(characterName)} rolled D${sides}: ${roll}`;
+    broadcastRollOrChatEntry({ pane: 'rolls', message: flatLine, isNat20: false, isNat1: false });
     if (ws && ws.readyState === WebSocket.OPEN) {
         try {
             sendMessage({
@@ -18289,9 +18828,6 @@ function rollFlatDice(sides, characterName) {
         } catch (e) {
             console.error('❌ Error sending dice roll to server:', e);
         }
-    } else {
-        // Offline: add to log only when we can't rely on server echo
-        addRollEntry(`🎲 ${characterName} rolled D${sides}: ${roll}`, false, false);
     }
 }
 
@@ -18307,6 +18843,9 @@ function rollSkill(skillName, modifier, characterName) {
     
     console.log(`   Roll: ${roll} + ${mod} = ${total}`);
     
+    const skillNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
+    const skillLine = `🎯 ${formatRollCharacterName(characterName)} rolled ${skillName}: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${skillNatText}`;
+    broadcastRollOrChatEntry({ pane: 'rolls', message: skillLine, isNat20: roll === 20, isNat1: roll === 1 });
     if (ws && ws.readyState === WebSocket.OPEN) {
         sendMessage({
             type: 'RollSkill',
@@ -18316,9 +18855,6 @@ function rollSkill(skillName, modifier, characterName) {
             modifier: mod,
             total: total
         });
-    } else {
-        const skillNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
-        addRollEntry(`🎯 ${characterName} rolled ${skillName}: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${skillNatText}`, roll === 20, roll === 1);
     }
 }
 
@@ -18436,6 +18972,10 @@ function getTokenAC(token) {
 
 function getTokenDisplayName(token) {
     if (!token) return 'Target';
+    const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
+    if (viewerIsPlayer && token.show_name === false && (token.entity_type === 'Enemy' || token.entity_type === 'NPC')) {
+        return 'Enemy';
+    }
     if (token.entity_type === 'Player') {
         const char = characters.find(c => c.id === token.entity_id);
         return char ? char.name : 'Player';
@@ -18575,10 +19115,20 @@ function resolveTargetedAttack(targetToken) {
     if (hit) {
         const damageResult = rollDamageForAttack(p.damageNotation, isCrit);
         const dmg = damageResult.total;
-        addRollEntry(attackLead + hitTotals + acFrag + ' — HIT! Damage: ' + damageResult.breakdown + ' ' + p.damageType + (isCrit ? ' 🎉 CRITICAL HIT!' : ''), isCrit, false);
+        broadcastRollOrChatEntry({
+            pane: 'rolls',
+            message: attackLead + hitTotals + acFrag + ' — HIT! Damage: ' + damageResult.breakdown + ' ' + p.damageType + (isCrit ? ' 🎉 CRITICAL HIT!' : ''),
+            isNat20: isCrit,
+            isNat1: false
+        });
         applyDamageToToken(targetToken, dmg);
     } else {
-        addRollEntry(attackLead + hitTotals + acFrag + ' — MISS!', false, isFumble);
+        broadcastRollOrChatEntry({
+            pane: 'rolls',
+            message: attackLead + hitTotals + acFrag + ' — MISS!',
+            isNat20: false,
+            isNat1: isFumble
+        });
     }
     updateTokenInfo();
     renderCanvas();
@@ -18660,6 +19210,7 @@ function getTokensInCircle(centerGx, centerGy, radiusFeet) {
     var radiusSquares = radiusFeet / 5;
     var inArea = [];
     tokens.forEach(function(t) {
+        if (!isTokenVisibleToViewer(t)) return;
         var tx = t.x + 0.5;
         var ty = t.y + 0.5;
         var dist = Math.sqrt(Math.pow(tx - centerGx - 0.5, 2) + Math.pow(ty - centerGy - 0.5, 2));
@@ -18673,6 +19224,7 @@ function getTokensInCone(originGx, originGy, directionRad, coneAngleDeg, lengthF
     var halfAngle = (coneAngleDeg / 2) * (Math.PI / 180);
     var inArea = [];
     tokens.forEach(function(t) {
+        if (!isTokenVisibleToViewer(t)) return;
         var tx = t.x + 0.5;
         var ty = t.y + 0.5;
         var dx = tx - (originGx + 0.5);
@@ -18850,6 +19402,11 @@ function rollAttack(weaponName, toHitMod, damageNotation, damageType, characterN
     console.log(`   To Hit Roll: ${toHitRoll} + ${toHitMod} = ${toHitTotal}`);
     console.log(`   Damage: ${damageDisplay}`);
     
+    const hitDisplay = `${toHitRoll} ${toHitMod >= 0 ? '+' : ''}${toHitMod}`;
+    const isFail = toHitRoll === 1;
+    const critText = isCrit ? ' 🎉 CRITICAL HIT! ✨ NATURAL 20!' : (isFail ? ' ❌ CRITICAL MISS! NATURAL 1!' : '');
+    const attackLine = `⚔️ ${formatRollCharacterName(characterName)} attacks with ${weaponName}: To Hit ${hitDisplay} = ${toHitTotal} | Damage: ${damageDisplay} ${damageType}${critText}`;
+    broadcastRollOrChatEntry({ pane: 'rolls', message: attackLine, isNat20: isCrit, isNat1: isFail });
     if (ws && ws.readyState === WebSocket.OPEN) {
         sendMessage({
             type: 'RollAttack',
@@ -18861,11 +19418,6 @@ function rollAttack(weaponName, toHitMod, damageNotation, damageType, characterN
             damage: damageDisplay,
             damage_type: damageType
         });
-    } else {
-        const hitDisplay = `${toHitRoll} ${toHitMod >= 0 ? '+' : ''}${toHitMod}`;
-        const isFail = toHitRoll === 1;
-        const critText = isCrit ? ' 🎉 CRITICAL HIT! ✨ NATURAL 20!' : (isFail ? ' ❌ CRITICAL MISS! NATURAL 1!' : '');
-        addRollEntry(`⚔️ ${characterName} attacks with ${weaponName}: To Hit ${hitDisplay} = ${toHitTotal} | Damage: ${damageDisplay} ${damageType}${critText}`, isCrit, isFail);
     }
 }
 
@@ -19181,12 +19733,11 @@ function renderPlayerList() {
     let html = '';
     
     if (!connectedPlayers || connectedPlayers.length === 0) {
-        html = '<p style="opacity: 0.6; padding: 10px;">No players connected</p>';
+        html = '<p class="player-list-empty">No players connected</p>';
         console.log('⚠️ No players to display');
     } else {
         let validCount = 0;
         connectedPlayers.forEach((player, index) => {
-            // Validate player object
             if (!player) {
                 console.error('❌ Null player at index', index);
                 return;
@@ -19195,20 +19746,14 @@ function renderPlayerList() {
                 console.error('❌ Player missing name at index', index, player);
                 return;
             }
-            
             validCount++;
-            const charName = player.character_name || 'No character';
-            const dmLabel = player.is_dm ? ' 👑' : '';
-            
-            html += `
-                <div class="player-item ${player.is_dm ? 'dm' : ''}" style="margin: 5px 0;">
-                    <div class="player-status"></div>
-                    <div style="flex: 1;">
-                        <div style="font-weight: bold;">${player.name}${dmLabel}</div>
-                        <div style="font-size: 10px; opacity: 0.7;">${charName}</div>
-                    </div>
-                </div>
-            `;
+            if (typeof UIShell !== 'undefined' && UIShell.renderPlayerCard) {
+                html += UIShell.renderPlayerCard(player);
+            } else {
+                const charName = player.character_name || 'No character';
+                const dmLabel = player.is_dm ? ' 👑' : '';
+                html += '<div class="player-item ' + (player.is_dm ? 'dm' : '') + '"><div class="player-status"></div><div><div style="font-weight:bold;">' + escapeHtml(player.name) + dmLabel + '</div><div style="font-size:10px;opacity:0.7;">' + escapeHtml(charName) + '</div></div></div>';
+            }
         });
         console.log('✅ Rendered', validCount, 'valid players');
     }
@@ -21526,7 +22071,7 @@ function removeSelectedToken() {
     
     const tokenName = selectedToken.entity_type === 'Player' 
         ? (characters.find(c => c.id === selectedToken.entity_id)?.name || 'Token')
-        : (enemies.find(e => e.id === selectedToken.entity_id)?.name || 'Token');
+        : (enemies.find(e => e.id === selectedToken.entity_id)?.name || selectedToken.display_name || 'Token');
     
     if (confirm(`Remove ${tokenName} from the map?`)) {
         sendMessage({
@@ -21537,6 +22082,65 @@ function removeSelectedToken() {
         selectedToken = null;
         updateTokenInfo();
     }
+}
+
+function clearAllTokensKeepMap() {
+    if (!isDM) {
+        alert('Only DM can clear tokens!');
+        return;
+    }
+    if (!confirm('Remove ALL tokens from the map? The map image stays.')) {
+        return;
+    }
+    sendMessage({ type: 'ClearTokens' });
+    selectedToken = null;
+    updateTokenInfo();
+    addLogEntry('Cleared all tokens from the map', 'info');
+}
+
+function applyTokenDisplayNameFromSidebar() {
+    if (!isDM || !selectedToken) return;
+    const input = document.getElementById('tokenDisplayNameInput');
+    if (!input) return;
+    const name = String(input.value || '').trim();
+    if (!name) {
+        alert('Enter a display name.');
+        return;
+    }
+    selectedToken.display_name = name;
+    const tok = tokens.find(t => t && t.id === selectedToken.id);
+    if (tok) {
+        tok.display_name = name;
+        selectedToken = tok;
+    }
+    const enemy = enemies.find(e => e && e.id === selectedToken.entity_id);
+    if (enemy) enemy.name = name;
+    const part = combatState.participants.find(p => p && (p.id === selectedToken.id || p.entity_id === selectedToken.entity_id));
+    if (part) part.name = name;
+    sendMessage({
+        type: 'UpdateTokenDisplayName',
+        token_id: selectedToken.id,
+        display_name: name
+    });
+    updateTokenInfo();
+    renderCanvas();
+    addLogEntry('Renamed token to ' + name, 'info');
+}
+
+function onTokenShowNameChange(checked) {
+    if (!isDM || !selectedToken) return;
+    selectedToken.show_name = !!checked;
+    const tok = tokens.find(t => t && t.id === selectedToken.id);
+    if (tok) {
+        tok.show_name = !!checked;
+        selectedToken = tok;
+    }
+    sendMessage({
+        type: 'UpdateTokenShowName',
+        token_id: selectedToken.id,
+        show_name: !!checked
+    });
+    renderCanvas();
 }
 
 // Get current character data for utility functions
@@ -21629,6 +22233,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 mi.classList.add('sidebar-right-collapsed');
             }
         } catch (e) {}
+        if (typeof UIShell !== 'undefined') UIShell.updateSidebarResizeHandles();
     }
 });
 

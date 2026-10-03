@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=173">
+    <link rel="stylesheet" href="/static/style.css?v=177">
 </head>
 <body>
     <div id="app">
@@ -51,7 +51,7 @@
             </div>
             <header class="vtt-top-bar">
                 <div class="vtt-top-bar-left">
-                    <button type="button" id="sidebarLeftToggle" class="vtt-sidebar-fab" onclick="toggleLeftSidebarCollapsed()" title="Collapse or expand left sidebar">⟨</button>
+                    <button type="button" id="sidebarLeftToggle" class="vtt-sidebar-fab" onclick="toggleLeftSidebarCollapsed()" title="Collapse or expand left sidebar" aria-label="Collapse or expand left sidebar">⟨</button>
                     <h1 class="vtt-brand-heading">
                         <span id="topBarBrand">🎲 Gorgox Interactive</span>
                         <span id="appVersionBadge" class="vtt-badge-version" title="UI version – refresh if you don’t see latest features">v134</span>
@@ -70,7 +70,7 @@
                         <button type="button" class="vtt-top-quick-btn vtt-top-quick-btn-3d" onclick="toggle3DArena()" title="Open experimental 3D arena">🧊 3D</button>
                     </div>
                     <div id="playerInfo" class="vtt-player-info"></div>
-                    <div id="connectionStatus">Disconnected</div>
+                    <div id="connectionStatus" class="vtt-connection vtt-connection--offline" role="status" aria-live="polite">Disconnected</div>
                     <div id="adminMenu" class="vtt-admin-menu hidden">
                         <details class="vtt-admin-details">
                             <summary class="vtt-admin-summary">DM</summary>
@@ -81,7 +81,7 @@
                             </div>
                         </details>
                     </div>
-                    <button type="button" id="sidebarRightToggle" class="vtt-sidebar-fab" onclick="toggleRightSidebarCollapsed()" title="Collapse or expand right sidebar">⟩</button>
+                    <button type="button" id="sidebarRightToggle" class="vtt-sidebar-fab" onclick="toggleRightSidebarCollapsed()" title="Collapse or expand right sidebar" aria-label="Collapse or expand right sidebar">⟩</button>
                 </div>
             </header>
 
@@ -92,20 +92,28 @@
                 <!-- Left Sidebar - Controls -->
                 <aside class="sidebar left" id="sidebarLeft">
                     <div id="playerSidebarChrome">
-                        <div class="panel vtt-card">
-                            <h3 class="vtt-card-title">Character</h3>
-                            <div id="playerControls">
-                                <button onclick="showCharacterSelect()">Select Character</button>
-                                <button onclick="showMyCharacterSheet()">📋 My Character Sheet</button>
-                                <button type="button" id="armstechPlayerBtn" onclick="openArmstechTracker()" style="display:none;background:#2a4a3a;color:#a8f0c8;font-weight:bold;border:1px solid #44aa66;">🔧 Armstech</button>
-                                <button type="button" id="playerActionBarToggleBtn" data-action-bar-toggle onclick="togglePlayerActionBar()" style="background: #c9a227; color: #1a1510; font-weight: bold;" title="Toggle the bottom action bar (On/Off)">📊 Action Bar (On)</button>
+                        <div class="panel vtt-card vtt-panel">
+                            <h3 class="vtt-card-title vtt-panel__title">Character</h3>
+                            <div id="playerControls" class="vtt-btn-grid">
+                                <button type="button" class="vtt-btn vtt-btn--primary" onclick="showCharacterSelect()">Select Character</button>
+                                <button type="button" class="vtt-btn" onclick="showMyCharacterSheet()">📋 Sheet</button>
+                                <button type="button" class="vtt-btn vtt-btn--secondary" id="armstechPlayerBtn" onclick="openArmstechTracker()" style="display:none;">🔧 Armstech</button>
+                            </div>
+                            <div class="vtt-action-bar-toggle-wrap" style="margin-top:10px;">
+                                <span class="vtt-panel__title" style="margin-bottom:6px;display:block;">Action Bar</span>
+                                <div id="actionBarToggleWrap" class="vtt-segmented" role="group" aria-label="Toggle action bar">
+                                    <button type="button" class="vtt-segmented__btn active" data-action-bar-state="on" aria-pressed="true">On</button>
+                                    <button type="button" class="vtt-segmented__btn" data-action-bar-state="off" aria-pressed="false">Off</button>
+                                </div>
                             </div>
                         </div>
-                        <div class="panel vtt-card">
-                            <h3 class="vtt-card-title">Tools</h3>
-                            <button onclick="showCustomSpellsManager()">✨ Custom Spells</button>
-                            <button onclick="showInfoPanel()" style="background: #4a9eff; color: white; font-weight: bold;">ℹ️ Info</button>
-                            <button onclick="toggleRulerTool()">📏 Ruler Tool</button>
+                        <div class="panel vtt-card vtt-panel">
+                            <h3 class="vtt-card-title vtt-panel__title">Tools</h3>
+                            <div class="vtt-btn-grid">
+                                <button type="button" class="vtt-btn" onclick="showCustomSpellsManager()">✨ Spells</button>
+                                <button type="button" class="vtt-btn vtt-btn--primary" onclick="showInfoPanel()">ℹ️ Info</button>
+                                <button type="button" class="vtt-btn" onclick="toggleRulerTool()">📏 Ruler</button>
+                            </div>
                         </div>
                     </div>
                     <div id="dmControls" class="panel vtt-card hidden">
@@ -122,18 +130,18 @@
                                 </div>
                             </div>
                             <button type="button" id="dmToggleCombatBtn" onclick="toggleCombat()">⚔️ Start Combat</button>
-                            <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.12);">
-                                <div style="font-size:11px;font-weight:bold;color:#aa88ff;margin-bottom:6px;">👁️ Player map (anti-metagame)</div>
-                                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px;">
+                            <div class="dm-fog-panel">
+                                <div class="dm-fog-panel__title">👁️ Player map (anti-metagame)</div>
+                                <label class="dm-fog-panel__label">
                                     <input type="checkbox" id="playerViewportEnabled" onchange="onPlayerViewportEnabledChange()">
                                     <span>Players only see inside the box</span>
                                 </label>
-                                <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;margin-bottom:8px;">
+                                <label class="dm-fog-panel__label">
                                     <input type="checkbox" id="playerMapHidden" onchange="onPlayerMapHiddenChange()">
                                     <span>Hide entire map from players</span>
                                 </label>
-                                <button type="button" id="playerViewportToolBtn" onclick="togglePlayerViewportTool()" style="width:100%;margin-bottom:6px;background:#2a3a5a;color:#fff;">📐 Move / resize box</button>
-                                <p style="font-size:10px;opacity:0.7;margin:0;line-height:1.35;">You always see the full map. Use the box for fog, or hide the map entirely while you add things.</p>
+                                <button type="button" id="playerViewportToolBtn" class="vtt-btn vtt-btn--secondary dm-fog-panel__btn" onclick="togglePlayerViewportTool()">📐 Move / resize box</button>
+                                <p class="dm-fog-panel__hint">You always see the full map. Use the box for fog, or hide the map entirely while you add things.</p>
                             </div>
                         </div>
 
@@ -228,8 +236,18 @@
 
                 </aside>
 
+                <div class="sidebar-resize-handle sidebar-resize-handle--left" id="sidebarResizeLeft" role="separator" aria-orientation="vertical" aria-label="Resize left sidebar" tabindex="0"></div>
+
                 <!-- Center - Map View -->
                 <main class="map-container">
+                    <div class="map-toolbar" id="mapControls" aria-label="Map zoom and view">
+                        <button type="button" class="map-toolbar__btn" onclick="zoomIn()" title="Zoom in" aria-label="Zoom in">+</button>
+                        <button type="button" class="map-toolbar__btn" onclick="zoomOut()" title="Zoom out" aria-label="Zoom out">−</button>
+                        <button type="button" class="map-toolbar__btn" onclick="resetZoom()" title="Reset zoom" aria-label="Reset zoom">⟲</button>
+                        <button type="button" class="map-toolbar__btn" onclick="fitMapToViewport()" title="Fit the whole map in the view" aria-label="Fit map">⤢</button>
+                        <button type="button" class="map-toolbar__btn" onclick="centerOnSelectedToken()" title="Center on selected token" aria-label="Center on token">◎</button>
+                        <button type="button" class="map-toolbar__btn" onclick="toggleRulerTool()" title="Ruler tool" aria-label="Ruler">📏</button>
+                    </div>
                     <div class="map-view-stack">
                     <canvas id="mapCanvas" width="1200" height="800"></canvas>
 
@@ -269,22 +287,19 @@
                         <div id="arena3dDropHint" class="arena3d-drop-hint hidden">Drop .stl or .glb here</div>
                     </div>
 
-                    <div id="mapControls" class="map-floating-controls" aria-label="Map zoom and view">
-                        <button type="button" onclick="zoomIn()">🔍+</button>
-                        <button type="button" onclick="zoomOut()">🔍-</button>
-                        <button type="button" onclick="resetZoom()">Reset</button>
-                        <button type="button" onclick="fitMapToViewport()" title="Fit the whole map in the view">⤢ Fit</button>
-                        <button type="button" onclick="centerOnSelectedToken()" title="Center on the selected token">◎ Center</button>
-                    </div>
+                    <div id="mapControlsLegacy" class="map-floating-controls hidden" aria-hidden="true"></div>
                     </div>
                 </main>
 
+                <div class="sidebar-resize-handle sidebar-resize-handle--right" id="sidebarResizeRight" role="separator" aria-orientation="vertical" aria-label="Resize right sidebar" tabindex="0"></div>
+
                 <!-- Right Sidebar - Info -->
                 <aside class="sidebar right" id="sidebarRight">
-                    <!-- Token Info -->
-                    <div class="panel">
-                        <h3>Selected Token</h3>
-                        <div id="tokenInfo">No token selected</div>
+                    <div class="panel vtt-panel token-panel-wrap">
+                        <h3 class="vtt-panel__title">Selected Token</h3>
+                        <div id="tokenInfo" class="token-panel__content">
+                            <div class="token-panel token-panel--empty"><span class="token-panel__empty-icon" aria-hidden="true">◎</span><p class="token-panel__empty-text">Select a token on the map</p></div>
+                        </div>
                         <div id="tokenActions" class="hidden">
                             <input type="number" id="damageAmount" placeholder="Damage" min="0">
                             <button onclick="dealDamage()">Deal Damage</button>
@@ -294,9 +309,9 @@
                     </div>
 
                     <!-- Players -->
-                    <div class="panel">
-                        <h3>👥 Connected Players</h3>
-                        <div id="playerList"></div>
+                    <div class="panel vtt-panel">
+                        <h3 class="vtt-panel__title">Connected Players</h3>
+                        <div id="playerList" class="player-list"></div>
                     </div>
                 </aside>
             </div>
@@ -1106,6 +1121,22 @@
         " onmouseover="this.style.background='rgba(74,158,255,0.4)'" onmouseout="this.style.background='rgba(74,158,255,0.2)'">
             📍 Ping Location
         </button>
+        <button id="contextMenuRemoveToken" onclick="removeTokenFromContextMenu()" style="
+            display: none;
+            width: 100%;
+            margin-top: 6px;
+            padding: 10px;
+            background: rgba(255,68,68,0.2);
+            border: 1px solid #ff4444;
+            border-radius: 5px;
+            color: #ff8888;
+            font-weight: bold;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.2s;
+        " onmouseover="this.style.background='rgba(255,68,68,0.4)'" onmouseout="this.style.background='rgba(255,68,68,0.2)'">
+            🗑️ Remove Token
+        </button>
     </div>
 
     <!-- Spell Tooltip (at end of body for proper rendering) -->
@@ -1132,7 +1163,9 @@
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=20"></script>
-    <script src="/static/app.js?v=171"></script>
+    <script src="/static/js/action-dock.js?v=3"></script>
+    <script src="/static/js/ui-shell.js?v=3"></script>
+    <script src="/static/app.js?v=180"></script>
     <script type="module" src="/static/js/sw5e-builder/bootstrap.js?v=8"></script>
     <script>
         // Verify connect function is available
@@ -1149,13 +1182,22 @@
         });
     </script>
     
-    <!-- Player Action Bar: full width, tabbed (Combat | Abilities | Powers | Dice) -->
-    <div id="playerActionBar" class="player-action-bar hidden" aria-label="Player action bar" style="display:flex;flex-direction:column;">
-        <div class="player-action-bar-resize-handle player-action-bar-resize-height" id="playerActionBarResizeHandle" title="Drag to resize height"><span class="player-action-bar-resize-grip" aria-hidden="true">...</span></div>
+    <!-- Player Action Bar: tactical character command console -->
+    <div id="playerActionBar" class="player-action-bar action-dock hidden" aria-label="Player action bar">
+        <div class="action-dock__chrome">
+            <div class="action-dock__resize-strip" id="actionDockResizeEdge" aria-label="Resize action dock"></div>
+            <div class="action-dock__drag-handle" id="actionDockDragHandle" title="Drag when floating" aria-label="Drag handle"></div>
+            <div class="action-dock__chrome-actions">
+                <button type="button" class="action-dock__chrome-btn" id="actionDockCollapseBtn" aria-expanded="true" aria-label="Collapse action dock">▼</button>
+                <button type="button" class="action-dock__chrome-btn" id="actionDockUndockBtn" aria-label="Toggle floating dock" title="Float / dock">⬚</button>
+                <button type="button" class="action-dock__chrome-btn" id="actionDockResetBtn" aria-label="Reset dock position" title="Reset position">↺</button>
+            </div>
+        </div>
         <div class="player-bar-tabs" role="tablist">
             <button type="button" class="player-bar-tab-btn active" data-tab="combat" role="tab" tabindex="-1">Combat</button>
             <button type="button" class="player-bar-tab-btn" data-tab="abilities" role="tab" tabindex="-1">Abilities</button>
             <button type="button" class="player-bar-tab-btn" data-tab="powers" role="tab" tabindex="-1">Powers</button>
+            <button type="button" class="player-bar-tab-btn" data-tab="class" role="tab" tabindex="-1">Class</button>
             <button type="button" class="player-bar-tab-btn" data-tab="dice" role="tab" tabindex="-1">Dice</button>
             <button type="button" class="player-bar-tab-btn" data-tab="notes" role="tab" tabindex="-1">Notes</button>
         </div>
@@ -1182,10 +1224,16 @@
                     <div class="player-bar-section player-bar-tech-powers" id="playerBarTechPowers"></div>
                     <div class="player-bar-section player-bar-force-powers" id="playerBarForcePowers"></div>
                 </div>
+                <div class="player-bar-tab-panel" id="playerBarPanelClass" data-tab="class" role="tabpanel">
+                    <div class="player-bar-section player-bar-class-kit">
+                        <span class="section-label">Class kit</span>
+                        <div id="playerBarClassContent"></div>
+                    </div>
+                </div>
                 <div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">
                     <div class="player-bar-section player-bar-dice" id="playerBarDice"></div>
                 </div>
-                <div class="player-bar-tab-panel" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">
+                <div class="player-bar-tab-panel vtt-notes-tab-shell" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">
                     <div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>
                 </div>
             </div>

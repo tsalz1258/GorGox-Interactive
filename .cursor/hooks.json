@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "node .cursor/hooks/gorgox-after-edit.js",
+        "timeout": 120
+      }
+    ],
+    "stop": [
+      {
+        "command": "node .cursor/hooks/gorgox-stop-regression.js",
+        "timeout": 15,
+        "loop_limit": 1
+      }
+    ]
+  }
+}

@@ -821,6 +821,7 @@ async fn handle_client_message(
             let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
             let enemy_instances_join: Vec<crate::models::EnemyInstance> =
                 gs.enemy_instances.values().cloned().collect();
+            let log_history_join = gs.log_history.clone();
             
             // Send current characters list
             let characters: Vec<Character> = gs.characters.values().cloned().collect();
@@ -834,11 +835,14 @@ async fn handle_client_message(
             }
             
             // Send combat state if active (use server's participant list so order and membership match)
-            if gs.combat.active {
+            if gs.combat.active && !gs.combat.participants.is_empty() {
                 let participants = gs.combat.participants.clone();
                 let combat_started = ServerMessage::CombatStarted { participants };
                 send_to_client(clients, session_id, &combat_started).await;
                 info!("📤 Sent combat state to new player");
+            } else if gs.combat.active && gs.combat.participants.is_empty() {
+                // Invalid empty combat — clear so catchups stop rebroadcasting it
+                // (write lock not held here; fix below when we have write access is not needed — just skip send)
             }
             
             drop(gs);
@@ -863,6 +867,11 @@ async fn handle_client_message(
                 };
                 send_to_client(clients, session_id, &msg).await;
             }
+
+            let hist = ServerMessage::LogHistory {
+                entries: log_history_join,
+            };
+            send_to_client(clients, session_id, &hist).await;
             
             // Broadcast player joined to all other clients
             let player_joined = ServerMessage::PlayerJoined {
@@ -923,6 +932,7 @@ async fn handle_client_message(
                 image_url,
                 display_name: display_name.clone(),
                 hidden_from_players,
+                show_name: true,
             };
             
             info!("📍 Placing token: entity_id={}, type={:?}, pos=({}, {}), map_id='{}', display_name={:?}", 
@@ -1023,6 +1033,130 @@ async fn handle_client_message(
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 broadcast_message(clients, &token_update).await;
             }
+        }
+
+        ClientMessage::UpdateTokenDisplayName {
+            token_id,
+            display_name,
+        } => {
+            let gs = game_state.read().await;
+            let is_dm = gs
+                .players
+                .get(session_id)
+                .map(|p| p.is_dm)
+                .unwrap_or(false);
+            drop(gs);
+            if !is_dm {
+                return;
+            }
+            let name = display_name.trim().to_string();
+            if name.is_empty() {
+                return;
+            }
+            let mut gs = game_state.write().await;
+            let entity_id = if let Some(token) = gs.tokens.iter_mut().find(|t| t.id == token_id) {
+                token.display_name = Some(name.clone());
+                Some(token.entity_id.clone())
+            } else {
+                None
+            };
+            if let Some(eid) = entity_id {
+                if let Some(inst) = gs.enemy_instances.get_mut(&eid) {
+                    inst.name = name.clone();
+                }
+                for part in gs.combat.participants.iter_mut() {
+                    if part.id == token_id || part.entity_id == eid {
+                        part.name = name.clone();
+                    }
+                }
+            }
+            drop(gs);
+            let tokens = game_state.read().await.tokens.clone();
+            let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
+            let token_update = ServerMessage::TokenUpdate { tokens };
+            broadcast_message(clients, &token_update).await;
+        }
+
+        ClientMessage::UpdateTokenShowName {
+            token_id,
+            show_name,
+        } => {
+            let gs = game_state.read().await;
+            let is_dm = gs
+                .players
+                .get(session_id)
+                .map(|p| p.is_dm)
+                .unwrap_or(false);
+            drop(gs);
+            if !is_dm {
+                return;
+            }
+            let mut gs = game_state.write().await;
+            if let Some(token) = gs.tokens.iter_mut().find(|t| t.id == token_id) {
+                token.show_name = show_name;
+                drop(gs);
+                let tokens = game_state.read().await.tokens.clone();
+                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
+                let token_update = ServerMessage::TokenUpdate { tokens };
+                broadcast_message(clients, &token_update).await;
+            }
+        }
+
+        ClientMessage::ClearTokens => {
+            let gs = game_state.read().await;
+            let is_dm = gs
+                .players
+                .get(session_id)
+                .map(|p| p.is_dm)
+                .unwrap_or(false);
+            drop(gs);
+            if !is_dm {
+                return;
+            }
+            info!("🗑️ Clearing all tokens (keeping map)");
+            let mut gs = game_state.write().await;
+            gs.tokens.clear();
+            let was_combat = gs.combat.active;
+            if was_combat {
+                gs.combat.end_combat();
+            }
+            drop(gs);
+            let token_update = ServerMessage::TokenUpdate { tokens: Vec::new() };
+            broadcast_message(clients, &token_update).await;
+            if was_combat {
+                broadcast_message(clients, &ServerMessage::CombatEnded).await;
+            }
+        }
+
+        ClientMessage::AddLogEntry {
+            id,
+            pane,
+            message,
+            entry_type,
+            is_nat20,
+            is_nat1,
+        } => {
+            let entry = crate::models::LogHistoryEntry {
+                id: id.clone(),
+                pane: pane.clone(),
+                message: message.clone(),
+                entry_type: entry_type.clone(),
+                is_nat20,
+                is_nat1,
+            };
+            {
+                let mut gs = game_state.write().await;
+                gs.push_log_entry(entry);
+            }
+            let msg = ServerMessage::AddLogEntry {
+                id,
+                pane,
+                message,
+                entry_type,
+                is_nat20,
+                is_nat1,
+            };
+            broadcast_message(clients, &msg).await;
         }
         
         // Ruler tool - just broadcast
@@ -1303,6 +1437,14 @@ async fn handle_client_message(
                 }).collect()
             };
 
+            if participants.is_empty() {
+                warn!("⚔️ StartCombat rejected: no combatant tokens");
+                let err = ServerMessage::Error {
+                    message: "No tokens found to start combat!".to_string(),
+                };
+                send_to_client(clients, session_id, &err).await;
+                return;
+            }
             info!("⚔️ StartCombat: starting combat with {} participants", participants.len());
             gs.combat.start_combat(participants.clone());
             let combat_started = ServerMessage::CombatStarted { participants };
@@ -1409,11 +1551,12 @@ async fn handle_client_message(
             send_to_client(clients, session_id, &vp_msg).await;
             let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
             let characters: Vec<crate::models::Character> = gs.characters.values().cloned().collect();
+            let log_history_full = gs.log_history.clone();
             if !characters.is_empty() {
                 let character_list = ServerMessage::CharacterList { characters, style: None };
                 send_to_client(clients, session_id, &character_list).await;
             }
-            if gs.combat.active {
+            if gs.combat.active && !gs.combat.participants.is_empty() {
                 // Send current combat participants (server is source of truth; includes everyone in combat)
                 let participants = gs.combat.participants.clone();
                 let combat_started = ServerMessage::CombatStarted { participants };
@@ -1430,6 +1573,10 @@ async fn handle_client_message(
                 let token_update = ServerMessage::TokenUpdate { tokens };
                 send_to_client(clients, session_id, &token_update).await;
             }
+            let hist = ServerMessage::LogHistory {
+                entries: log_history_full,
+            };
+            send_to_client(clients, session_id, &hist).await;
         }
         
         ClientMessage::DealDamage { target_id, damage } => {
@@ -1579,9 +1726,16 @@ async fn handle_client_message(
                         if let Some(img) = &token.image_url {
                             token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
                         }
+                        if let Some(dn) = &token.display_name {
+                            token_data.insert("display_name".to_string(), serde_json::Value::String(dn.clone()));
+                        }
                         token_data.insert(
                             "hidden_from_players".to_string(),
                             serde_json::Value::Bool(token.hidden_from_players),
+                        );
+                        token_data.insert(
+                            "show_name".to_string(),
+                            serde_json::Value::Bool(token.show_name),
                         );
                         
                         // Add HP values from characters or enemy instances
@@ -1671,7 +1825,12 @@ async fn handle_client_message(
             
             let mut gs = game_state.write().await;
             gs.load_map(map.clone(), true);
-            gs.player_map_viewport = crate::models::PlayerMapViewport::default();
+            // Preserve "hide entire map" across CreateMap; only reset the fog box.
+            let keep_hidden = gs.player_map_viewport.hidden;
+            gs.player_map_viewport = crate::models::PlayerMapViewport {
+                hidden: keep_hidden,
+                ..crate::models::PlayerMapViewport::default()
+            };
             drop(gs);
             let vp = game_state.read().await.player_map_viewport.clone();
             let map_loaded = ServerMessage::MapLoaded {
@@ -1761,9 +1920,16 @@ async fn handle_client_message(
                     if let Some(ref img) = token.image_url {
                         token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
                     }
+                    if let Some(ref dn) = token.display_name {
+                        token_data.insert("display_name".to_string(), serde_json::Value::String(dn.clone()));
+                    }
                     token_data.insert(
                         "hidden_from_players".to_string(),
                         serde_json::Value::Bool(token.hidden_from_players),
+                    );
+                    token_data.insert(
+                        "show_name".to_string(),
+                        serde_json::Value::Bool(token.show_name),
                     );
                     
                     // Add HP values from characters or enemy instances
@@ -1987,6 +2153,11 @@ async fn handle_client_message(
                                             == crate::models::TokenType::Object
                                             && raw_hidden;
 
+                                        let show_name = token_data
+                                            .get("show_name")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(true);
+
                                         let token = Token {
                                             id: id.to_string(),
                                             map_id: map_id.clone(),
@@ -1998,6 +2169,7 @@ async fn handle_client_message(
                                             image_url,
                                             display_name,
                                             hidden_from_players,
+                                            show_name,
                                         };
                                         
                                         // Add token if it doesn't exist
@@ -2129,7 +2301,12 @@ async fn handle_client_message(
             
             // Clear all tokens
             gs.tokens.clear();
-            gs.player_map_viewport = crate::models::PlayerMapViewport::default();
+            // Preserve "hide entire map" so players stay blacked out while DM prepares.
+            let keep_hidden = gs.player_map_viewport.hidden;
+            gs.player_map_viewport = crate::models::PlayerMapViewport {
+                hidden: keep_hidden,
+                ..crate::models::PlayerMapViewport::default()
+            };
             
             // Clear token update (empty tokens array)
             let token_update = ServerMessage::TokenUpdate { tokens: Vec::new() };

@@ -477,7 +477,7 @@ async function initializeEncryption() {
             const msg = error && error.message ? error.message : String(error);
             console.error(`   ❌ Voice connection error:`, msg);
             if (msg.includes('encryption') || msg.includes('compatible encryption')) {
-                console.error('   → Fix: ensure libsodium-wrappers works, or install VS Build Tools + sodium-native (see CRITICAL_ISSUE.md)');
+                console.error('   → Fix: ensure libsodium-wrappers works, or install VS Build Tools + sodium-native (see README.md Discord section)');
             }
         });
     }
