@@ -5,7 +5,7 @@ import {
     getInvocationFvttToNameMap,
     getArchetypeFeatureFvttToNameMap
 } from './registry.js';
-import { proficiencyBonusFromCharacterLevel, abilityMod } from './calculations.js';
+import { proficiencyBonusFromCharacterLevel, abilityMod, buildSkillsObject } from './calculations.js';
 import {
     getAdvancementsAtLevel,
     getAbilityScoreImprovementLevels,
@@ -315,6 +315,7 @@ export async function mountSw5eLevelUpWizard(characterId) {
             return;
         }
 
+        if((charData.classes||[]).length>1){body.innerHTML='<p>Multiclass progression requires manual class choices; use the sheet editor with your DM.</p>';return;}
         const currentLevel = getTotalLevel(charData, charRow);
         if (currentLevel >= 20) {
             body.innerHTML = '<p>Already level 20.</p>';
@@ -573,7 +574,11 @@ export async function mountSw5eLevelUpWizard(characterId) {
 
         const btnApply = document.getElementById('sw5eLevelUpApply');
         if (btnApply) {
-            btnApply.onclick = () => {
+            const originalData=structuredClone(charData);
+            const originalWrapper=JSON.parse(charRow.character_data);
+            btnApply.onclick = async () => {
+                charData=structuredClone(originalData); // A rejected attempt cannot accumulate HP/features.
+
                 if (subChoice) {
                     const sel = document.getElementById('sw5eLuSub');
                     const sid = sel && sel.value;
@@ -606,7 +611,9 @@ export async function mountSw5eLevelUpWizard(characterId) {
                         alert('Choose ability score improvements or a feat for this level.');
                         return;
                     }
+                    if (!featName && (!k1 || !k2)) {alert('Assign both ability increases (+1 each, or the same ability twice).');return;}
                     if (k1 || k2) applyAsi(charData, k1, k2);
+                    if(Object.values(charData.baseAbilityScores).some(n=>n>20)){alert('Ability improvements cannot exceed 20; choose another ability.');return;}
                     if (featName) addLevelUpFeat(charData, featName, nextLevel);
                 }
 
@@ -645,7 +652,28 @@ export async function mountSw5eLevelUpWizard(characterId) {
 
                 if (classSlug && !charData.classes[0]._class_slug) charData.classes[0]._class_slug = classSlug;
 
+                const names=[...cfRowsLvl.map(f=>f.name),...grantNamesFromAdv,...archetypeGrantNames].filter(Boolean);
+                charData.features=Array.isArray(charData.features)?charData.features.slice():[];
+                for(const name of names)if(!charData.features.some(f=>(typeof f==='string'?f:f?.name)===name))charData.features.push(name);
+                const conBefore=Math.floor(((originalData.baseAbilityScores?.Constitution??charRow.constitution)-10)/2);
+                const conAfter=Math.floor(((charData.baseAbilityScores?.Constitution??charRow.constitution)-10)/2);
+                const conDelta=conAfter-conBefore;
+                if(conDelta)for(let i=0;i<charData.classes[0].hitPoints.length;i++)charData.classes[0].hitPoints[i]+=conDelta;
+                const nextHp=charRow.max_hp+Math.max(1,hpGain)+nextLevel*conDelta;
+                if(charData.tweaks?.hitPoints?.maximum)charData.tweaks.hitPoints.maximum.override=nextHp;
+                if(/engineer/i.test(classDoc.name)){
+                    const old=window.CharacterRules.points(originalData,charRow,'tech');
+                    const intDelta=Math.floor(((charData.baseAbilityScores?.Intelligence??charRow.intelligence)-10)/2)-Math.floor(((originalData.baseAbilityScores?.Intelligence??charRow.intelligence)-10)/2);
+                    charData.techPoints={max:Math.max(0,old.max+2+intDelta),current:Math.max(0,old.current+2+intDelta),_expended:old.max-old.current};
+                }
                 charData.proficiency_bonus = proficiencyBonusFromCharacterLevel(nextLevel);
+                const proficient=Object.keys(charData.skills||{}).filter(k=>charData.skills[k]?.proficient);
+                const expertise=Object.keys(charData.skills||{}).filter(k=>charData.skills[k]?.expertise);
+                const skills=buildSkillsObject(charData.baseAbilityScores||{},proficient,expertise,charData.proficiency_bonus);
+                for(const key of Object.keys(skills))charData.skills[key]={...charData.skills[key],...skills[key]};
+                for(const [key,name] of Object.entries({str:'Strength',dex:'Dexterity',con:'Constitution',int:'Intelligence',wis:'Wisdom',cha:'Charisma'})){
+                    if(charData.abilities?.[key]&&charData.baseAbilityScores?.[name]!=null){charData.abilities[key].score=charData.baseAbilityScores[name];charData.abilities[key].mod=abilityMod(charData.baseAbilityScores[name]);}
+                }
 
                 if (!charData.builderMeta) charData.builderMeta = { choiceHistory: [] };
                 if (!Array.isArray(charData.builderMeta.choiceHistory)) charData.builderMeta.choiceHistory = [];
@@ -664,17 +692,18 @@ export async function mountSw5eLevelUpWizard(characterId) {
                     return;
                 }
                 const { character } = window.convertStarWarsBuilderJsonToGameCharacter(charData, { existing: charRow });
-                const idx = chars.findIndex((c) => c && c.id === charRow.id);
-                if (idx >= 0) chars[idx] = character;
-                if (typeof window.sendMessage === 'function') {
-                    const payload = window.buildCharacterUpdatePayload
-                        ? window.buildCharacterUpdatePayload(character)
-                        : character;
-                    window.sendMessage({
-                        type: 'UpdateCharacter',
-                        character: payload
-                    });
-                }
+                const payload=window.buildCharacterUpdatePayload?window.buildCharacterUpdatePayload(character):character;
+                payload.max_hp=nextHp;payload.current_hp=charRow.current_hp===0?0:Math.min(nextHp,charRow.current_hp+nextHp-charRow.max_hp);
+                charData.currentStats={...(charData.currentStats||{}),hitPointsLost:nextHp-payload.current_hp};
+                payload.character_data=JSON.stringify(charData);
+                if(originalWrapper.character){originalWrapper.character=charData;payload.character_data=JSON.stringify(originalWrapper);}
+                if(charRow.current_hp===0) payload.current_hp=0;
+                const oldPoints=window.CharacterRules.points(originalData,charRow,'tech');
+                const newPoints=window.CharacterRules.points(charData,character,'tech');
+                if(!confirm(`${character.name}: level ${currentLevel} → ${nextLevel}\nHP maximum ${charRow.max_hp} → ${payload.max_hp}; current ${charRow.current_hp} → ${payload.current_hp}\nProficiency +${charRow.proficiency_bonus} → +${payload.proficiency_bonus}\nTech points ${oldPoints.max} → ${newPoints.max}\nNew features: ${(charData.features||[]).filter(f=>!(originalData.features||[]).includes(f)).join(', ')||'Review class choices above'}\nApply this level once?`))return;
+                btnApply.disabled=true;
+                try { await window.TableTools.command({kind:'level_up',expected_level:currentLevel,character:payload},crypto.randomUUID(),false); }
+                catch(error){alert(error.message);btnApply.disabled=false;return;}
                 if (typeof window.closeModal === 'function') window.closeModal('sw5eLevelUpModal');
                 else modal.classList.remove('active');
                 if (typeof window.renderCharacterSheetContent === 'function') {

@@ -55,7 +55,7 @@ function stripHtml(s) {
     .replace(/<\/p>\s*<p>/gi, "\n\n")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<[^>]+>/g, "")
-    .replace(/\[\[\/r\s+[^\]]+\]\]/gi, "")
+    .replace(/\[\[\/r\s+([^\]]+)\]\]/gi, (_, formula) => formula.split('#')[0].trim())
     .replace(/\[\[#[^\]]+\]\]/g, "")
     .replace(/\s+\n/g, "\n")
     .trim();
@@ -206,6 +206,7 @@ function powerDocToGorogox(doc, relPath) {
     concentration: conc,
     components: "",
     damage: damagePartsToString(sys.damage?.parts),
+    casting: { damage_parts: sys.damage?.parts || [], scaling: { ...sys.scaling, mode: sys.scaling?.mode === 'atwill' ? 'cantrip' : sys.scaling?.mode }, action_type: sys.actionType || '', target: sys.target || {}, range: sys.range || {}, duration: sys.duration || {} },
     saving_throw: saveAbilityToString(sys.save),
     source: typeof sys.source === "string" ? sys.source : sys.source?.value || "",
     description: desc,

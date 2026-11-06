@@ -43,9 +43,13 @@ impl CombatState {
 
     /// Sort by initiative descending, then by id ascending so order is deterministic (no skipping when many have same initiative).
     pub fn sort_by_initiative(&mut self) {
+        let current_id = self.participants.get(self.current_turn_index).map(|p| p.id.clone());
         self.participants.sort_by(|a, b| {
             b.initiative.cmp(&a.initiative).then_with(|| a.id.cmp(&b.id))
         });
+        if let Some(id) = current_id {
+            self.current_turn_index = self.participants.iter().position(|p| p.id == id).unwrap_or(0);
+        }
     }
 
     pub fn next_turn(&mut self) -> Option<&CombatParticipant> {
@@ -64,7 +68,7 @@ impl CombatState {
 
     pub fn get_current_participant(&self) -> Option<&CombatParticipant> {
         if self.active && !self.participants.is_empty() {
-            Some(&self.participants[self.current_turn_index])
+            self.participants.get(self.current_turn_index)
         } else {
             None
         }
@@ -126,6 +130,7 @@ mod tests {
                 entity_id: "char1".to_string(),
                 name: "Fighter".to_string(),
                 initiative: 15,
+                initiative_bonus: 0,
                 entity_type: TokenType::Player,
                 current_hp: 20,
                 max_hp: 20,
@@ -136,6 +141,7 @@ mod tests {
                 entity_id: "enemy1".to_string(),
                 name: "Goblin".to_string(),
                 initiative: 20,
+                initiative_bonus: 0,
                 entity_type: TokenType::Enemy,
                 current_hp: 10,
                 max_hp: 10,
@@ -149,4 +155,3 @@ mod tests {
         assert_eq!(combat.participants[1].initiative, 15);
     }
 }
-

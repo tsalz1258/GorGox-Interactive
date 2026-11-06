@@ -1,0 +1,48 @@
+{
+  "results": [
+    {
+      "name": "Human species choices, speed and exact power counts are validated",
+      "status": "PASS",
+      "detail": {
+        "intelligence": 14,
+        "speed": 25,
+        "duplicatePowersRejected": true
+      }
+    },
+    {
+      "name": "Builder filtering preserves focus and supports clearing the query",
+      "status": "PASS",
+      "detail": "Typing and clearing the filter retain focus"
+    },
+    {
+      "name": "Level-up UI rejects missing choices without accumulating HP, then applies once",
+      "status": "PASS",
+      "detail": {
+        "oldHp": 30,
+        "newHp": 39,
+        "hpGain": 9,
+        "techMaximum": 15
+      }
+    },
+    {
+      "name": "Notes autosave for two characters and protects pending edits",
+      "status": "PASS",
+      "detail": "Both debounce saves acknowledged; pending edits protected"
+    },
+    {
+      "name": "Discord link acknowledges persistence in the copied integration file",
+      "status": "PASS",
+      "detail": "Confirmed copied JSON only; no Discord messages sent"
+    },
+    {
+      "name": "3D scenery loads, saves transforms, clears and restores",
+      "status": "PASS",
+      "detail": {
+        "objects": 1,
+        "assetEmbedded": true,
+        "restored": true
+      }
+    }
+  ],
+  "pageErrors": []
+}

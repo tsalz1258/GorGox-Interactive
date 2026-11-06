@@ -205,20 +205,14 @@
         handle.onpointerdown = function (e) {
             if (e.target.closest('button')) return;
             if (e.button !== 0) return;
+            if (getEffectiveMode() !== 'floating') return;
             e.preventDefault();
             e.stopPropagation();
-            if (getEffectiveMode() !== 'floating') {
-                var rect = barEl.getBoundingClientRect();
-                state.mode = 'floating';
-                state.floatX = rect.left;
-                state.floatY = rect.top;
-                applyLayout();
-            }
             handle.setPointerCapture(e.pointerId);
             var startX = e.clientX;
             var startY = e.clientY;
-            var origX = rect ? rect.left : state.floatX;
-            var origY = rect ? rect.top : state.floatY;
+            var origX = state.floatX;
+            var origY = state.floatY;
             function onMove(ev) {
                 state.floatX = origX + (ev.clientX - startX);
                 state.floatY = origY + (ev.clientY - startY);
@@ -308,6 +302,7 @@
         barEl = nextBar;
         if (!barEl) return;
         loadState();
+        resetToDocked();
         barEl.classList.add('action-dock');
         setupResize();
         setupDrag();

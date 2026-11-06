@@ -18,6 +18,13 @@ pub struct GameState {
     pub player_map_viewport: PlayerMapViewport,
     /// Recent rolls/chat lines for late join / refresh
     pub log_history: Vec<LogHistoryEntry>,
+    pub saved_enemies: Vec<serde_json::Value>,
+    pub campaign_style: String,
+    pub measurement_shapes: Vec<serde_json::Value>,
+    pub session_extras: serde_json::Value,
+    pub undo_history: Vec<(serde_json::Value, serde_json::Value)>,
+    pub action_results: Vec<(String, Result<String, String>)>,
+    pub snapshot_signatures: HashMap<String,u64>,
 }
 
 impl GameState {
@@ -31,6 +38,13 @@ impl GameState {
             combat: CombatState::new(),
             player_map_viewport: PlayerMapViewport::default(),
             log_history: Vec::new(),
+            saved_enemies: Vec::new(),
+            campaign_style: "dnd".into(),
+            measurement_shapes: Vec::new(),
+            session_extras: serde_json::json!({}),
+            undo_history: Vec::new(),
+            action_results: Vec::new(),
+            snapshot_signatures: HashMap::new(),
         }
     }
 
@@ -53,6 +67,7 @@ impl GameState {
     }
 
     pub fn remove_player(&mut self, session_id: &str) -> Option<PlayerConnection> {
+        self.snapshot_signatures.remove(session_id);
         self.players.remove(session_id)
     }
 
@@ -101,6 +116,10 @@ impl GameState {
     }
 
     pub fn update_character(&mut self, character: Character) {
+        for participant in self.combat.participants.iter_mut().filter(|p|p.entity_id==character.id) {
+            participant.current_hp=character.current_hp;participant.max_hp=character.max_hp;
+            participant.armor_class=character.armor_class;participant.initiative_bonus=character.initiative_bonus;
+        }
         self.characters.insert(character.id.clone(), character);
     }
 
@@ -116,6 +135,37 @@ impl GameState {
         if let Some(instance) = self.enemy_instances.get_mut(id) {
             instance.current_hp = new_hp;
         }
+    }
+
+    pub fn change_hp(&mut self, token_id: &str, delta: i32) -> Result<i32, String> {
+        let token = self.tokens.iter().find(|t| t.id == token_id).cloned().ok_or("Token no longer exists")?;
+        let new_hp = if let Some(character) = self.characters.get_mut(&token.entity_id) {
+            character.current_hp = character.current_hp.saturating_add(delta).clamp(0, character.max_hp.max(0));
+            if let Some(raw) = &character.character_data {
+                if let Ok(mut full) = serde_json::from_str::<serde_json::Value>(raw) {
+                    let data = if full.get("character").is_some() { &mut full["character"] } else { &mut full };
+                    if data.is_object() {
+                        if !data.get("currentStats").map(|v| v.is_object()).unwrap_or(false) { data["currentStats"] = serde_json::json!({}); }
+                        data["currentStats"]["hitPointsLost"] = serde_json::json!(character.max_hp - character.current_hp);
+                        character.character_data = Some(full.to_string());
+                    }
+                }
+            }
+            character.current_hp
+        } else if let Some(enemy) = self.enemy_instances.get_mut(&token.entity_id) {
+            enemy.current_hp = enemy.current_hp.saturating_add(delta).clamp(0, enemy.max_hp.max(0));
+            enemy.current_hp
+        } else { return Err("Token has no HP-bearing entity".into()); };
+        for participant in self.combat.participants.iter_mut().filter(|p|p.entity_id==token.entity_id) {participant.current_hp=new_hp;}
+        if delta<0 && self.session_extras["concentration"][&token.entity_id].is_object() {
+            if new_hp==0 {
+                if let Some(rows)=self.session_extras["concentration"].as_object_mut(){rows.remove(&token.entity_id);}
+            } else {
+                if !self.session_extras["concentrationChecks"].is_array(){self.session_extras["concentrationChecks"]=serde_json::json!([]);}
+                self.session_extras["concentrationChecks"].as_array_mut().unwrap().push(serde_json::json!({"character_id":token.entity_id,"name":self.characters.get(&token.entity_id).map(|c|c.name.clone()).unwrap_or_default(),"dc":10.max(delta.saturating_neg()/2)}));
+            }
+        }
+        Ok(new_hp)
     }
 }
 

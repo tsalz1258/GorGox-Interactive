@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v181'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v187'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -756,7 +756,7 @@ function getBattlefieldSnapshotForArena3d() {
     if (Array.isArray(tokens)) {
         for (const t of tokens) {
             if (!t || t.entity_type === 'Object') continue;
-            if (viewerIsPlayer && t.hidden_from_players) continue;
+            if (!isTokenVisibleToViewer(t)) continue;
             const stlUrl = normalizeArenaModelUrl(resolveTokenStlUrlForArena3d(t));
             if (!stlUrl) continue;
             const ts = t.size != null && !isNaN(Number(t.size)) ? Number(t.size) : getTokenSize(t.entity_id, t.entity_type);
@@ -1780,7 +1780,7 @@ function buildCharacterUpdatePayload(character) {
         class: character.class || 'Unknown',
         level: character.level || 1,
         max_hp: character.max_hp || 10,
-        current_hp: character.current_hp || character.max_hp || 10,
+        current_hp: character.current_hp ?? character.max_hp ?? 10,
         armor_class: character.armor_class || 10,
         initiative_bonus: character.initiative_bonus || 0,
         proficiency_bonus: character.proficiency_bonus || 2,
@@ -1818,7 +1818,7 @@ function convertStarWarsBuilderJsonToGameCharacter(charData, options) {
     const hitPointsLost = Math.max(0, Number(charData.currentStats?.hitPointsLost) || 0);
     let currentHP = maxHP - hitPointsLost;
     currentHP = Math.max(0, Math.min(maxHP, currentHP));
-    const safeCurrentHp = Math.max(1, currentHP);
+    const safeCurrentHp = Math.max(0, currentHP);
 
     const level = Array.isArray(charData.classes) && charData.classes.length > 0
         ? charData.classes.reduce((sum, cls) => sum + (Number(cls.levels) || 1), 0)
@@ -2430,7 +2430,7 @@ function wirePowerLevelFilterButtons(scopeEl, rerenderFn) {
 }
 
 function handleServerMessage(message) {
-    console.log('Received:', message);
+    if (DEBUG_TOKEN_SYNC) console.debug('Received:', message?.type);
     
     // Safety check
     if (!message || !message.type) {
@@ -2439,6 +2439,18 @@ function handleServerMessage(message) {
     }
     
     switch (message.type) {
+        case "TableActionResult": TableTools.complete(message); break;
+        case 'SessionUnchanged': SessionSync.unchanged(message.saved_at); break;
+        case 'SessionState':
+            SessionSync.apply(message.snapshot);
+            break;
+        case 'SessionRestored':
+            SessionSync.complete(message.request_id);
+            break;
+        case 'MapSaved':
+            SessionSync.lastMapSaved = message.map_id;
+            addLogEntry('Map state saved successfully.', 'info');
+            break;
         case 'PlayerRole':
             // Authoritative session role from server (same source as Connect); used for map fog.
             serverIsDm = message.is_dm === true;
@@ -3045,7 +3057,7 @@ function handleServerMessage(message) {
             break;
             
         case 'CombatStarted': {
-            const hadActiveCombatAlready = combatState.active === true;
+            const hadActiveCombatAlready = combatState.active === true || message.resumed === true;
             console.log('⚔️ ========== COMBAT STARTED ==========');
             console.log('📋 Participants received:', message.participants);
             console.log('📊 Number of participants:', Array.isArray(message.participants) ? message.participants.length : 0);
@@ -3343,16 +3355,6 @@ function handleServerMessage(message) {
             // We need to find the participant that matches this token
             const previousTurn = combatState.currentTurn;
             console.log('   Previous turn:', previousTurn, '-> Server turn ID:', message.current_turn);
-            
-            // CRITICAL: Check if server is sending the same turn (this shouldn't happen)
-            if (previousTurn && message.current_turn === previousTurn) {
-                console.error('❌ ERROR: Server sent TurnChanged with the SAME turn ID!');
-                console.error('   This means the server did not advance the turn.');
-                console.error('   Manually advancing to next participant...');
-                // Manually advance since server didn't
-                setTimeout(() => manuallyAdvanceTurn(), 100);
-                return; // Don't process this TurnChanged message
-            }
             
             // Server sends current_turn = participant.id (unique per token). Match by id so every token gets its turn.
             let turnParticipant = combatState.participants.find(p => p.id === message.current_turn);
@@ -3745,6 +3747,7 @@ function handleServerMessage(message) {
             break;
             
         case 'EnemyList':
+            setTimeout(() => document.dispatchEvent(new Event('gorgox:catalog')), 0);
             if (message.style && message.style !== selectedStyle) {
                 console.log('⚠️ Ignoring EnemyList for style', message.style, 'while current style is', selectedStyle);
                 break;
@@ -3887,7 +3890,12 @@ function handleServerMessage(message) {
             }
             break;
             
-        case 'Error': {
+        case 'DiscordLinkResult': {
+            const status=document.getElementById('discordLinkStatus');if(status){status.style.display='block';status.textContent=message.message;status.style.color=message.ok?'#a7e8bd':'#ffb18f';}
+            addLogEntry(message.message,message.ok?'info':'warning');break;
+        }
+        case 'Error':
+            SessionSync.rejectError(message.message || ''); {
             const errText = message.message || '';
             if (errText.includes('Map not found')) {
                 rejectPendingMapLoad(new Error(errText));
@@ -4414,7 +4422,7 @@ function renderCanvas() {
     const mapReadyForFog = currentMap && currentMap.image && currentMap.width && currentMap.height;
     const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
     // Hide-entire-map must work even before the map image finishes loading.
-    const playerMapHidden = viewerIsPlayer && !!vp.hidden;
+    const playerMapHidden = viewerIsPlayer && (!!vp.hidden || !window.SessionSync?.last);
     const playerFogActive = viewerIsPlayer && vp.enabled && mapReadyForFog && !vp.hidden;
     const dmVpGuide = isDM && vp.enabled && mapReadyForFog && !vp.hidden;
     // Draw map image if loaded
@@ -4435,6 +4443,7 @@ function renderCanvas() {
     
     // Draw movement range (before tokens so tokens appear on top)
     drawMovementRange();
+    window.BattlefieldTools?.draw(ctx);
     
     // Draw tokens
     tokens.forEach(token => {
@@ -4494,6 +4503,9 @@ function renderCanvas() {
     
     // Draw active pings
     drawPings();
+
+    // Sight fog covers map art, drawings, ranges, measurements and pings together.
+    window.VisionTools?.draw(ctx);
     
     // Update highlighted tokens (remove expired ones)
     updateHighlightedTokens();
@@ -4629,7 +4641,7 @@ function saveDiscordLink() {
     
     const discordUserId = input.value.trim();
     
-    // Validate Discord User ID (should be numeric, 17-19 digits)
+    // Validate Discord User ID (should be numeric, 17-20 digits)
     if (!discordUserId) {
         statusDiv.style.display = 'block';
         statusDiv.style.background = 'rgba(255, 68, 68, 0.1)';
@@ -4639,12 +4651,12 @@ function saveDiscordLink() {
         return;
     }
     
-    if (!/^\d{17,19}$/.test(discordUserId)) {
+    if (!/^\d{17,20}$/.test(discordUserId)) {
         statusDiv.style.display = 'block';
         statusDiv.style.background = 'rgba(255, 68, 68, 0.1)';
         statusDiv.style.borderLeft = '4px solid #ff4444';
         statusDiv.style.color = '#ff4444';
-        statusDiv.innerHTML = '<strong>❌ Invalid format:</strong> Discord User ID should be a 17-19 digit number';
+        statusDiv.innerHTML = '<strong>❌ Invalid format:</strong> Discord User ID should be a 17-20 digit number';
         return;
     }
     
@@ -4690,7 +4702,7 @@ function saveDiscordLink() {
     statusDiv.style.background = 'rgba(68, 255, 68, 0.1)';
     statusDiv.style.borderLeft = '4px solid #44ff44';
     statusDiv.style.color = '#44ff44';
-    statusDiv.innerHTML = '<strong>✅ Success!</strong> Discord account linked. Your token will highlight when you speak in Discord voice channels.';
+    statusDiv.innerHTML = '<strong>✅ Success!</strong> Link requested; waiting for server confirmation. Voice highlighting requires the Discord bot.';
     
     // Update UI
     const currentLinkDiv = document.getElementById('currentDiscordLink');
@@ -5184,75 +5196,12 @@ function drawMovementRange() {
 // Uses D&D 5e rules: every other diagonal costs 10 feet (2 squares)
 // Optional maxGridX/maxGridY (exclusive upper bounds) default to canvas size for 2D drawing.
 function calculateReachableSquares(startX, startY, maxSquares, maxGridXOpt, maxGridYOpt) {
-    const reachable = [];
-    const visited = new Set();
-    const queue = [{x: startX, y: startY, cost: 0, diagCount: 0}];
-    
-    visited.add(`${startX},${startY}`);
-    
-    const gsz = typeof gridSize === 'number' && gridSize > 0 ? gridSize : 50;
-    const maxGridX =
-        maxGridXOpt != null && maxGridXOpt > 0
-            ? maxGridXOpt
-            : Math.floor((canvas && canvas.width ? canvas.width : 1200) / gsz);
-    const maxGridY =
-        maxGridYOpt != null && maxGridYOpt > 0
-            ? maxGridYOpt
-            : Math.floor((canvas && canvas.height ? canvas.height : 800) / gsz);
-    
-    while (queue.length > 0) {
-        const current = queue.shift();
-        reachable.push({x: current.x, y: current.y});
-        
-        // Check all 8 directions (4 cardinal + 4 diagonal)
-        const directions = [
-            {dx: 0, dy: -1, isDiag: false},  // North
-            {dx: 1, dy: 0, isDiag: false},   // East
-            {dx: 0, dy: 1, isDiag: false},   // South
-            {dx: -1, dy: 0, isDiag: false},  // West
-            {dx: 1, dy: -1, isDiag: true},   // NE
-            {dx: 1, dy: 1, isDiag: true},    // SE
-            {dx: -1, dy: 1, isDiag: true},   // SW
-            {dx: -1, dy: -1, isDiag: true},  // NW
-        ];
-        
-        for (const dir of directions) {
-            const newX = current.x + dir.dx;
-            const newY = current.y + dir.dy;
-            const key = `${newX},${newY}`;
-            
-            // Check bounds
-            if (newX < 0 || newY < 0 || newX >= maxGridX || newY >= maxGridY) continue;
-            
-            // Check if already visited
-            if (visited.has(key)) continue;
-            
-            // Calculate movement cost using D&D 5e diagonal rules
-            // Every other diagonal costs 2 squares (10 feet) instead of 1 (5 feet)
-            let moveCost = 1;
-            let newDiagCount = current.diagCount;
-            
-            if (dir.isDiag) {
-                newDiagCount++;
-                // Every other diagonal costs 2 squares
-                if (newDiagCount % 2 === 0) {
-                    moveCost = 2;
-                }
-            } else {
-                // Reset diagonal count when moving cardinally
-                newDiagCount = 0;
-            }
-            
-            const newCost = current.cost + moveCost;
-            
-            // Check if within movement range
-            if (newCost <= maxSquares) {
-                visited.add(key);
-                queue.push({x: newX, y: newY, cost: newCost, diagCount: newDiagCount});
-            }
-        }
+    const reachable=[];
+    const maxX=maxGridXOpt||Math.floor((canvas?.width||1200)/gridSize),maxY=maxGridYOpt||Math.floor((canvas?.height||800)/gridSize);
+    const extent=Math.ceil(maxSquares);
+    for(let x=Math.max(0,Math.floor(startX-extent));x<Math.min(maxX,startX+extent+1);x++)for(let y=Math.max(0,Math.floor(startY-extent));y<Math.min(maxY,startY+extent+1);y++){
+        if(BattlefieldTools.distance(x-startX,y-startY)<=maxSquares)reachable.push({x,y});
     }
-    
     return reachable;
 }
 
@@ -5353,7 +5302,7 @@ function isTokenVisibleToViewer(token) {
         const viewerIsPlayer = typeof serverIsDm === 'boolean' ? !serverIsDm : !isDM;
         if (viewerIsPlayer) return false;
     }
-    return true;
+    return window.VisionTools ? VisionTools.tokenVisible(token) : true;
 }
 
 /**
@@ -5832,7 +5781,7 @@ function onCanvasMouseDown(e) {
         } else {
             if (p.aoeShape === 'circle') {
                 const tokensInArea = getTokensInCircle(gridX, gridY, p.aoeSize);
-                resolvePowerOnArea(tokensInArea);
+                resolvePowerOnArea(tokensInArea, {x:gridX,y:gridY});
                 return;
             }
             if (p.aoeShape === 'cone') {
@@ -6870,8 +6819,9 @@ function updateTokenInfo() {
             }
             // Store current HP for next update (delay to ensure animation uses old value)
             // CRITICAL: Delay this to AFTER the animation completes (1.5s + buffer)
+            const hpEntityId = selectedToken.entity_id;
             setTimeout(() => {
-                previousHpValues.set(`enemy-${selectedToken.entity_id}`, { hp: currentHp, maxHp: maxHp });
+                previousHpValues.set(`enemy-${hpEntityId}`, { hp: currentHp, maxHp: maxHp });
             }, 1600);
             statsHtml += `<div class="token-stat"><span>AC:</span><span>${ac}</span></div>`;
             
@@ -8511,46 +8461,38 @@ function campaignNotesPutToServer(fid, data) {
         if (!r.ok) throw new Error('notes save HTTP ' + r.status);
     });
 }
+window.campaignNotesDirty=new Set();
+window.campaignNotesSaveTimers=new Map();
 function scheduleCampaignNotesServerSave(fid) {
+    window.campaignNotesDirty.add(fid);
     if (!fid) return;
-    if (campaignNotesServerSaveTimer) clearTimeout(campaignNotesServerSaveTimer);
+    if(window.campaignNotesSaveTimers.has(fid))clearTimeout(window.campaignNotesSaveTimers.get(fid));
     setCampaignNotesSaveState('saving');
     campaignNotesServerSaveTimer = setTimeout(function() {
-        campaignNotesServerSaveTimer = null;
+        campaignNotesServerSaveTimer = null;window.campaignNotesSaveTimers.delete(fid);
         var d = campaignNotesMem[fid];
         if (!d) return;
         setCampaignNotesSaveState('saving');
+        const submitted=JSON.stringify(d);
         campaignNotesPutToServer(fid, d).then(function() {
+            if(JSON.stringify(campaignNotesMem[fid])===submitted)window.campaignNotesDirty.delete(fid);
             setCampaignNotesSaveState('saved');
         }).catch(function(e) {
             console.warn('[Campaign notes] server save', e);
             setCampaignNotesSaveState('error');
         });
     }, 450);
+    window.campaignNotesSaveTimers.set(fid,campaignNotesServerSaveTimer);
 }
 function campaignNotesFlushPendingServerSave() {
-    if (campaignNotesServerSaveTimer) {
-        clearTimeout(campaignNotesServerSaveTimer);
-        campaignNotesServerSaveTimer = null;
-    }
-    if (!myCharacterId || isDM) return;
-    var fid = getCampaignNotesFileId(myCharacterId);
-    if (!fid) return;
-    var d = campaignNotesMem[fid];
-    if (d == null) return;
-    setCampaignNotesSaveState('saving');
-    try {
-        fetch('/api/campaign-notes/' + encodeURIComponent(fid), {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(normalizeCampaignNotesRaw(d)),
-            keepalive: true
-        }).then(function(r) {
-            if (r.ok) setCampaignNotesSaveState('saved');
-            else setCampaignNotesSaveState('error');
-        }).catch(function() { setCampaignNotesSaveState('error'); });
-    } catch (e) {
-        setCampaignNotesSaveState('error');
+    for(const timer of window.campaignNotesSaveTimers.values())clearTimeout(timer);
+    window.campaignNotesSaveTimers.clear();campaignNotesServerSaveTimer=null;
+    for(const fid of window.campaignNotesDirty){
+        const d=campaignNotesMem[fid];if(!d)continue;const submitted=JSON.stringify(d);
+        setCampaignNotesSaveState('saving');
+        fetch('/api/campaign-notes/'+encodeURIComponent(fid),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(normalizeCampaignNotesRaw(d)),keepalive:true})
+            .then(r=>{if(!r.ok)throw Error('Notes save failed');if(JSON.stringify(campaignNotesMem[fid])===submitted)window.campaignNotesDirty.delete(fid);setCampaignNotesSaveState(window.campaignNotesDirty.size?'saving':'saved');})
+            .catch(()=>setCampaignNotesSaveState('error'));
     }
 }
 function ensureCampaignNotesLoaded(characterId) {
@@ -10310,6 +10252,7 @@ function populateDmEnemyActionBar(token) {
 function populatePlayerActionBar() {
     const bar = document.getElementById('playerActionBar');
     if (!bar || bar.classList.contains('hidden')) return;
+    if(bar.contains(document.activeElement)&&document.activeElement.matches('input,textarea,select,[contenteditable]')) { clearTimeout(window.actionRefreshTimer);window.actionRefreshTimer=setTimeout(populatePlayerActionBar,500);return;}
     if (isDM) {
         if (!selectedToken || selectedToken.entity_type !== 'Enemy') return;
         populateDmEnemyActionBar(selectedToken);
@@ -11497,25 +11440,31 @@ function defaultArmstechState() {
 }
 
 function loadArmstechState(characterId) {
-    var base = defaultArmstechState();
-    try {
-        var raw = localStorage.getItem(armstechStorageKey(characterId));
-        if (!raw) return base;
-        var o = JSON.parse(raw);
-        if (o && typeof o === 'object') {
-            base.weaponType = o.weaponType === 'vibro' ? 'vibro' : 'blaster';
-            base.blasterStr = !!o.blasterStr;
-            base.vibroDex = !!o.vibroDex;
-            base.equippedIds = Array.isArray(o.equippedIds) ? o.equippedIds.filter(function (id) { return typeof id === 'string'; }) : [];
-        }
-    } catch (e) { /* ignore */ }
-    return base;
+    const character = characters.find(c => c.id === characterId);
+    const wrapper = character ? parseCharacterDataWrapper(character) : null;
+    const saved = wrapper?.data?.gorgox?.armstech;
+    if (saved && typeof saved === 'object') return { ...defaultArmstechState(), ...saved };
+    let local = null;
+    try { local = JSON.parse(localStorage.getItem(armstechStorageKey(characterId)) || 'null'); } catch (e) {}
+    if (!local || typeof local !== 'object') return defaultArmstechState();
+    const migrated = {
+        weaponType: local.weaponType === 'vibro' ? 'vibro' : 'blaster',
+        blasterStr: !!local.blasterStr, vibroDex: !!local.vibroDex,
+        equippedIds: Array.isArray(local.equippedIds) ? local.equippedIds.filter(id => typeof id === 'string') : []
+    };
+    if (character && wrapper && (isDM || myCharacterId === characterId)) saveArmstechState(characterId, migrated);
+    return migrated;
 }
 
 function saveArmstechState(characterId, state) {
-    try {
-        localStorage.setItem(armstechStorageKey(characterId), JSON.stringify(state));
-    } catch (e) { /* ignore */ }
+    try { localStorage.setItem(armstechStorageKey(characterId), JSON.stringify(state)); } catch (e) {}
+    const character = characters.find(c => c.id === characterId);
+    if (!character || !(isDM || myCharacterId === characterId)) return;
+    const wrapper = parseCharacterDataWrapper(character);
+    if (!wrapper.data) { wrapper.data = {}; wrapper.full = wrapper.data; }
+    wrapper.data.gorgox = { ...(wrapper.data.gorgox || {}), armstech: { ...state, version: 1 } };
+    character.character_data = serializeCharacterDataWrapper(character, wrapper.full, wrapper.data);
+    sendMessage({ type: 'UpdateCharacter', character: buildCharacterUpdatePayload(character) });
 }
 
 function getArmstechEffectiveLevel(char) {
@@ -11526,7 +11475,7 @@ function getArmstechEffectiveLevel(char) {
             var parsed = JSON.parse(char.character_data);
             var data = parsed && parsed.character ? parsed.character : parsed;
             if (data && typeof getLevelFromCharacterData === 'function') {
-                lv = getLevelFromCharacterData(data, char);
+                lv = Array.isArray(data.classes)?data.classes.filter(c=>/^engineer/i.test(c.name||'')).reduce((n,c)=>n+Number(c.levels??c.level??char.level??0),0):getLevelFromCharacterData(data, char);
             }
         } catch (e) { /* ignore */ }
     }
@@ -11708,6 +11657,7 @@ function renderArmstechModal() {
 
     html += '<div style="margin-bottom:12px;padding:10px;background:#1a1a2e;border-radius:8px;border:1px solid #444;">';
     html += '<div style="font-weight:bold;margin-bottom:8px;color:#c9a227;">Modified weapon</div>';
+    html += '<label>Weapon name (bonuses apply only to this item) <input id="armstechWeaponName" value="'+escapeHtml(state.weaponName||'')+'" onchange="armstechSetWeaponName(this.value)"></label>';
     html += '<label style="margin-right:14px;cursor:pointer;"><input type="radio" name="armstechWeapon" value="blaster"' + (state.weaponType === 'blaster' ? ' checked' : '') + ' onchange="armstechOnWeaponTypeChange(\'blaster\')"/> Blaster</label>';
     html += '<label style="cursor:pointer;"><input type="radio" name="armstechWeapon" value="vibro"' + (state.weaponType === 'vibro' ? ' checked' : '') + ' onchange="armstechOnWeaponTypeChange(\'vibro\')"/> Vibroweapon</label>';
     html += '<div style="margin-top:10px;font-size:11px;opacity:0.9;">';
@@ -13712,6 +13662,7 @@ function spawnNPC(npc) {
         enemies.push(npcEnemy);
     }
     
+    sendMessage({ type: 'RegisterNpcInstance', enemy: npcEnemy });
     console.log('✅ Added NPC instance:', instanceId, instanceName, 'Total NPCs:', enemies.filter(e => e.isNPC).length);
     
     // Place token with automatically calculated size
@@ -18887,7 +18838,7 @@ function rollActionFromSheet(index) {
         const result = rollDice(notation);
         addLogEntry(`${name}: ${notation} → ${result.breakdown} = ${result.total}`, 'damage');
     } else {
-        addLogEntry(desc ? `${name}: ${desc.substring(0, 80)}${desc.length > 80 ? '...' : ''}` : name, 'info');
+        addLogEntry(name, 'info');
     }
 }
 
@@ -19071,7 +19022,7 @@ function gridDistanceFeetBetweenTokens(t1, t2) {
     if (!t1 || !t2) return Infinity;
     const gx = (t2.x - t1.x);
     const gy = (t2.y - t1.y);
-    return Math.sqrt(gx * gx + gy * gy) * 5;
+    return BattlefieldTools.distance(gx,gy) * 5;
 }
 
 function findPlayerTokenByAttackerName(characterName) {
@@ -19198,7 +19149,10 @@ function getPowerTargetingInfo(charData, powerName, powerType) {
         }
     }
     if (!detail) detail = fromClass();
-    var rangeFeet = parseRangeFeet(detail.range || detail.powerrange);
+    if (powerType === 'tech' && powerName === 'Explosion') return {targetType:'aoe',aoeShape:'circle',aoeSize:20,range:150};
+    if (powerType === 'tech' && powerName === 'Electroshock') return {targetType:'creature',range:5};
+    if (powerType === 'tech' && powerName === 'Kolto Pack') return {targetType:'creature',range:60};
+    var rangeFeet = parseRangeFeet(detail?.range || detail?.powerrange);
     if (detail && (detail.targetType === 'aoe' || detail.aoeShape || detail.aoeSize)) {
         return {
             targetType: detail.targetType || 'aoe',
@@ -19245,43 +19199,21 @@ function getTokensInCone(originGx, originGy, directionRad, coneAngleDeg, lengthF
 }
 
 function resolvePowerOnToken(token) {
-    var p = pendingTargetPower;
-    if (!p || !token) return;
-    var targetName = getTokenDisplayName(token);
-    var icon = p.powerType === 'tech' ? '&#9889;' : '&#9733;';
-    var typeLabel = p.powerType === 'tech' ? 'Tech Power' : 'Force Power';
-    addRollEntry(icon + ' ' + p.characterName + ' uses ' + typeLabel + ': ' + p.powerName + ' on ' + targetName, false, false);
-    addLogEntry(p.characterName + ' uses ' + typeLabel + ' "' + p.powerName + '" on ' + targetName + '.', 'info');
-    if (p.powerType === 'tech') useTechPoint(); else useForcePoint();
-    populatePlayerActionBar();
-    pendingTargetPower = null;
-    pendingSkipTokenMoveOnNextMouseUp = true;
-    if (canvas) canvas.style.cursor = '';
-    updateTokenInfo();
-    renderCanvas();
+    const power=pendingTargetPower;if(!power||!token)return;
+    pendingTargetPower=null;pendingSkipTokenMoveOnNextMouseUp=true;
+    if(canvas)canvas.style.cursor='';renderCanvas();
+    PowerTools.preview(power,[token]);
 }
-
-function resolvePowerOnArea(tokensInArea) {
-    var p = pendingTargetPower;
-    if (!p) return;
-    var names = tokensInArea.map(function(t) { return getTokenDisplayName(t); });
-    var icon = p.powerType === 'tech' ? '&#9889;' : '&#9733;';
-    var typeLabel = p.powerType === 'tech' ? 'Tech Power' : 'Force Power';
-    var areaDesc = p.aoeShape === 'cone' ? (p.aoeSize + 'ft cone') : (p.aoeSize + 'ft radius');
-    addRollEntry(icon + ' ' + p.characterName + ' uses ' + typeLabel + ': ' + p.powerName + ' (AOE ' + areaDesc + ') — ' + names.length + ' target(s): ' + names.join(', '), false, false);
-    addLogEntry(p.characterName + ' uses ' + typeLabel + ' "' + p.powerName + '" on area — ' + names.length + ' target(s): ' + names.join(', '), 'info');
-    if (p.powerType === 'tech') useTechPoint(); else useForcePoint();
-    populatePlayerActionBar();
-    pendingTargetPower = null;
-    pendingSkipTokenMoveOnNextMouseUp = true;
-    if (canvas) canvas.style.cursor = '';
-    updateTokenInfo();
-    renderCanvas();
+function resolvePowerOnArea(targets,center) {
+    const power=pendingTargetPower;if(!power)return;
+    pendingTargetPower=null;pendingSkipTokenMoveOnNextMouseUp=true;
+    if(canvas)canvas.style.cursor='';renderCanvas();
+    PowerTools.preview(power,targets,center);
 }
 
 function requestPowerTarget(powerType, powerName, characterName) {
     pendingSkipTokenMoveOnNextMouseUp = false;
-    var myChar = characters.find(function(c) { return c.id === myCharacterId; });
+    var myChar = characters.find(function(c) { return c.id === (isDM && selectedToken?.entity_type === "Player" ? selectedToken.entity_id : myCharacterId); });
     if (!myChar) return;
     var charData = myChar;
     if (myChar.character_data) {
@@ -19290,15 +19222,11 @@ function requestPowerTarget(powerType, powerName, characterName) {
             charData = parsed.character || parsed;
         } catch (e) {}
     }
-    var pts = powerType === 'tech' ? getTechPointsFromCharData(charData, myChar) : getForcePointsFromCharData(charData);
-    if (pts.max > 0 && pts.current <= 0) {
-        addLogEntry('No ' + (powerType === 'tech' ? 'tech' : 'force') + ' points remaining.', 'info');
-        return;
-    }
     var info = getPowerTargetingInfo(charData, powerName, powerType);
     if (info.targetType === 'aoe') {
         pendingTargetAttack = null;
         pendingTargetPower = {
+            characterId: myChar.id,
             powerType: powerType,
             powerName: powerName,
             characterName: characterName,
@@ -19313,6 +19241,7 @@ function requestPowerTarget(powerType, powerName, characterName) {
     } else {
         pendingTargetAttack = null;
         pendingTargetPower = {
+            characterId: myChar.id,
             powerType: powerType,
             powerName: powerName,
             characterName: characterName,
@@ -20194,6 +20123,7 @@ function scheduleDebouncedCharacterSheetRefresh(delayMs = 350) {
         characterSheetListRefreshDebounceId = null;
         const modal = document.getElementById('characterSheetModal');
         if (modal && modal.classList.contains('active') && currentViewingCharacter) {
+            if(modal.contains(document.activeElement)&&document.activeElement.matches('input,textarea,select,[contenteditable]')) {scheduleDebouncedCharacterSheetRefresh(500);return;}
             renderCharacterSheetContent();
         }
     }, delayMs);
@@ -20498,39 +20428,7 @@ function getCalculatedTechPointsMax(charData, charFallback) {
 }
 
 // Get tech points { max, current } from character data. For SW5e Engineers we use formula: engineer level*2 + Int mod. Pass char when available so char.level can fix wrong stored level.
-function getTechPointsFromCharData(charData, charFallback) {
-    if (!charData) return { max: 0, current: 0 };
-    var engineerLevel = getEngineerLevelFromCharData(charData, charFallback);
-    var calculatedMax = (engineerLevel >= 1) ? getCalculatedTechPointsMax(charData, charFallback) : 0;
-    var max = 0, current = 0, expended = 0;
-    if (charData.techPoints && typeof charData.techPoints.max === 'number') {
-        max = Math.max(0, charData.techPoints.max);
-        expended = charData.techPoints._expended || 0;
-        current = charData.techPoints.current != null ? charData.techPoints.current : Math.max(0, max - expended);
-    } else if (Array.isArray(charData.attribs)) {
-        for (let i = 0; i < charData.attribs.length; i++) {
-            const a = charData.attribs[i];
-            if (!a) continue;
-            const n = String(a.name || '').trim();
-            if (n === 'tech_power_points_total') {
-                const v = a.current != null && a.current !== '' ? a.current : a.max;
-                max = Math.max(0, parseInt(v, 10) || 0);
-            } else if (n === 'tech_power_points_expended') {
-                const v = a.current != null && a.current !== '' ? a.current : a.max;
-                expended = Math.max(0, parseInt(v, 10) || 0);
-            }
-        }
-        current = Math.max(0, max - expended);
-    }
-    if (calculatedMax > 0) {
-        max = calculatedMax;
-        current = Math.min(current, max);
-    } else if (max === 0) {
-        max = 0;
-        current = 0;
-    }
-    return { max: max, current: Math.max(0, Math.min(current, max)) };
-}
+function getTechPointsFromCharData(charData, charFallback) { return CharacterRules.points(charData||{},charFallback||{},"tech"); }
 
 // Test tech points calculation (run in console: testTechPointsCalc())
 window.testTechPointsCalc = function testTechPointsCalc() {
@@ -20578,130 +20476,17 @@ function getCalculatedForcePointsMax(charData) {
 }
 
 // Get force points { max, current } from character data. If character has no force powers, always return 0.
-function getForcePointsFromCharData(charData) {
-    if (!charData) return { max: 0, current: 0 };
-    if (!hasForcePowers(charData)) return { max: 0, current: 0 };
-    var max = 0, current = 0, expended = 0;
-    if (charData.forcePoints && typeof charData.forcePoints.max === 'number') {
-        max = Math.max(0, charData.forcePoints.max);
-        expended = charData.forcePoints._expended || 0;
-        current = charData.forcePoints.current != null ? charData.forcePoints.current : Math.max(0, max - expended);
-    } else if (Array.isArray(charData.attribs)) {
-        for (let i = 0; i < charData.attribs.length; i++) {
-            const a = charData.attribs[i];
-            if (!a) continue;
-            const n = String(a.name || '').trim();
-            if (n === 'force_power_points_total') {
-                const v = a.current != null && a.current !== '' ? a.current : a.max;
-                max = Math.max(0, parseInt(v, 10) || 0);
-            } else if (n === 'force_power_points_expended') {
-                const v = a.current != null && a.current !== '' ? a.current : a.max;
-                expended = Math.max(0, parseInt(v, 10) || 0);
-            }
-        }
-        current = Math.max(0, max - expended);
-    }
-    if (max === 0) {
-        max = getCalculatedForcePointsMax(charData);
-        current = max;
-    }
-    return { max: max, current: Math.max(0, Math.min(current, max)) };
-}
+function getForcePointsFromCharData(charData, charFallback) { return CharacterRules.points(charData||{},charFallback||{},"force"); }
 
 // Use one tech point (decrement current, persist, refresh UI)
-function useTechPoint() {
-    const myCharacter = characters.find(c => c.id === myCharacterId);
-    if (!myCharacter || !myCharacter.character_data) return;
-    try {
-        const fullData = JSON.parse(myCharacter.character_data);
-        const data = fullData.character || fullData;
-        const pts = getTechPointsFromCharData(data, myCharacter);
-        if (pts.max === 0 || pts.current <= 0) {
-            addLogEntry('No tech points remaining.', 'info');
-            return;
-        }
-        if (!data.techPoints) data.techPoints = { max: pts.max, current: pts.current, _expended: pts.max - pts.current };
-        data.techPoints.current = Math.max(0, data.techPoints.current - 1);
-        data.techPoints._expended = data.techPoints.max - data.techPoints.current;
-        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
-        syncCharacterToServer(myCharacter);
-        populatePlayerActionBar();
-        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
-    } catch (e) { console.error('useTechPoint:', e); }
-}
+function useTechPoint() { PowerTools.resource('tech',-1); }
 
-// Use one force point
-function useForcePoint() {
-    const myCharacter = characters.find(c => c.id === myCharacterId);
-    if (!myCharacter || !myCharacter.character_data) return;
-    try {
-        const fullData = JSON.parse(myCharacter.character_data);
-        const data = fullData.character || fullData;
-        const pts = getForcePointsFromCharData(data);
-        if (pts.max === 0 || pts.current <= 0) {
-            addLogEntry('No force points remaining.', 'info');
-            return;
-        }
-        if (!data.forcePoints) data.forcePoints = { max: pts.max, current: pts.current, _expended: pts.max - pts.current };
-        data.forcePoints.current = Math.max(0, data.forcePoints.current - 1);
-        data.forcePoints._expended = data.forcePoints.max - data.forcePoints.current;
-        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
-        syncCharacterToServer(myCharacter);
-        populatePlayerActionBar();
-        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
-        addLogEntry((data.name || myCharacter.name) + ' used 1 force point (' + data.forcePoints.current + '/' + data.forcePoints.max + ' remaining)', 'info');
-    } catch (e) { console.error('useForcePoint:', e); }
-}
+function useForcePoint() { PowerTools.resource('force',-1); }
 
-// Restore all tech points (short/long rest)
-function restoreTechPoints() {
-    const myCharacter = characters.find(c => c.id === myCharacterId);
-    if (!myCharacter || !myCharacter.character_data) return;
-    try {
-        const fullData = JSON.parse(myCharacter.character_data);
-        const data = fullData.character || fullData;
-        const pts = getTechPointsFromCharData(data, myCharacter);
-        if (pts.max === 0) return;
-        if (!data.techPoints) data.techPoints = { max: pts.max, current: pts.max, _expended: 0 };
-        data.techPoints.max = pts.max;
-        data.techPoints.current = pts.max;
-        data.techPoints._expended = 0;
-        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
-        syncCharacterToServer(myCharacter);
-        populatePlayerActionBar();
-        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
-    } catch (e) { console.error('restoreTechPoints:', e); }
-}
+function restoreTechPoints() { PowerTools.rest(false); }
 
-// Restore all force points
-function restoreForcePoints() {
-    const myCharacter = characters.find(c => c.id === myCharacterId);
-    if (!myCharacter || !myCharacter.character_data) return;
-    try {
-        const fullData = JSON.parse(myCharacter.character_data);
-        const data = fullData.character || fullData;
-        const pts = getForcePointsFromCharData(data);
-        if (pts.max === 0) return;
-        if (!data.forcePoints) data.forcePoints = { max: pts.max, current: pts.max, _expended: 0 };
-        data.forcePoints.current = data.forcePoints.max;
-        data.forcePoints._expended = 0;
-        myCharacter.character_data = JSON.stringify(fullData.character ? fullData : data);
-        syncCharacterToServer(myCharacter);
-        populatePlayerActionBar();
-        if (currentViewingCharacter && currentViewingCharacter.id === myCharacterId) renderCharacterSheetContent();
-        addLogEntry((data.name || myCharacter.name) + ' restored all force points (' + data.forcePoints.max + ')', 'info');
-    } catch (e) { console.error('restoreForcePoints:', e); }
-}
+function restoreForcePoints() { PowerTools.rest(true); }
 
-function syncCharacterToServer(char) {
-    if (!char) return;
-    const payload = buildCharacterUpdatePayload(char);
-    if (payload && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'UpdateCharacter', character: payload }));
-    }
-}
-
-// Always resolve level from the character's stored character_data when showing the sheet (source of truth)
 function getResolvedLevelForSheet(char, charData) {
     if (!char) return 1;
     if (char.character_data && typeof char.character_data === 'string') {
@@ -22484,82 +22269,17 @@ function syncParticipantsWithTokens() {
 }
 
 function requestTokenRefresh() {
-    console.log('🔄 Requesting latest tokens from server');
-    // Note: Server automatically sends TokenUpdate when tokens change
-    // We can't request tokens directly, but we can trigger a refresh by requesting the map
-    // The server will send TokenUpdate when we load the map
-    if (currentMap && currentMap.id) {
-        sendMessage({ type: 'LoadMap', map_id: currentMap.id, clear_tokens: false });
-    }
+    requestFullStateFromServer("requestTokenRefresh");
 }
 
 // Refresh map and tokens - for late joiners or when map isn't displaying
 function refreshMap() {
-    console.log('🔄 Refreshing map and tokens...');
-    addLogEntry('🔄 Refreshing map...', 'info');
-    
-    // Request current map - server should send MapLoaded if a map is active
-    if (currentMap && currentMap.id) {
-        console.log('🔄 Requesting map reload:', currentMap.id);
-        sendMessage({ type: 'LoadMap', map_id: currentMap.id, clear_tokens: false });
-    } else {
-        // If no map loaded locally, request it from server
-        console.log('🔄 No local map, requesting from server');
-        // The server should send the current map state if one is loaded
-    }
-    
-    // Request tokens
-    requestTokenRefresh();
-    
-    // Request current combat state if active
-    if (combatState.active) {
-        console.log('🔄 Combat is active, combat state will be preserved');
-    }
-    
-    // Re-render canvas after a short delay to allow server responses
-    setTimeout(() => {
-        // Force reload map image if it exists
-        if (currentMap && currentMap.image_path) {
-            console.log('🔄 Reloading map image:', currentMap.image_path);
-            // Reload the image (cache busting handled by browser or we can add timestamp)
-            const img = new Image();
-            img.onload = () => {
-                currentMap.image = img;
-                renderCanvas();
-                addLogEntry('✅ Map refreshed', 'success');
-            };
-            img.onerror = () => {
-                console.error('❌ Failed to reload map image');
-                renderCanvas(); // Render anyway with existing image
-                addLogEntry('⚠️ Map refresh completed (image may be cached)', 'warning');
-            };
-            // Add cache busting query parameter
-            const separator = currentMap.image_path.includes('?') ? '&' : '?';
-            img.src = '/' + currentMap.image_path + separator + 'refresh=' + Date.now();
-        } else {
-            // Just re-render what we have
-            renderCanvas();
-            addLogEntry('✅ Map refreshed', 'success');
-        }
-    }, 500);
+    requestFullStateFromServer("refreshMap");
 }
 
 function syncCharactersWithServer() {
-    if (!characters || characters.length === 0) return;
-    characters.forEach(char => {
-        if (!char || !char.id || syncedCharacterIds.has(char.id)) {
-            return;
-        }
-        const payload = buildCharacterUpdatePayload(char);
-        if (payload) {
-            console.log('🛠️ Syncing character with server:', payload.name, payload.id);
-            sendMessage({
-                type: 'CreateCharacter',
-                character: payload
-            });
-            syncedCharacterIds.add(char.id);
-        }
-    });
+    // Characters received from the server already exist. Never recreate them on receipt.
+    (characters || []).forEach(character => { if(character?.id) syncedCharacterIds.add(character.id); });
 }
 
 /** Cache row for tech / force powers (SQLite export or static JSON). */
@@ -23099,54 +22819,7 @@ function parseArmorAcToNumber(acStr, dexMod) {
 
 /** Effective attacks (manual + generated from equipped weapons in DB cache) and AC from equipped armor/shields. */
 function recomputeEquipmentBonuses(charData, char) {
-    const equipment = Array.isArray(charData.equipment) ? charData.equipment : [];
-    const dexStr = getDexStrModsFromCharData(charData, char);
-    const dexMod = dexStr.dex;
-    const pb = charData.proficiency_bonus || char.proficiency_bonus || 2;
-    const baseAttacks = (charData.attacks || []).filter(a => a && !a.from_equipment);
-    const usedNames = new Set(baseAttacks.map(a => String(a.name || '').toLowerCase()).filter(Boolean));
-    const gen = [];
-    for (let i = 0; i < equipment.length; i++) {
-        const item = equipment[i];
-        if (!item || !item.equipped) continue;
-        const n = String(item.name || '').trim();
-        if (!n) continue;
-        const w = weaponsCache[n.toLowerCase()];
-        if (!w) continue;
-        const key = n.toLowerCase();
-        if (usedNames.has(key)) continue;
-        usedNames.add(key);
-        const ab = weaponUsesDexterity(w) ? dexStr.dex : dexStr.str;
-        const spl = splitWeaponDamageString(w.damage);
-        gen.push({
-            name: n,
-            to_hit: pb + ab,
-            damage: spl.dice,
-            type: spl.type,
-            from_equipment: true,
-            range: extractWeaponRangeFeet(w.properties)
-        });
-    }
-    let shieldBonus = 0;
-    let bodyAc = null;
-    for (let i = 0; i < equipment.length; i++) {
-        const item = equipment[i];
-        if (!item || !item.equipped) continue;
-        const a = armorCache[String(item.name || '').trim().toLowerCase()];
-        if (!a) continue;
-        const t = String(a.type || '').toLowerCase();
-        if (t === 'shield') {
-            const m = String(a.ac || '').match(/\+(\d+)/);
-            if (m) shieldBonus += parseInt(m[1], 10);
-            continue;
-        }
-        const n = parseArmorAcToNumber(a.ac, dexMod);
-        if (n != null) bodyAc = bodyAc == null ? n : Math.max(bodyAc, n);
-    }
-    const unarmored = 10 + dexMod;
-    const baseAc = bodyAc != null ? bodyAc : unarmored;
-    const ac = baseAc + shieldBonus;
-    return { attacks: baseAttacks.concat(gen), ac };
+    return CharacterRules.equipment(charData,char||{},weaponsCache,armorCache,charData.gorgox?.armstech);
 }
 
 function applyEquipmentDerivedStats(char, charData) {
@@ -23732,7 +23405,9 @@ async function saveGameState() {
     };
     
     // Convert to JSON
-    const jsonData = JSON.stringify(gameState, null, 2);
+    const authoritativeState = await SessionSync.capture();
+    authoritativeState.canvasState = gameState.canvasState;
+    const jsonData = JSON.stringify(authoritativeState, null, 2);
     
     // Sanitize filename (remove invalid characters)
     const safeFileName = fileName.replace(/[<>:"/\\|?*]/g, '_');
@@ -23964,312 +23639,12 @@ async function loadGameState() {
 
 // Load game state from data object (used by both file and localStorage loading)
 async function loadGameStateFromData(gameState, sourceName) {
-    // Fail-safe load: never leave the app in a "bricked" half-loaded state.
-    const prevSnapshot = {
-        selectedStyle,
-        currentMap: currentMap ? { ...currentMap } : null,
-        tokens: Array.isArray(tokens) ? tokens.map(t => ({ ...t })) : [],
-        characters: Array.isArray(characters) ? characters.map(c => ({ ...c })) : [],
-        enemies: Array.isArray(enemies) ? enemies.map(e => ({ ...e })) : [],
-        combatState: combatState ? JSON.parse(JSON.stringify(combatState)) : null,
-        gridSize,
-        zoom,
-        panX,
-        panY,
-        playerMapViewport: playerMapViewport ? { ...playerMapViewport } : null,
-        dmPlayerViewportToolActive,
-        measurementShapes: Array.isArray(measurementShapes) ? measurementShapes.map(s => ({ ...s })) : [],
-        rulerStart: rulerStart ? { ...rulerStart } : null,
-        rulerEnd: rulerEnd ? { ...rulerEnd } : null,
-        rulerActive,
-        selectedTokenId: selectedToken ? selectedToken.id : null,
-    };
-
-    // Clear any stale async state that can break subsequent loads.
-    clearPendingMapLoadPromise();
-    pendingSkipTokenMoveOnNextMouseUp = false;
-    isDragging = false;
-    playerViewportDrag = null;
-
-    const sendPlaceTokensBatched = (savedTokens) => {
-        // Keep UI responsive and avoid WS flooding freezes.
-        const batchSize = 25;
-        let i = 0;
-        const pump = () => {
-            const end = Math.min(i + batchSize, savedTokens.length);
-            for (; i < end; i++) {
-                const token = savedTokens[i];
-                const tokenSize = getTokenSize(token.entity_id, token.entity_type);
-                const displayName =
-                    token.display_name ||
-                    ((token.entity_type === 'Enemy' || token.entity_type === 'NPC')
-                        ? (enemies.find(e => e.id === token.entity_id)?.name)
-                        : undefined);
-                const placeMsg = {
-                    type: 'PlaceToken',
-                    entity_id: token.entity_id,
-                    entity_type: token.entity_type,
-                    x: token.x,
-                    y: token.y,
-                    size: tokenSize,
-                    display_name: displayName || undefined,
-                    image_url: token.image_url || undefined
-                };
-                if (token.entity_type === 'Object') {
-                    placeMsg.hidden_from_players = token.hidden_from_players === true;
-                }
-                sendMessage(placeMsg);
-            }
-            if (i < savedTokens.length) requestAnimationFrame(pump);
-        };
-        pump();
-    };
-
-    // Normalize save formats across versions (arrays vs object-maps).
-    const normalizeArrayLike = (v) => {
-        if (!v) return [];
-        if (Array.isArray(v)) return v;
-        if (typeof v === 'object') {
-            // Rust `HashMap` serialized as object: { id: {...}, id2: {...} }
-            return Object.values(v);
-        }
-        return [];
-    };
-
-    const normalizeTokenType = (t) => {
-        if (!t) return t;
-        // Accept older/alternate casing: player/enemy/npc/object or PascalCase
-        const et = t.entity_type;
-        if (typeof et === 'string') {
-            const s = et.trim();
-            const lowered = s.toLowerCase();
-            const mapped =
-                lowered === 'player' ? 'Player' :
-                lowered === 'enemy' ? 'Enemy' :
-                lowered === 'npc' ? 'NPC' :
-                lowered === 'object' ? 'Object' :
-                s;
-            if (mapped !== et) return { ...t, entity_type: mapped };
-        }
-        return t;
-    };
-
-    try {
-    // Validate version
-    if (!gameState.version) {
-        console.warn('⚠️ Save file has no version, proceeding anyway...');
-    }
-    
-    // Restore selected style
-    if (gameState.selectedStyle) {
-        selectedStyle = gameState.selectedStyle;
-        console.log('✅ Restored style:', selectedStyle);
-    }
-        
-        // Restore map on server first (wait for MapLoaded); do not set global currentMap here — breaks sync with server.
-        if (gameState.currentMap) {
-            await openOrCreateMapForSavedState(gameState.currentMap);
-            // Prefer grid/size from save file (it is the user's intended state). Fall back to server map.
-            const desiredGrid = (gameState.currentMap.grid_size != null) ? Number(gameState.currentMap.grid_size) : (currentMap && currentMap.grid_size != null ? Number(currentMap.grid_size) : null);
-            const desiredW = (gameState.currentMap.width != null) ? Number(gameState.currentMap.width) : (currentMap ? Number(currentMap.width) : null);
-            const desiredH = (gameState.currentMap.height != null) ? Number(gameState.currentMap.height) : (currentMap ? Number(currentMap.height) : null);
-            if (desiredGrid && desiredW && desiredH) {
-                gridSize = desiredGrid;
-                if (canvas) { canvas.width = desiredW; canvas.height = desiredH; }
-                if (currentMap) { currentMap.grid_size = desiredGrid; currentMap.width = desiredW; currentMap.height = desiredH; }
-                sendMessage({ type: 'MapSettingsChanged', grid_size: desiredGrid, width: desiredW, height: desiredH });
-            }
-            if (currentMap && currentMap.image_path) {
-                await new Promise((resolve) => {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.onload = () => {
-                        currentMap.image = img;
-                        renderCanvas();
-                        resolve();
-                    };
-                    img.onerror = () => resolve();
-                    const imagePath = currentMap.image_path.startsWith('/')
-                        ? currentMap.image_path
-                        : '/' + currentMap.image_path;
-                    img.src = imagePath + '?t=' + Date.now();
-                });
-            }
-        }
-        
-        // Restore canvas state
-        if (gameState.canvasState) {
-            zoom = gameState.canvasState.zoom || 1.0;
-            panX = gameState.canvasState.panX || 0;
-            panY = gameState.canvasState.panY || 0;
-            // Do NOT override gridSize here — grid comes from map settings / saved map and must remain consistent with token placement.
-            console.log('✅ Restored canvas state: zoom=', zoom, 'pan=', panX, panY, 'grid=', gridSize);
-        }
-        
-        // Restore characters
-        if (gameState.characters) {
-            characters = normalizeArrayLike(gameState.characters);
-            console.log('✅ Restored', characters.length, 'characters');
-        }
-        
-        // Restore enemies (including NPC instances)
-        if (gameState.enemies) {
-            enemies = normalizeArrayLike(gameState.enemies);
-            console.log('✅ Restored', enemies.length, 'enemies');
-            
-            // Save NPC instances to localStorage if they exist (if function exists)
-            const npcInstances = enemies.filter(e => e.isNPC && e.npcData);
-            if (npcInstances.length > 0) {
-                if (typeof saveNPCInstancesToStorage === 'function') {
-                    saveNPCInstancesToStorage();
-                    console.log('✅ Saved', npcInstances.length, 'NPC instances to localStorage');
-                } else {
-                    console.log('ℹ️ NPC instances restored (', npcInstances.length, 'instances)');
-                }
-            }
-        }
-        
-        // Restore tokens after map is loaded
-        const normalizedTokens = normalizeArrayLike(gameState.tokens).map(normalizeTokenType);
-        if (normalizedTokens.length > 0) {
-            // Store saved tokens for HP restoration and placement
-            const savedTokens = normalizedTokens;
-            console.log('📋 Restoring', savedTokens.length, 'tokens...');
-            
-            // First, restore HP values from tokens to their entities
-            savedTokens.forEach(token => {
-                if (token.current_hp !== undefined && token.max_hp !== undefined) {
-                    if (token.entity_type === 'Player') {
-                        const char = characters.find(c => c.id === token.entity_id);
-                        if (char) {
-                            char.current_hp = token.current_hp;
-                            char.max_hp = token.max_hp;
-                            console.log(`✅ Restored HP for character ${char.name}: ${char.current_hp}/${char.max_hp}`);
-                        }
-                    } else if (token.entity_type === 'Enemy') {
-                        const enemy = enemies.find(e => e.id === token.entity_id);
-                        if (enemy) {
-                            enemy.current_hp = token.current_hp;
-                            enemy.max_hp = token.max_hp;
-                            console.log(`✅ Restored HP for enemy ${enemy.name}: ${enemy.current_hp}/${enemy.max_hp}`);
-                        }
-                    }
-                }
-            });
-            
-            // Optimistic local apply: show tokens instantly; server will broadcast authoritative TokenUpdate soon after.
-            tokens = savedTokens.map(t => ({
-                ...t,
-                size: (t.size != null && !isNaN(Number(t.size)) && Number(t.size) > 0) ? Number(t.size) : getTokenSize(t.entity_id, t.entity_type),
-                hidden_from_players: t.hidden_from_players === true
-            }));
-            renderCanvas();
-            
-            // Send tokens to server to sync with all clients (batched).
-            console.log('📤 Sending', savedTokens.length, 'tokens to server (batched)...');
-            sendPlaceTokensBatched(savedTokens);
-            
-            // Update token info display
-            if (selectedToken) {
-                updateTokenInfo();
-            }
-        } else {
-            // Even if no tokens, render canvas to show map
-            console.log('ℹ️ No tokens to restore');
-            renderCanvas();
-        }
-        
-        // Restore combat state
-        if (gameState.combatState) {
-            combatState.active = gameState.combatState.active || false;
-            combatState.participants = gameState.combatState.participants || [];
-            combatState.currentTurn = gameState.combatState.currentTurn || null;
-            console.log('✅ Restored combat state:', combatState.active ? 'Active' : 'Inactive');
-            
-            if (combatState.active) {
-                // Update combat UI
-                updateInitiativeList();
-                updateCombatStatus();
-            }
-        }
-        
-        // Restore turn start position
-        if (gameState.turnStartPosition) {
-            turnStartPosition = gameState.turnStartPosition;
-        }
-        
-        // Update UI
-        updateInitiativeList();
-        updateCombatStatus();
-        updateCampaignTitle();
-        
-        if (gameState.playerMapViewport) {
-            applyPlayerMapViewportFromServer(gameState.playerMapViewport);
-            if (isDM) {
-                setTimeout(() => sendPlayerMapViewportToServer(), 900);
-            }
-        }
-        
-        // Final render to ensure map and tokens are visible for all clients
-        renderCanvas();
-        
-        // Force one more render after a short delay to catch any late token updates
-        setTimeout(() => {
-            renderCanvas();
-            console.log('✅ Final canvas render completed');
-        }, 500);
-        
-        console.log('✅ Game state loaded successfully!');
-        addLogEntry(`📂 Game state loaded: ${sourceName}`, 'info');
-        closeModal('saveLoadModal');
-        
-        // Refresh saved states list
-        renderSavedStatesList();
-        
-        // Show success message
-        setTimeout(() => {
-            alert('✅ Game state loaded successfully!\n\n' +
-                  `- Map: ${currentMap ? currentMap.name : 'None'}\n` +
-                  `- Tokens: ${tokens.length}\n` +
-                  `- Characters: ${characters.length}\n` +
-                  `- Enemies: ${enemies.length}\n` +
-                  `- Combat: ${combatState.active ? 'Active' : 'Inactive'}`);
-        }, 1000);
-    } catch (e) {
-        console.error('❌ loadGameStateFromData failed:', e);
-        // Restore previous state so the app remains usable and the user can try another load.
-        selectedStyle = prevSnapshot.selectedStyle;
-        currentMap = prevSnapshot.currentMap;
-        tokens = prevSnapshot.tokens;
-        characters = prevSnapshot.characters;
-        enemies = prevSnapshot.enemies;
-        if (prevSnapshot.combatState) combatState = prevSnapshot.combatState;
-        gridSize = prevSnapshot.gridSize;
-        zoom = prevSnapshot.zoom;
-        panX = prevSnapshot.panX;
-        panY = prevSnapshot.panY;
-        if (prevSnapshot.playerMapViewport) playerMapViewport = prevSnapshot.playerMapViewport;
-        dmPlayerViewportToolActive = prevSnapshot.dmPlayerViewportToolActive;
-        measurementShapes = prevSnapshot.measurementShapes;
-        rulerStart = prevSnapshot.rulerStart;
-        rulerEnd = prevSnapshot.rulerEnd;
-        rulerActive = prevSnapshot.rulerActive;
-        selectedToken = prevSnapshot.selectedTokenId ? tokens.find(t => t.id === prevSnapshot.selectedTokenId) || null : null;
-
-        clearPendingMapLoadPromise();
-        pendingSkipTokenMoveOnNextMouseUp = false;
-        isDragging = false;
-        playerViewportDrag = null;
-
-        renderCanvas();
-        updateTokenInfo();
-        addLogEntry('❌ Load failed (previous state restored).', 'damage');
-        alert('❌ Load failed. Previous state restored so you can try again.\n\n' + (e && e.message ? e.message : String(e)));
-    }
+    await SessionSync.restore(gameState);
+    addLogEntry(`Session restored: ${sourceName}`, 'info');
+    closeModal('saveLoadModal');
 }
 
-// ==================== SOUND BOARD ====================
-
+// Sound board
 let sounds = [];
 let currentlyPlayingSounds = new Map(); // Track playing sounds
 
@@ -24317,7 +23692,7 @@ async function renderSoundsList() {
         sounds.forEach(sound => {
             const sizeMB = (sound.size / (1024 * 1024)).toFixed(2);
             html += `
-                <div style="padding: 15px; background: linear-gradient(135deg, rgba(170,68,255,0.1) 0%, rgba(170,68,255,0.05) 100%); border-radius: 8px; border: 2px solid rgba(170,68,255,0.3); cursor: pointer; transition: all 0.2s; position: relative;"
+                <div role="button" tabindex="0" data-sound-name="${escapeHtml(sound.name.toLowerCase())}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}" style="padding: 15px; background: linear-gradient(135deg, rgba(170,68,255,0.1) 0%, rgba(170,68,255,0.05) 100%); border-radius: 8px; border: 2px solid rgba(170,68,255,0.3); cursor: pointer; transition: all 0.2s; position: relative;"
                      onclick="playSound('${escapeHtml(sound.filename)}', '${escapeHtml(sound.name)}')"
                      onmouseover="this.style.borderColor='rgba(170,68,255,0.8)'; this.style.background='linear-gradient(135deg, rgba(170,68,255,0.2) 0%, rgba(170,68,255,0.1) 100%)';"
                      onmouseout="this.style.borderColor='rgba(170,68,255,0.3)'; this.style.background='linear-gradient(135deg, rgba(170,68,255,0.1) 0%, rgba(170,68,255,0.05) 100%)';">
@@ -24340,6 +23715,7 @@ async function renderSoundsList() {
         
         html += '</div>';
         container.innerHTML = html;
+        const search=document.createElement('input');search.type='search';search.placeholder='Find a sound…';search.setAttribute('aria-label','Find a sound');search.oninput=()=>container.querySelectorAll('[data-sound-name]').forEach(card=>card.hidden=!card.dataset.soundName.includes(search.value.toLowerCase()));container.prepend(search);
         console.log('✅ Sounds list rendered with', sounds.length, 'sounds');
     } catch (e) {
         console.error('❌ Error loading sounds:', e);
@@ -25079,71 +24455,7 @@ function playHpDamageSoundLocally() {
 }
 
 function refreshApplication() {
-    console.log('🔄 Refreshing game state (full sync from server)...');
-    addLogEntry('🔄 Syncing with server (map, tokens, combat)...', 'info');
-    
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-        addLogEntry('⚠️ Not connected. Reconnect to sync.', 'warning');
-        return;
-    }
-    
-    requestFullStateFromServer('manual_sync_button');
-    
-    // Fallback requests in case server doesn't support RequestFullState
-    if (currentMap && currentMap.id) {
-        sendMessage({ type: 'LoadMap', map_id: currentMap.id, clear_tokens: false });
-    }
-    sendMessage({ type: 'ListCharacters' });
-    
-    // Also fetch from API for immediate update
-    fetch(`/api/characters?style=${selectedStyle}`)
-        .then(res => {
-            if (res.ok) {
-                return res.json();
-            }
-            throw new Error(`HTTP ${res.status}`);
-        })
-        .then(data => {
-            console.log('✅ Received updated characters:', data.length);
-            characters = data || [];
-            renderCharacterList();
-            
-            // Update character HP in UI if viewing character sheet
-            if (currentViewingCharacter) {
-                const updatedChar = characters.find(c => c.id === currentViewingCharacter.id);
-                if (updatedChar) {
-                    currentViewingCharacter.current_hp = updatedChar.current_hp;
-                    currentViewingCharacter.max_hp = updatedChar.max_hp;
-                    renderCharacterSheetContent();
-                }
-            }
-            
-            // Update initiative list if in combat
-            if (combatState.active) {
-                updateInitiativeList();
-            }
-        })
-        .catch(err => {
-            console.error('❌ Error refreshing characters:', err);
-        });
-    
-    // Request updated enemies (to get current HP)
-    console.log('🔄 Requesting updated enemies...');
-    sendMessage({ type: 'ListEnemies', style: selectedStyle });
-    
-    // Update token info if a token is selected
-    if (selectedToken) {
-        setTimeout(() => updateTokenInfo(), 800);
-    }
-    
-    // Re-render after delay so slow connections have time to receive MapLoaded/TokenUpdate/CombatStarted
-    setTimeout(() => {
-        renderCanvas();
-        updateInitiativeList();
-        updateCombatStatus();
-        addLogEntry('✅ Synced', 'success');
-        console.log('✅ Game state refresh complete');
-    }, 1500);
+    requestFullStateFromServer("refreshApplication");
 }
 
 function autoConnect() {
@@ -25273,3 +24585,7 @@ function toggleInspiration(characterId) {
     }
 }
 
+
+window.armstechSetWeaponName=function(name){if(!armstechModalCharacter)return;const state=loadArmstechState(armstechModalCharacter.id);state.weaponName=name.trim();saveArmstechState(armstechModalCharacter.id,state);populatePlayerActionBar();};
+
+window.arenaSceneryEditable=()=>isDM;

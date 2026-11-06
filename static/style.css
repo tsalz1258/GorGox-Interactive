@@ -5819,3 +5819,22 @@ body.sidebar-resizing .sidebar-resize-handle::after {
     margin: 8px 0;
 }
 
+
+.table-tools-row { display:flex; gap:6px; flex-wrap:wrap; }
+.recovery-entry { display:block; width:100%; text-align:left; margin:4px 0; }
+#tableToolsStatus {font-size:12px; color:#c6d6e6;}
+
+#encounterTools {margin-top:8px;} #encounterTools label {display:block;font-size:12px;margin:5px 0;} #encounterTools input[type=number] {width:70px;} #encounterTools select {width:100%;max-width:100%;} .encounter-rows {max-height:260px;overflow:auto;margin:8px 0;} .encounter-row {display:flex;align-items:center;gap:5px;margin:4px 0;} .encounter-row input {flex:none;} .encounter-creature {flex:1;text-align:left;font-size:12px;}
+
+.power-dialog {color:#e9f1ff;background:#142036;border:1px solid #42618d;border-radius:12px;max-width:min(560px,92vw);padding:22px;} .power-dialog::backdrop {background:#0009;} .power-dialog label {display:block;margin:10px 0;} .power-dialog input[type=number], .power-review-row input[type=number] {width:80px;} .power-review-row {border-bottom:1px solid #35455d;padding:6px 0;} #powerRequests details {margin:8px 0;} #powerResults {font-size:12px;}
+#tableConnection {position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:100001;background:#142036;color:#b9e6c6;padding:5px 12px;border-radius:12px;font-size:12px;pointer-events:none;max-width:85vw;} #tableConnection.offline {color:#ffcb85;}
+#playerQuickActions {position:fixed;right:12px;top:48px;z-index:100002;background:#142036;border:1px solid #42618d;border-radius:8px;padding:8px;max-width:320px;display:flex;flex-wrap:wrap;gap:5px;} #playerQuickActions[hidden]{display:none;} #playerQuickActions strong {width:100%;font-size:12px;} #playerQuickActions button,#playerQuickActions select{font-size:12px;max-width:100%;}
+#battlefieldTools {margin-top:10px;} #battlefieldTools label {display:block;margin:6px 0;font-size:12px;} #battlefieldTools input {max-width:100%;} #integrationStatus {font-size:12px;}
+#visionTools {margin-top:10px;border-top:1px solid #42618d;padding-top:8px;}
+#visionTools p,#visionWallList {font-size:12px;}
+#visionTools input:not([type=checkbox]),#visionTools select {box-sizing:border-box;max-width:100%;}
+#visionWallList {max-height:220px;overflow:auto;margin:8px 0;}
+#visionWallList .table-tools-row {margin:6px 0;align-items:center;}
+#visionWallList span {flex:1;min-width:110px;overflow-wrap:anywhere;}
+#visionStatus {color:#b9e6c6;}
+@media(max-width:800px){#playerQuickActions{right:6px;top:42px;max-width:220px;} .power-dialog{box-sizing:border-box;width:92vw;} #encounterTools button,#battlefieldTools button{min-height:36px;} .encounter-rows{max-height:180px;}}

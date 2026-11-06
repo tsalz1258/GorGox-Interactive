@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict');
+const rules=require('../static/js/character-rules.js');
+const d={baseAbilityScores:{Strength:18,Dexterity:12,Intelligence:16},proficiency_bonus:3,classes:[{name:'Engineer',levels:5}],attacks:[{name:'Custom',to_hit:9,damage:'2d6+9'}],equipment:[{name:'Sword',equipped:true},{name:'Shield',equipped:true},{name:'Shield',equipped:true}],gorgox:{armstech:{weaponType:'vibro',weaponName:'Sword',equippedIds:['contoured-grip','neutronium-edge']}}};
+const result=rules.equipment(d,{}, {sword:{type:'Vibroweapon',properties:'Finesse',damage:'1d8 kinetic'}},{shield:{type:'Shield',ac:'+2'}},d.gorgox.armstech);
+assert.equal(result.ac,13);assert.equal(result.attacks[1].to_hit,8);assert.equal(result.attacks[1].damage,'1d8+5');assert.equal(result.attacks[0].damage,'2d6+9');
+assert.deepEqual(rules.points(d,{},'tech'),{max:13,current:13});
+assert.deepEqual(rules.points({...d,techPoints:{max:20,current:0}},{},'tech'),{max:20,current:0});
+assert.deepEqual(rules.points({...d,forcePowers:['Heal']},{},'force'),{max:0,current:0});
+assert.deepEqual(rules.points({attribs:[{name:'force_power_points_total',current:'12'},{name:'force_power_points_expended',current:'3'}]}, {},'force'),{max:12,current:9});
+assert.equal(rules.equipment({...d,tweaks:{armorClass:{override:19}}},{},{},{},{}).ac,19);
+assert.equal(rules.equipment(d,{}, {sword:{type:'Vibroweapon',properties:'Finesse',damage:'1d8+2 kinetic'}},{},d.gorgox.armstech).attacks[1].damage,'1d8+7');
+console.log('PASS: equipment ability/modification bonuses, nonstacking shields, custom attacks/AC, imported resources, zero points, unsupported force fallback');

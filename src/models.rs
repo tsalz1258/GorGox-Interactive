@@ -136,6 +136,7 @@ pub struct CombatParticipant {
     pub entity_id: String,
     pub name: String,
     pub initiative: i32,
+    #[serde(default)]
     pub initiative_bonus: i32,
     pub entity_type: TokenType,
     pub current_hp: i32,
@@ -179,6 +180,7 @@ impl Default for PlayerMapViewport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
+    TableAction { request_id: String, action: serde_json::Value },
     // Connection
     Connect { player_name: String, is_dm: bool, style: String },
     SelectCharacter { character_id: String },
@@ -245,6 +247,7 @@ pub enum ClientMessage {
     RemoveFromCombat { participant_id: String },
     RequestShutdown, // DM only: request server to shut down gracefully
     RequestFullState, // Client wants full sync (map, tokens, characters, combat) without reconnecting
+    RestoreSession { snapshot: serde_json::Value, request_id: String },
     DealDamage { target_id: String, damage: i32 },
     HealTarget { target_id: String, healing: i32 },
     
@@ -257,6 +260,7 @@ pub enum ClientMessage {
     // Enemy management (DM only)
     CreateEnemy { enemy: Enemy },
     SpawnEnemy { enemy_id: String, instance_id: String, name: String },
+    RegisterNpcInstance { enemy: serde_json::Value },
     ListEnemies,
     DeleteEnemy { enemy_id: String },
     
@@ -331,6 +335,8 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
+    DiscordLinkResult { ok: bool, message: String },
+    TableActionResult { request_id: String, ok: bool, message: String },
     // Connection responses
     Connected { session_id: String, is_dm: bool },
     PlayerRole { is_dm: bool },
@@ -339,6 +345,9 @@ pub enum ServerMessage {
     
     // State updates
     GameStateUpdate { state: String },
+    SessionState { snapshot: serde_json::Value },
+    SessionUnchanged { saved_at: String },
+    SessionRestored { request_id: String },
     MapLoaded {
         map: Map,
         player_map_viewport: PlayerMapViewport,
@@ -369,7 +378,7 @@ pub enum ServerMessage {
     LogHistory { entries: Vec<LogHistoryEntry> },
     
     // Combat updates
-    CombatStarted { participants: Vec<CombatParticipant> },
+    CombatStarted { participants: Vec<CombatParticipant>, #[serde(default)] resumed: bool },
     InitiativeRolled { entity_id: String, initiative: i32, #[serde(default)] silent: bool, #[serde(default)] participant_id: Option<String> },
     TurnChanged { current_turn: String, participant_name: String },
     CombatEnded,
@@ -391,6 +400,7 @@ pub enum ServerMessage {
         actions: Option<String>,
     },
     MapList { maps: Vec<Map> },
+    MapSaved { map_id: String },
     PlayerList { players: Vec<String> },
     
     // Map settings
@@ -446,4 +456,3 @@ pub struct LogHistoryEntry {
     #[serde(default)]
     pub is_nat1: bool,
 }
-

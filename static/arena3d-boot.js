@@ -3,7 +3,7 @@
  * never hits ReferenceError. The real Three.js code loads on first use via dynamic import().
  */
 (function () {
-  var MODULE_URL = "/static/arena3d.module.js?v=31";
+  var MODULE_URL = "/static/arena3d.module.js?v=33";
   var loadPromise = null;
   var api = null;
 
@@ -64,6 +64,12 @@
   }
 
   window.toggle3DArena = function () {
+    var arena = document.getElementById('arena3D');
+    var showing = arena && !arena.classList.contains('hidden');
+    if (!showing && window.VisionTools && !window.VisionTools.player3dAllowed()) {
+      if (typeof window.addLogEntry === 'function') window.addLogEntry('Automatic sight is active. Use the 2D map; player 3D is available when the DM switches sight off.', 'info');
+      return;
+    }
     loadModule()
       .then(function (m) {
         m.toggle3DArena();

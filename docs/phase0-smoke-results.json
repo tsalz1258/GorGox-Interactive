@@ -1,0 +1,95 @@
+{
+  "results": [
+    {
+      "name": "DM and player connect with separate browser storage",
+      "status": "PASS",
+      "detail": {
+        "characters": 9
+      }
+    },
+    {
+      "name": "Load copied campaign map and select player character",
+      "status": "PASS",
+      "detail": {
+        "map": "stone cavern",
+        "characterId": "a156f96f-a94b-4102-a0cd-6ee8b9ccce6e"
+      }
+    },
+    {
+      "name": "Place player and spawn independent enemy instance",
+      "status": "PASS",
+      "detail": {
+        "enemyTemplate": "a97aceed-aae2-4c25-bc48-770e71c20aef",
+        "tokens": 2
+      }
+    },
+    {
+      "name": "Movement reaches the other client",
+      "status": "PASS",
+      "detail": {
+        "x": 3,
+        "y": 3
+      }
+    },
+    {
+      "name": "Combat starts, initiative advances, damage and healing agree",
+      "status": "PASS",
+      "detail": {
+        "targetHp": 167,
+        "currentTurn": "cd8bb020-55bf-4447-9862-e877517b12e3"
+      }
+    },
+    {
+      "name": "Map-state save completes",
+      "status": "PASS",
+      "detail": {
+        "mapId": "b43aa745-b7fd-4871-8029-4151cda1fef9",
+        "tokens": 2,
+        "currentTurn": "cd8bb020-55bf-4447-9862-e877517b12e3"
+      }
+    },
+    {
+      "name": "Full-session JSON saves through the UI and round-trips through REST",
+      "status": "PASS",
+      "detail": {
+        "version": "1.0",
+        "tokens": 2
+      }
+    },
+    {
+      "name": "Player reconnect preserves the server current turn",
+      "status": "FAIL",
+      "detail": "Expected values to be strictly equal:\n+ actual - expected\n\n+ null\n- 'cd8bb020-55bf-4447-9862-e877517b12e3'\n"
+    },
+    {
+      "name": "Map-state reload restores saved participants and turn",
+      "status": "FAIL",
+      "detail": "Expected values to be strictly equal:\n+ actual - expected\n\n+ null\n- 'cd8bb020-55bf-4447-9862-e877517b12e3'\n"
+    },
+    {
+      "name": "Full-session load restores shared combat",
+      "status": "FAIL",
+      "detail": "Player combat must be restored: [{\"active\":true,\"participants\":2,\"tokens\":2,\"currentTurn\":\"cd8bb020-55bf-4447-9862-e877517b12e3\"},{\"active\":false,\"participants\":0,\"tokens\":2,\"currentTurn\":null}]\n\nfalse !== true\n"
+    }
+  ],
+  "pageErrors": [
+    {
+      "client": "Phase0 DM",
+      "message": "Cannot read properties of null (reading 'entity_id')",
+      "stack": "TypeError: Cannot read properties of null (reading 'entity_id')\n    at http://127.0.0.1:3000/static/app.js?v=180:6874:61"
+    },
+    {
+      "client": "Phase0 Player",
+      "message": "Cannot read properties of null (reading 'entity_id')",
+      "stack": "TypeError: Cannot read properties of null (reading 'entity_id')\n    at http://127.0.0.1:3000/static/app.js?v=180:6874:61"
+    }
+  ],
+  "source_commit": "4f3105ac8548412412ef76cb18f536e9aa793dda",
+  "session_directory": "target/phase0-sessions/20261003T015357Z-473114f5",
+  "original_database_and_save_fingerprints_unchanged": {
+    "gorgox_dnd.db": true,
+    "gorgox_starwars.db": true,
+    "Stone Cavern for S7.json": true,
+    "test.json": true
+  }
+}

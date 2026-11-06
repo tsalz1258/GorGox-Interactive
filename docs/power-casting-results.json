@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "checks": [
+    "Upcast preview updates dice, cost and rules; cancel spends nothing",
+    "Player cast immediately spends points, heals and appears in both Rolls logs",
+    "Explosion upcast preview shows 9d6 and save DC",
+    "Area cast applies once on retry; undo restores HP and points",
+    "Special-effect power casts with a compact log and no description",
+    "Imported scaling appears in preview and manual-effect dice roll",
+    "Force power casts immediately as a player",
+    "At-will powers explain character-level scaling without an invalid editable field",
+    "Late join replays casting Rolls history",
+    "Insufficient points reject casting without partial effects"
+  ],
+  "pageErrors": []
+}

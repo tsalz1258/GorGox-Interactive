@@ -383,6 +383,7 @@ pub async fn hydrate_sw5e_compendium_from_disk(pool: &SqlitePool) -> Result<(usi
 
     let mut slices = 0usize;
     let mut rows_total = 0usize;
+    let mut used_ids = HashSet::new();
 
     for (cat, fname) in FILES {
         let path = dir.join(fname);
@@ -393,7 +394,13 @@ pub async fn hydrate_sw5e_compendium_from_disk(pool: &SqlitePool) -> Result<(usi
         let arr: Vec<Value> = serde_json::from_str(&body)
             .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", path.display(), e))?;
         for (i, row) in arr.iter().enumerate() {
-            let id = sw5e_entry_id(cat, row, i);
+            let base_id = sw5e_entry_id(cat, row, i);
+            let mut id = base_id.clone();
+            let mut occurrence = 1;
+            while !used_ids.insert(id.clone()) {
+                occurrence += 1;
+                id = format!("{base_id}#{cat}:{occurrence}");
+            }
             let sort_key = sw5e_row_sort_key(row);
             let json = serde_json::to_string(row).map_err(|e| anyhow::anyhow!("row {}:{}: {}", cat, i, e))?;
             sqlx::query(

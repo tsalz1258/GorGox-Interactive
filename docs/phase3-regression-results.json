@@ -1,0 +1,74 @@
+{
+  "results": [
+    {
+      "name": "Movement undo reaches both clients",
+      "status": "PASS",
+      "detail": {
+        "x": 2,
+        "y": 2
+      }
+    },
+    {
+      "name": "Batch HP applies once for repeated request and undoes exactly",
+      "status": "PASS",
+      "detail": {
+        "hp": 22
+      }
+    },
+    {
+      "name": "Player cannot issue DM batch or undo",
+      "status": "PASS",
+      "detail": "Server rejected both commands"
+    },
+    {
+      "name": "Invalid restore leaves the live session unchanged",
+      "status": "PASS",
+      "detail": "No partial state replacement"
+    },
+    {
+      "name": "Recovery is created before restore and can be loaded",
+      "status": "PASS",
+      "detail": {
+        "beforeRestoreX": 7,
+        "retentionLimit": 12
+      }
+    },
+    {
+      "name": "Armstech migrates browser data and prefers server data",
+      "status": "PASS",
+      "detail": {
+        "weaponType": "vibro",
+        "blasterStr": false,
+        "vibroDex": true,
+        "equippedIds": [],
+        "version": 1
+      }
+    },
+    {
+      "name": "Encounter UI spawns numbered groups with independent HP and initiative",
+      "status": "PASS",
+      "detail": {
+        "template": "27698664-b012-4200-b9ca-7ddba754fa57",
+        "independentInstances": 2,
+        "groupInitiative": 12
+      }
+    },
+    {
+      "name": "Conditions survive restore and expire after the configured round",
+      "status": "PASS",
+      "detail": {
+        "round": 2,
+        "expired": true
+      }
+    },
+    {
+      "name": "Encounter presets persist separately from snapshots",
+      "status": "PASS",
+      "detail": {
+        "preset": "Regression troopers",
+        "directory": "encounters"
+      }
+    }
+  ],
+  "pageErrors": []
+}

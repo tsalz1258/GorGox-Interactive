@@ -809,7 +809,9 @@ function ensureInit() {
         if (!ok && typeof window.arena3dSyncNow === "function") window.arena3dSyncNow();
       }
     }
+    persistArenaScenery();
   });
+    /* transforms are saved after the drag ends */
   transform.addEventListener("objectChange", () => {
     const o = selectedObject;
     if (!o || !isUserTransformableMini(o)) return;
@@ -828,7 +830,7 @@ function ensureInit() {
   if (fileInputEl) {
     fileInputEl.addEventListener("change", (e) => {
       const files = Array.from(e.target.files || []);
-      for (const f of files) loadArenaModelFile(f);
+      for (const f of files) loadArenaModelFile(f).catch(error=>arenaStatus('Model could not load: '+error.message));
       fileInputEl.value = "";
     });
   }
@@ -840,6 +842,7 @@ function ensureInit() {
 
   initialized = true;
   syncBattlefieldFromGorgox(true);
+  hydrateArenaScenery();
   refreshArena3dGizmoToolbar();
   onResize();
 }
@@ -931,6 +934,7 @@ function show3D() {
 
   lastBattlefieldSyncKey = "";
   syncBattlefieldFromGorgox(true);
+  hydrateArenaScenery();
 
   if (syncIntervalId) clearInterval(syncIntervalId);
   syncIntervalId = setInterval(() => {
@@ -962,6 +966,10 @@ function hide3D() {
 function toggle3DArena() {
   const el = document.getElementById("arena3D");
   const showing = el && !el.classList.contains("hidden");
+  if(!showing && window.VisionTools && !window.VisionTools.player3dAllowed()) {
+    arenaStatus('Automatic line of sight is active. Use the 2D map, or ask the DM to disable sight for 3D.');
+    return;
+  }
   if (showing) hide3D();
   else show3D();
 }
@@ -1033,6 +1041,7 @@ function findTransformableRoot(obj) {
 function onKeyDown(e) {
   if (!arenaEl) arenaEl = document.getElementById("arena3D");
   if (!arenaEl || arenaEl.classList.contains("hidden")) return;
+  if(e.target?.closest?.("input,textarea,select,[contenteditable]"))return;
 
   const tokenSel = selectedObject && isTokenLinkedMini(selectedObject);
   if (e.key === "w" || e.key === "W") transform?.setMode("translate");
@@ -1049,6 +1058,7 @@ function onKeyDown(e) {
       }
       removeObject(selectedObject);
       setSelected(null);
+      persistArenaScenery();
     }
   }
 }
@@ -1095,6 +1105,7 @@ function arena3dClearAll() {
   setSelected(null);
   for (const obj of [...selectable]) removeObject(obj);
   selectable = [];
+  persistArenaScenery();
   clearTokenMiniMeshes();
   disposeCombatOverlayChildren();
 }
@@ -1239,6 +1250,8 @@ async function loadArenaModelFile(file) {
   const buf = await file.arrayBuffer();
   const root = await parseArenaModelBuffer(file.name, buf);
   root.name = file.name;
+  root.userData.gorgoxSceneryId=crypto.randomUUID();
+  root.userData.gorgoxAsset=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(new Blob([buf],{type:'application/octet-stream'}));});
   captureMiniFootprintReference(root);
   const cell = Math.max(8, gridWorld || 50);
   root.position.set(0, 0, 0);
@@ -1251,6 +1264,7 @@ async function loadArenaModelFile(file) {
 
   setSelected(root);
   if (transform) transform.setMode("translate");
+  persistArenaScenery();
 }
 
 function showDropHint(show) {
@@ -1282,7 +1296,7 @@ function onDrop(e) {
   const files = Array.from(e.dataTransfer?.files || []);
   for (const f of files) {
     const name = (f.name || "").toLowerCase();
-    if (isAllowedArenaModelFilename(name)) loadArenaModelFile(f);
+    if (isAllowedArenaModelFilename(name)) loadArenaModelFile(f).catch(error=>arenaStatus('Model could not load: '+error.message));
   }
 }
 
@@ -1299,6 +1313,7 @@ function nudgeSelectionWorldRotation(axis, degrees) {
   if (rad === 0) return;
   o.rotateOnWorldAxis(ax, rad);
   applyMiniConstraints(o, { snapGrid: false });
+  persistArenaScenery();
 }
 
 // Lightweight sync from latest snapshot: token minis + combat overlay reuse the fast path unless the map/image key changed (avoids nuking floor texture every ping).
@@ -1315,3 +1330,20 @@ try {
 } catch (_) {}
 
 export { toggle3DArena, arena3dClearAll, nudgeSelectionWorldRotation };
+
+let scenerySignature='',sceneryGeneration=0;
+function sceneryKey(value){return JSON.stringify({version:value.version||1,objects:(value.objects||[]).map(o=>({id:o.id,name:o.name,asset:o.asset,position:o.position,rotation:o.rotation,scale:o.scale}))});}
+function arenaStatus(message){const el=document.getElementById('integrationStatus');if(el)el.textContent=message;}
+function persistArenaScenery(){
+ if(!window.TableTools||!window.SessionSync||!window.arenaSceneryEditable?.())return;
+ const objects=selectable.filter(o=>o.userData?.gorgoxAsset).map(o=>({id:o.userData.gorgoxSceneryId,name:o.name,asset:o.userData.gorgoxAsset,position:o.position.toArray(),rotation:[o.rotation.x,o.rotation.y,o.rotation.z],scale:o.scale.toArray()}));
+ const scene={version:1,objects};scenerySignature=sceneryKey(scene);
+ window.TableTools.command({kind:'arena',scene}).then(()=>arenaStatus('3D scenery saved ('+objects.length+' objects)')).catch(error=>{scenerySignature='';arenaStatus('3D scenery was not saved: '+error.message);});
+}
+async function hydrateArenaScenery(){
+ if(!battlefieldGroup)return;const stored=window.SessionSync?.last?.sessionExtras?.arena||{version:1,objects:[]};const signature=sceneryKey(stored);if(signature===scenerySignature)return;scenerySignature=signature;const generation=++sceneryGeneration;
+ const selectedId=selectedObject?.userData?.gorgoxSceneryId;if(selectedId)setSelected(null);
+ for(const o of [...selectable])if(o.userData?.gorgoxAsset){removeObject(o);}
+ try{for(const row of stored.objects||[]){const response=await fetch(row.asset),buf=await response.arrayBuffer();const root=await parseArenaModelBuffer(row.name,buf);if(generation!==sceneryGeneration){tryDispose(root);return;}root.name=row.name;root.userData.gorgoxSceneryId=row.id;root.userData.gorgoxAsset=row.asset;captureMiniFootprintReference(root);root.position.fromArray(row.position);root.rotation.set(...row.rotation);root.scale.fromArray(row.scale);battlefieldGroup.add(root);selectable.push(root);if(row.id===selectedId)setSelected(root);}arenaStatus('3D scenery restored');}catch(error){arenaStatus('Scenery load failed: '+error.message);}
+}
+document.addEventListener('gorgox:session',()=>{if(scene)hydrateArenaScenery();});

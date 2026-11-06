@@ -32,6 +32,7 @@ type Clients = Arc<RwLock<HashMap<String, broadcast::Sender<String>>>>;
 
 /// Same path the Node `discord-bot` reads (`__dirname`/discord_links.json), independent of server process cwd.
 fn discord_links_json_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("GORGOX_DISCORD_LINKS_PATH") { return path.into(); }
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("discord-bot")
         .join("discord_links.json")
@@ -74,7 +75,7 @@ async fn load_characters_from_db(db: &Database, game_state: &Arc<RwLock<GameStat
                     character_data: row.get::<Option<String>, _>(17),
                     portrait_url: row.get::<Option<String>, _>(18),
                 };
-                gs.characters.insert(char.id.clone(), char);
+                if db_name=="D&D" || !gs.characters.contains_key(&char.id) {gs.characters.insert(char.id.clone(),char);}
                 count += 1;
             }
             info!("✅ Loaded {} characters from {} database", count, db_name);
@@ -115,7 +116,7 @@ async fn load_characters_from_db(db: &Database, game_state: &Arc<RwLock<GameStat
                             character_data: row.get::<Option<String>, _>(17),
                             portrait_url: row.get::<Option<String>, _>(18),
                         };
-                        gs.characters.insert(char.id.clone(), char);
+                        if db_name=="D&D" || !gs.characters.contains_key(&char.id) {gs.characters.insert(char.id.clone(),char);}
                         count += 1;
                     }
                     info!("✅ Loaded {} characters from {} database (legacy format)", count, db_name);
@@ -161,6 +162,28 @@ pub async fn start_server(
         warn!("⚠️ Could not create campaign_notes directory: {}", e);
     }
 
+    let recovery_state = game_state.clone();
+    let recovery_dnd = dnd_db.clone();
+    let recovery_sw = starwars_db.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.tick().await;
+        let mut previous = String::new();
+        loop {
+            interval.tick().await;
+            if recovery_state.read().await.current_map.is_none() { continue; }
+            let snapshot = session_payload(&recovery_state,&recovery_dnd,&recovery_sw).await;
+            let mut signature = snapshot.clone();
+            signature.as_object_mut().unwrap().remove("savedAt");
+            let signature = signature.to_string();
+            if signature != previous {
+                match crate::table::recovery(&snapshot,"Automatic recovery").await {
+                    Ok(_) => previous = signature,
+                    Err(error) => warn!("Recovery autosave failed: {error}"),
+                }
+            }
+        }
+    });
     let app = Router::new()
         .route("/ws", get(websocket_handler))
         .route("/", get(|| async {
@@ -177,7 +200,11 @@ pub async fn start_server(
         .route("/api/compendium/sw5e/browse", get(sw5e_compendium_browse_http))
         .route("/api/compendium/sw5e/category-export", get(sw5e_compendium_category_export_http))
         .route("/api/compendium/sw5e/player-kit", post(sw5e_player_kit_http))
+        .route("/api/characters", get(list_characters_http))
         .route("/api/maps", get(list_maps_http))
+        .route("/api/encounters", get(list_encounters))
+        .route("/api/recovery", get(list_recovery))
+        .route("/api/recovery/:filename", get(get_recovery))
         .route("/api/saves", get(list_saved_states))
         .route("/api/saves/:filename", get(get_saved_state))
         .route("/api/saves/:filename", post(save_game_state_handler))
@@ -198,9 +225,10 @@ pub async fn start_server(
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state((dnd_db, starwars_db, game_state, clients.clone(), shutdown_tx.clone()));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    let port=std::env::var("GORGOX_PORT").ok().and_then(|v|v.parse::<u16>().ok()).unwrap_or(3000);
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0",port)).await?;
     let addr = listener.local_addr()?;
-    info!("Server listening on http://0.0.0.0:3000");
+    info!("Server listening on http://0.0.0.0:{port}");
     info!("✅ Save/Load API endpoints available:");
     info!("   GET  /api/test - Test endpoint");
     info!("   GET  /api/maps - List maps (compact JSON for UI)");
@@ -218,7 +246,9 @@ pub async fn start_server(
     // Open browser automatically
     let url = format!("http://localhost:{}", addr.port());
     info!("🌐 Opening browser at {}", url);
-    if let Err(e) = open::that(&url) {
+    if std::env::var_os("GORGOX_NO_BROWSER").is_some() {
+        info!("Browser auto-open disabled");
+    } else if let Err(e) = open::that(&url) {
         warn!("⚠️ Could not open browser automatically: {}. Please navigate to {}", e, url);
     } else {
         info!("✅ Browser opened successfully!");
@@ -272,7 +302,8 @@ async fn websocket_handler(
         broadcast::Sender<()>,
     )>,
 ) -> Response {
-    ws.on_upgrade(|socket| handle_socket(socket, dnd_db, starwars_db, game_state, clients, shutdown_tx))
+    ws.max_message_size(50 * 1024 * 1024).max_frame_size(50 * 1024 * 1024)
+        .on_upgrade(|socket| handle_socket(socket, dnd_db, starwars_db, game_state, clients, shutdown_tx))
 }
 
 async fn handle_socket(
@@ -782,105 +813,20 @@ async fn handle_client_message(
 ) {
     use crate::models::{CombatParticipant, Character, Map};
     use uuid::Uuid;
+    // Mutations, persistence, and their broadcasts are ordered across clients.
+    static MESSAGE_ORDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _order=MESSAGE_ORDER.lock().await;
     match msg {
-        ClientMessage::Connect { player_name, is_dm, style: _ } => {
-            let player_name_clone = player_name.clone();
-            info!("Player {} connected as {}", player_name_clone, if is_dm { "DM" } else { "Player" });
-            game_state.write().await.add_player(session_id.to_string(), player_name, is_dm);
-            
-            let role_msg = ServerMessage::PlayerRole { is_dm };
-            send_to_client(clients, session_id, &role_msg).await;
-            
-            // IMPORTANT: Send current game state immediately to new player
-            // This ensures they see the map, tokens, and characters right away
-            let gs = game_state.read().await;
-            
-            // Send current map if loaded
-            if let Some(ref map) = gs.current_map {
-                let map_loaded = ServerMessage::MapLoaded {
-                    map: map.for_client_wire(),
-                    player_map_viewport: gs.player_map_viewport.clone(),
-                };
-                send_to_client(clients, session_id, &map_loaded).await;
-                info!("📤 Sent current map to new player: {}", map.name);
-            }
-
-            // Player map viewport (anti-metagame window) — must be sent on join or players who
-            // connect after the DM enabled it never receive enabled:true and see the full map.
-            let vp = gs.player_map_viewport.clone();
-            let vp_msg = ServerMessage::PlayerMapViewportUpdated {
-                enabled: vp.enabled,
-                hidden: vp.hidden,
-                x: vp.x,
-                y: vp.y,
-                width: vp.width,
-                height: vp.height,
-            };
-            send_to_client(clients, session_id, &vp_msg).await;
-            
-            let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
-            let enemy_instances_join: Vec<crate::models::EnemyInstance> =
-                gs.enemy_instances.values().cloned().collect();
-            let log_history_join = gs.log_history.clone();
-            
-            // Send current characters list
-            let characters: Vec<Character> = gs.characters.values().cloned().collect();
-            if !characters.is_empty() {
-                let character_list = ServerMessage::CharacterList { 
-                    characters: characters.clone(), 
-                    style: None 
-                };
-                send_to_client(clients, session_id, &character_list).await;
-                info!("📤 Sent {} characters to new player", characters.len());
-            }
-            
-            // Send combat state if active (use server's participant list so order and membership match)
-            if gs.combat.active && !gs.combat.participants.is_empty() {
-                let participants = gs.combat.participants.clone();
-                let combat_started = ServerMessage::CombatStarted { participants };
-                send_to_client(clients, session_id, &combat_started).await;
-                info!("📤 Sent combat state to new player");
-            } else if gs.combat.active && gs.combat.participants.is_empty() {
-                // Invalid empty combat — clear so catchups stop rebroadcasting it
-                // (write lock not held here; fix below when we have write access is not needed — just skip send)
-            }
-            
+        ClientMessage::Connect { player_name, is_dm, style } => {
+            let mut gs = game_state.write().await;
+            gs.add_player(session_id.to_string(), player_name.clone(), is_dm);
+            if is_dm { gs.campaign_style = style; }
             drop(gs);
-            
-            if let Some(tokens) = tokens_to_send {
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
-                let token_update = ServerMessage::TokenUpdate { tokens: tokens.clone() };
-                send_to_client(clients, session_id, &token_update).await;
-                info!("📤 Sent {} tokens to new player", tokens.len());
-            }
-            
-            for inst in enemy_instances_join {
-                let portrait_url =
-                    enemy_template_portrait_url(dnd_db, starwars_db, &inst.enemy_id).await;
-                let actions = enemy_template_actions_json(dnd_db, starwars_db, &inst.enemy_id).await;
-                let msg = ServerMessage::EnemyInstanceSpawned {
-                    instance_id: inst.id.clone(),
-                    enemy_id: inst.enemy_id.clone(),
-                    name: inst.name.clone(),
-                    portrait_url,
-                    actions,
-                };
-                send_to_client(clients, session_id, &msg).await;
-            }
-
-            let hist = ServerMessage::LogHistory {
-                entries: log_history_join,
-            };
-            send_to_client(clients, session_id, &hist).await;
-            
-            // Broadcast player joined to all other clients
-            let player_joined = ServerMessage::PlayerJoined {
-                player_name: player_name_clone,
-                is_dm,
-            };
-            broadcast_message(clients, &player_joined).await;
+            send_to_client(clients, session_id, &ServerMessage::PlayerRole { is_dm }).await;
+            send_session(game_state, clients, Some(session_id), dnd_db, starwars_db).await;
+            broadcast_message(clients, &ServerMessage::PlayerJoined { player_name, is_dm }).await;
         }
-        
+
         ClientMessage::PlaySound { sound_id, sound_name, sound_data, sound_type } => {
             info!("Sound '{}' requested by {}", sound_name, session_id);
             
@@ -955,7 +901,14 @@ async fn handle_client_message(
         ClientMessage::MoveToken { token_id, x, y } => {
             let moved = {
                 let mut gs = game_state.write().await;
-                gs.move_token(&token_id, x as f32, y as f32)
+                if !x.is_finite() || !y.is_finite() { return; }
+                let Some(player) = gs.players.get(session_id) else { return; };
+                let allowed = player.is_dm || gs.tokens.iter().any(|t| t.id == token_id && t.entity_type == crate::models::TokenType::Player && player.character_id.as_deref() == Some(&t.entity_id));
+                if !allowed { return; }
+                let before = crate::table::checkpoint(&gs);
+                let moved = gs.move_token(&token_id, x as f32, y as f32);
+                if moved { crate::table::record(&mut gs,before); }
+                moved
             };
             
             if moved {
@@ -1167,11 +1120,13 @@ async fn handle_client_message(
         
         // Measurement shapes - broadcast to all clients
         ClientMessage::MeasurementShapeAdded { shape } => {
+            game_state.write().await.measurement_shapes.push(shape.clone());
             let shape_added = ServerMessage::MeasurementShapeAdded { shape };
             broadcast_message(clients, &shape_added).await;
         }
         
         ClientMessage::ClearMeasurements => {
+            game_state.write().await.measurement_shapes.clear();
             let clear_measurements = ServerMessage::ClearMeasurements;
             broadcast_message(clients, &clear_measurements).await;
         }
@@ -1198,89 +1153,24 @@ async fn handle_client_message(
         
         // Discord account linking - save to file for bot
         ClientMessage::LinkDiscordAccount { character_id, discord_user_id, character_name } => {
-            // Save link to discord_links.json (crate-root discord-bot/ — matches Node bot resolve path)
-            use tokio::fs;
-            
-            let links_file = discord_links_json_path();
-            
-            info!("📥 Received LinkDiscordAccount request: discord_user_id={}, character_id={}, character_name={}", 
-                discord_user_id, character_id, character_name);
-            info!("📁 Saving to: {}", links_file.display());
-            
-            // Ensure discord-bot directory exists
-            if let Some(parent) = links_file.parent() {
-                if let Err(e) = fs::create_dir_all(parent).await {
-                    warn!("⚠️ Failed to create discord-bot directory: {}", e);
-                }
-            }
-            
-            // Load existing links
-            let mut links: std::collections::HashMap<String, String> = if links_file.exists() {
-                match fs::read_to_string(&links_file).await {
-                    Ok(content) => {
-                        match serde_json::from_str::<std::collections::HashMap<String, String>>(&content) {
-                            Ok(parsed) => {
-                                info!("✅ Loaded {} existing Discord link(s) from file", parsed.len());
-                                parsed
-                            }
-                            Err(e) => {
-                                warn!("⚠️ Failed to parse existing discord_links.json: {}. Starting fresh.", e);
-                                std::collections::HashMap::new()
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("⚠️ Failed to read existing discord_links.json: {}. Starting fresh.", e);
-                        std::collections::HashMap::new()
-                    }
-                }
-            } else {
-                info!("ℹ️ discord_links.json does not exist yet, creating new file");
-                std::collections::HashMap::new()
-            };
-            
-            // Update with new link
-            let old_character_id = links.insert(discord_user_id.clone(), character_id.clone());
-            if let Some(old_id) = old_character_id {
-                info!("🔄 Updated existing link: {} was linked to {}, now linked to {}", 
-                    discord_user_id, old_id, character_id);
-            } else {
-                info!("➕ Added new link: {} -> {}", discord_user_id, character_id);
-            }
-            
-            // Save back to file
-            match serde_json::to_string_pretty(&links) {
-                Ok(json) => {
-                    match fs::write(&links_file, json).await {
-                        Ok(_) => {
-                            info!("✅ Successfully saved Discord link to {}: {} -> {} ({})", 
-                                links_file.display(), discord_user_id, character_id, character_name);
-                            info!("📊 Total links in file: {}", links.len());
-                            
-                            // Verify file was written by reading it back
-                            if let Ok(verify_content) = fs::read_to_string(&links_file).await {
-                                if let Ok(verify_links) = serde_json::from_str::<std::collections::HashMap<String, String>>(&verify_content) {
-                                    if verify_links.get(&discord_user_id) == Some(&character_id) {
-                                        info!("✅ Verified: Link successfully saved and verified in file");
-                                    } else {
-                                        warn!("⚠️ Verification failed: Link not found in saved file!");
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("❌ Failed to save Discord link to file: {}", e);
-                            error!("   File path: {}", links_file.display());
-                            error!("   Error details: {:?}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("❌ Failed to serialize Discord links to JSON: {}", e);
-                }
-            }
+            let _=character_name;
+            let authorized={let gs=game_state.read().await;gs.characters.contains_key(&character_id)&&gs.players.get(session_id).map(|p|p.is_dm||p.character_id.as_deref()==Some(&character_id)).unwrap_or(false)};
+            let result:Result<(),String>=async{
+                if !authorized{return Err("Select your own character before linking Discord".into());}
+                if !(17..=20).contains(&discord_user_id.len())||!discord_user_id.bytes().all(|b|b.is_ascii_digit()){return Err("Discord ID must be 17–20 digits".into());}
+                let path=discord_links_json_path();
+                let mut links:std::collections::HashMap<String,String>=match tokio::fs::read_to_string(&path).await{
+                    Ok(text)=>serde_json::from_str(&text).map_err(|_|"Existing Discord links could not be read; no links were replaced")?,
+                    Err(e) if e.kind()==std::io::ErrorKind::NotFound=>std::collections::HashMap::new(),
+                    Err(e)=>return Err(format!("Could not read Discord links: {e}")),
+                };
+                links.insert(discord_user_id,character_id);
+                crate::session::atomic_json(&path,&serde_json::to_value(links).unwrap()).await
+            }.await;
+            let ok=result.is_ok();let message=result.err().unwrap_or_else(||"Discord link saved. Voice highlighting requires the Discord bot to be running.".into());
+            send_to_client(clients,session_id,&ServerMessage::DiscordLinkResult{ok,message}).await;
         }
-        
+
         // Combat handlers
         ClientMessage::StartCombat { token_ids } => {
             let mut gs = game_state.write().await;
@@ -1447,7 +1337,7 @@ async fn handle_client_message(
             }
             info!("⚔️ StartCombat: starting combat with {} participants", participants.len());
             gs.combat.start_combat(participants.clone());
-            let combat_started = ServerMessage::CombatStarted { participants };
+            let combat_started = ServerMessage::CombatStarted { participants, resumed: false };
             broadcast_message(clients, &combat_started).await;
         }
         
@@ -1474,6 +1364,8 @@ async fn handle_client_message(
         
         ClientMessage::NextTurn => {
             let mut gs = game_state.write().await;
+            let Some(player)=gs.players.get(session_id) else {return;};
+            if !player.is_dm && gs.combat.get_current_participant().map(|p|Some(p.entity_id.as_str())==player.character_id.as_deref()).unwrap_or(false)==false {return;}
             if let Some(participant) = gs.combat.next_turn() {
                 let turn_changed = ServerMessage::TurnChanged {
                     current_turn: participant.id.clone(),
@@ -1481,6 +1373,9 @@ async fn handle_client_message(
                 };
                 broadcast_message(clients, &turn_changed).await;
             }
+            crate::table::expire_conditions(&mut gs);
+            drop(gs);
+            send_session(game_state,clients,None,dnd_db,starwars_db).await;
         }
         
         ClientMessage::EndCombat => {
@@ -1510,7 +1405,7 @@ async fn handle_client_message(
                 let participants = gs.combat.participants.clone();
                 let current = gs.combat.get_current_participant().map(|p| (p.id.clone(), p.name.clone()));
                 drop(gs);
-                let combat_started = ServerMessage::CombatStarted { participants };
+                let combat_started = ServerMessage::CombatStarted { participants, resumed: true };
                 broadcast_message(clients, &combat_started).await;
                 if let Some((current_turn, participant_name)) = current {
                     let turn_changed = ServerMessage::TurnChanged { current_turn, participant_name };
@@ -1529,123 +1424,156 @@ async fn handle_client_message(
             }
         }
 
-        ClientMessage::RequestFullState => {
-            // Send full game state to this client (for slow connections / Refresh button)
-            let gs = game_state.read().await;
-            if let Some(ref map) = gs.current_map {
-                let map_loaded = ServerMessage::MapLoaded {
-                    map: map.for_client_wire(),
-                    player_map_viewport: gs.player_map_viewport.clone(),
-                };
-                send_to_client(clients, session_id, &map_loaded).await;
+        ClientMessage::TableAction { request_id, mut action } => {
+            if action["kind"]=="request_cast" || action["kind"]=="cast" {
+                let pool=action["pool"].as_str().unwrap_or("");
+                let name=action["name"].as_str().unwrap_or("");
+                let filename=match pool {"tech"=>"techpowers_from_packs.json","force"=>"force_powers_from_packs.json",_=>""};
+                let root=std::env::var("GORGOX_SW5E_COMP_PATH").unwrap_or("static/data/sw5e_compendium".into());
+                let power=if filename.is_empty(){None}else{tokio::fs::read_to_string(std::path::Path::new(&root).join(filename)).await.ok().and_then(|text|serde_json::from_str::<Vec<serde_json::Value>>(&text).ok()).and_then(|rows|rows.into_iter().find(|p|p["name"].as_str().map(|n|n.eq_ignore_ascii_case(name)).unwrap_or(false)))};
+                action["power"]=power.unwrap_or(serde_json::Value::Null);
             }
-            let vp = gs.player_map_viewport.clone();
-            let vp_msg = ServerMessage::PlayerMapViewportUpdated {
-                enabled: vp.enabled,
-                hidden: vp.hidden,
-                x: vp.x,
-                y: vp.y,
-                width: vp.width,
-                height: vp.height,
-            };
-            send_to_client(clients, session_id, &vp_msg).await;
-            let tokens_to_send = if gs.tokens.is_empty() { None } else { Some(gs.tokens.clone()) };
-            let characters: Vec<crate::models::Character> = gs.characters.values().cloned().collect();
-            let log_history_full = gs.log_history.clone();
-            if !characters.is_empty() {
-                let character_list = ServerMessage::CharacterList { characters, style: None };
-                send_to_client(clients, session_id, &character_list).await;
+            if action["kind"] == "spawn" {
+                let templates=fetch_enemies_merged(dnd_db,starwars_db).await;
+                if let Some(groups)=action["groups"].as_array_mut() {
+                    for group in groups {
+                        let id=group["template_id"].as_str().unwrap_or("");
+                        group["template"]=templates.iter().find(|e|e.id==id).map(|e|serde_json::to_value(e).unwrap()).unwrap_or(serde_json::Value::Null);
+                    }
+                }
             }
-            if gs.combat.active && !gs.combat.participants.is_empty() {
-                // Send current combat participants (server is source of truth; includes everyone in combat)
-                let participants = gs.combat.participants.clone();
-                let combat_started = ServerMessage::CombatStarted { participants };
-                send_to_client(clients, session_id, &combat_started).await;
+            let mut gs = game_state.write().await;
+            let Some(player) = gs.players.get(session_id).cloned() else { return; };
+            let key = format!("{session_id}:{request_id}");
+            let previous = gs.action_results.iter().find(|(id,_)| id == &key).map(|(_,r)|r.clone());
+            let mut next=gs.clone();
+            let mut result = if let Some(result)=previous.clone() {result} else if action["kind"]=="save_preset" {
+                if !player.is_dm {Err("Only the DM can save encounters".into())} else {
+                    let name=action["name"].as_str().unwrap_or("").trim();
+                    let groups=action["groups"].as_array();
+                    if name.is_empty() || name.len()>100 || groups.map(|g|g.is_empty()||g.len()>20||g.iter().any(|g|g["template_id"].as_str().is_none()||g["count"].as_u64().map(|n|n==0||n>50).unwrap_or(true))).unwrap_or(true) {
+                        Err("Enter a name and valid enemy groups".into())
+                    } else {
+                        let value=serde_json::json!({"version":1,"name":name,"groups":groups,"savedAt":chrono::Utc::now().to_rfc3339()});
+                        crate::session::atomic_json(&std::path::Path::new("encounters").join(format!("{}.json",Uuid::new_v4())),&value).await.map(|_|"Saved encounter preset".to_string())
+                    }
+                }
+            } else {crate::table::apply(&mut next,&action,player.is_dm,player.character_id.as_deref())};
+            if result.is_ok() && previous.is_none() {
+                if matches!(action["kind"].as_str(),Some("hp"|"undo"|"cast"|"resolve_cast"|"resource"|"rest"|"level_up"|"favorite")) {
+                    if let Err(error)=crate::session::persist_characters(dnd_db,&next.characters).await {result=Err(format!("Could not persist action: {error}"));}
+                    else if let Err(error)=crate::session::persist_characters(starwars_db,&next.characters).await {warn!("Character mirror failed: {error}");}
+                }
+                if result.is_ok(){*gs=next;}
             }
-            info!("📤 Full state sent to session {} (map: {}, tokens: {}, combat: {})",
-                session_id,
-                gs.current_map.is_some(),
-                gs.tokens.len(),
-                gs.combat.active);
+            if previous.is_none() {
+                gs.action_results.push((key,result.clone()));
+                if gs.action_results.len() > 256 { let _ = gs.action_results.remove(0); }
+            }
             drop(gs);
-            if let Some(tokens) = tokens_to_send {
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
-                let token_update = ServerMessage::TokenUpdate { tokens };
-                send_to_client(clients, session_id, &token_update).await;
+            // Acknowledge durable commitment before sending portrait-heavy snapshots.
+            send_to_client(clients,session_id,&ServerMessage::TableActionResult {request_id,ok:result.is_ok(),message:result.clone().unwrap_or_else(|e|e)}).await;
+            if result.is_ok() && previous.is_none() {
+                if action["kind"]=="cast" {
+                    let entries=game_state.read().await.log_history.last().cloned().into_iter().collect();
+                    broadcast_message(clients,&ServerMessage::LogHistory{entries}).await;
+                }
+                send_session(game_state,clients,None,dnd_db,starwars_db).await;
             }
-            let hist = ServerMessage::LogHistory {
-                entries: log_history_full,
-            };
-            send_to_client(clients, session_id, &hist).await;
         }
-        
+
+        ClientMessage::RequestFullState => {
+            if game_state.read().await.players.contains_key(session_id) {
+                send_session(game_state, clients, Some(session_id), dnd_db, starwars_db).await;
+            }
+        }
+
+        ClientMessage::RestoreSession { snapshot, request_id } => {
+            let is_dm = game_state.read().await.players.get(session_id).map(|p| p.is_dm).unwrap_or(false);
+            let error = if !is_dm { Some("Only the DM can restore sessions".to_string()) }
+                else { crate::session::validate(&snapshot).err() };
+            if let Some(message) = error {
+                send_to_client(clients, session_id, &ServerMessage::Error { message: format!("Restore {request_id}: {message}") }).await;
+                return;
+            }
+            let prior = session_payload(game_state,dnd_db,starwars_db).await;
+            if let Err(message) = crate::table::recovery(&prior,"Before session restore").await {
+                send_to_client(clients,session_id,&ServerMessage::Error {message:format!("Restore {request_id}: recovery failed: {message}")}).await;
+                return;
+            }
+            let mut restored = crate::session::validate(&snapshot).unwrap();
+            if let Some(notes) = snapshot.get("campaignNotes").and_then(serde_json::Value::as_object) {
+                for (id, note) in notes {
+                    if let Err(message) = crate::session::atomic_json(&std::path::Path::new("campaign_notes").join(format!("{id}.json")), note).await {
+                        send_to_client(clients, session_id, &ServerMessage::Error { message: format!("Restore {request_id}: {message}") }).await;
+                        return;
+                    }
+                }
+            }
+            // Validate before writing any data. Primary character storage remains D&D;
+            // Star Wars is a compatibility mirror, matching the existing database policy.
+            if let Err(message) = crate::session::persist_characters(dnd_db, &restored.characters).await {
+                send_to_client(clients, session_id, &ServerMessage::Error { message: format!("Restore {request_id}: {message}") }).await;
+                return;
+            }
+            if let Err(e) = crate::session::persist_characters(starwars_db, &restored.characters).await { warn!("Restore mirror failed: {e}"); }
+            let mut gs = game_state.write().await;
+            restored.players = gs.players.clone();
+            *gs = restored;
+            drop(gs);
+            send_session(game_state, clients, None, dnd_db, starwars_db).await;
+            send_to_client(clients, session_id, &ServerMessage::SessionRestored { request_id }).await;
+        }
+
+        ClientMessage::RegisterNpcInstance { enemy } => {
+            if !game_state.read().await.players.get(session_id).map(|p| p.is_dm).unwrap_or(false) { return; }
+            let Some(id) = enemy.get("id").and_then(serde_json::Value::as_str).filter(|s| !s.is_empty()) else { return; };
+            let number = |key: &str, fallback: i32| enemy.get(key).and_then(serde_json::Value::as_i64).unwrap_or(fallback as i64) as i32;
+            let instance = crate::models::EnemyInstance { id:id.into(),enemy_id:id.into(),name:enemy.get("name").and_then(serde_json::Value::as_str).unwrap_or("NPC").into(),
+                current_hp:number("current_hp",number("max_hp",1)),max_hp:number("max_hp",1),armor_class:number("armor_class",10),initiative_bonus:number("initiative_bonus",0) };
+            let mut gs = game_state.write().await;
+            gs.saved_enemies.retain(|e| e.get("id") != enemy.get("id"));
+            gs.saved_enemies.push(enemy);
+            gs.add_enemy_instance(instance);
+            drop(gs);
+            send_session(game_state, clients, None, dnd_db, starwars_db).await;
+        }
+
         ClientMessage::DealDamage { target_id, damage } => {
-            let mut gs = game_state.write().await;
-            if let Some((dmg, new_hp)) = gs.combat.deal_damage(&target_id, damage) {
-                // CRITICAL: Also update the underlying character or enemy data
-                // Extract entity_id and entity_type first to avoid borrow conflicts
-                let (entity_id, entity_type) = if let Some(token) = gs.tokens.iter().find(|t| t.id == target_id) {
-                    (Some(token.entity_id.clone()), Some(token.entity_type.clone()))
-                } else {
-                    (None, None)
-                };
-                
-                // Now update character or enemy with mutable borrow
-                if let (Some(eid), Some(etype)) = (entity_id, entity_type) {
-                    if etype == crate::models::TokenType::Player {
-                        // Update character HP
-                        if let Some(character) = gs.characters.get_mut(&eid) {
-                            character.current_hp = new_hp;
-                            info!("Updated character {} HP to {}", character.name, new_hp);
-                        }
-                    } else if etype == crate::models::TokenType::Enemy {
-                        let enemy_name = gs.get_enemy_instance(&eid).map(|e| e.name.clone());
-                        gs.update_enemy_instance_hp(&eid, new_hp);
-                        if let Some(name) = enemy_name {
-                            info!("Updated enemy {} HP to {}", name, new_hp);
-                        }
-                    }
+            if damage < 0 { return; }
+            let result = {
+                let mut gs = game_state.write().await;
+                let before = crate::table::checkpoint(&gs);
+                let result = gs.change_hp(&target_id, -damage);
+                if result.is_ok() { crate::table::record(&mut gs,before); }
+                result
+            };
+            match result {
+                Ok(new_hp) => {
+                    persist_live_characters(game_state, dnd_db, starwars_db).await;
+                    broadcast_message(clients, &ServerMessage::DamageDealt {target_id,damage,new_hp}).await;
                 }
-                
-                let damage_dealt = ServerMessage::DamageDealt { target_id, damage: dmg, new_hp };
-                broadcast_message(clients, &damage_dealt).await;
+                Err(message) => send_to_client(clients, session_id, &ServerMessage::Error {message}).await,
             }
         }
-        
         ClientMessage::HealTarget { target_id, healing } => {
-            let mut gs = game_state.write().await;
-            if let Some((heal, new_hp)) = gs.combat.heal_target(&target_id, healing) {
-                // CRITICAL: Also update the underlying character or enemy data
-                // Extract entity_id and entity_type first to avoid borrow conflicts
-                let (entity_id, entity_type) = if let Some(token) = gs.tokens.iter().find(|t| t.id == target_id) {
-                    (Some(token.entity_id.clone()), Some(token.entity_type.clone()))
-                } else {
-                    (None, None)
-                };
-                
-                // Now update character or enemy with mutable borrow
-                if let (Some(eid), Some(etype)) = (entity_id, entity_type) {
-                    if etype == crate::models::TokenType::Player {
-                        // Update character HP
-                        if let Some(character) = gs.characters.get_mut(&eid) {
-                            character.current_hp = new_hp;
-                            info!("Updated character {} HP to {}", character.name, new_hp);
-                        }
-                    } else if etype == crate::models::TokenType::Enemy {
-                        let enemy_name = gs.get_enemy_instance(&eid).map(|e| e.name.clone());
-                        gs.update_enemy_instance_hp(&eid, new_hp);
-                        if let Some(name) = enemy_name {
-                            info!("Updated enemy {} HP to {}", name, new_hp);
-                        }
-                    }
+            if healing < 0 { return; }
+            let result = {
+                let mut gs = game_state.write().await;
+                let before = crate::table::checkpoint(&gs);
+                let result = gs.change_hp(&target_id, healing);
+                if result.is_ok() { crate::table::record(&mut gs,before); }
+                result
+            };
+            match result {
+                Ok(new_hp) => {
+                    persist_live_characters(game_state, dnd_db, starwars_db).await;
+                    broadcast_message(clients, &ServerMessage::HealingApplied {target_id,healing,new_hp}).await;
                 }
-                
-                let healing_applied = ServerMessage::HealingApplied { target_id, healing: heal, new_hp };
-                broadcast_message(clients, &healing_applied).await;
+                Err(message) => send_to_client(clients, session_id, &ServerMessage::Error {message}).await,
             }
         }
-        
-        // Map handlers
+
         ClientMessage::CreateMap { name, image_data, width, height } => {
             use std::fs;
             use std::path::Path;
@@ -1850,159 +1778,27 @@ async fn handle_client_message(
         }
         
         ClientMessage::SaveMap { map_id } => {
-            use crate::models::Token;
-            
-            info!("💾 Saving map state for map: {}", map_id);
-            
-            // Collect all data while holding the lock
-            let (tokens_count, map_state_json, actual_map_id) = {
-                let gs = game_state.read().await;
-                
-                // Verify this is the current map and get the actual map ID
-                let actual_map_id = if let Some(ref current_map) = gs.current_map {
-                    if current_map.id != map_id {
-                        let error = ServerMessage::Error { 
-                            message: format!("Map {} is not currently loaded. Load it first before saving.", map_id) 
-                        };
-                        drop(gs);
-                        broadcast_message(clients, &error).await;
-                        return;
-                    }
-                    current_map.id.clone()
-                } else {
-                    let error = ServerMessage::Error { 
-                        message: "No map is currently loaded.".to_string() 
-                    };
-                    drop(gs);
-                    broadcast_message(clients, &error).await;
+            let gs = game_state.read().await;
+            if !gs.players.get(session_id).map(|p| p.is_dm).unwrap_or(false) { return; }
+            let Some(map) = gs.current_map.clone().filter(|m| m.id == map_id) else {
+                drop(gs);
+                send_to_client(clients, session_id, &ServerMessage::Error { message:"Load this map before saving it".into() }).await;
+                return;
+            };
+            drop(gs);
+            let mut saved = session_payload(game_state, dnd_db, starwars_db).await;
+            saved["combat"] = saved["combatState"].clone(); // Legacy map-state readers.
+            let json = serde_json::to_string(&saved).unwrap();
+            for pool in [dnd_db, starwars_db] {
+                if let Err(e) = sqlx::query("INSERT INTO maps(id,name,image_path,grid_size,width,height,map_state) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,image_path=excluded.image_path,grid_size=excluded.grid_size,width=excluded.width,height=excluded.height,map_state=excluded.map_state")
+                    .bind(&map.id).bind(&map.name).bind(&map.image_path).bind(map.grid_size).bind(map.width).bind(map.height).bind(&json).execute(pool).await {
+                    send_to_client(clients, session_id, &ServerMessage::Error { message:format!("Map save failed: {e}") }).await;
                     return;
-                };
-                
-                info!("💾 Current map ID: {}, Requested map ID: {}", actual_map_id, map_id);
-                info!("💾 Total tokens in game state: {}", gs.tokens.len());
-                
-                // IMPORTANT: Save ALL tokens currently in game state when a map is loaded
-                // This is because tokens visible on the current map are all in the game state
-                // The map_id field might be wrong/empty, but if they're in game state with a map loaded,
-                // they belong to that map
-                let tokens_for_map: Vec<&Token> = gs.tokens.iter().collect();
-                
-                let token_count = tokens_for_map.len();
-                info!("💾 Saving all {} tokens from game state (they belong to current map)", token_count);
-                
-                // Log all tokens for debugging
-                if token_count > 0 {
-                    info!("💾 Tokens to save:");
-                    for (i, token) in tokens_for_map.iter().enumerate() {
-                        info!("💾   {}. Token {}: map_id='{}', entity_id='{}', type={:?}, pos=({}, {})", 
-                            i + 1, token.id, token.map_id, token.entity_id, token.entity_type, token.x, token.y);
-                    }
-                } else {
-                    warn!("⚠️ WARNING: No tokens found in game state! This might mean:");
-                    warn!("   1. Tokens were never placed on the server");
-                    warn!("   2. Tokens were cleared when map was loaded");
-                    warn!("   3. There's a synchronization issue between client and server");
                 }
-                
-                info!("💾 Found {} tokens to save for map {}", token_count, actual_map_id);
-                
-                let mut state_data = serde_json::Map::new();
-                
-                // Save tokens with their positions and HP
-                let tokens_data: Vec<serde_json::Value> = tokens_for_map.iter().map(|token| {
-                    let mut token_data = serde_json::Map::new();
-                    token_data.insert("id".to_string(), serde_json::Value::String(token.id.clone()));
-                    token_data.insert("entity_id".to_string(), serde_json::Value::String(token.entity_id.clone()));
-                    token_data.insert("entity_type".to_string(), serde_json::Value::String(format!("{:?}", token.entity_type)));
-                    token_data.insert("x".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.x as f64).unwrap()));
-                    token_data.insert("y".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.y as f64).unwrap()));
-                    token_data.insert("size".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(token.size as f64).unwrap()));
-                    if let Some(ref img) = token.image_url {
-                        token_data.insert("image_url".to_string(), serde_json::Value::String(img.clone()));
-                    }
-                    if let Some(ref dn) = token.display_name {
-                        token_data.insert("display_name".to_string(), serde_json::Value::String(dn.clone()));
-                    }
-                    token_data.insert(
-                        "hidden_from_players".to_string(),
-                        serde_json::Value::Bool(token.hidden_from_players),
-                    );
-                    token_data.insert(
-                        "show_name".to_string(),
-                        serde_json::Value::Bool(token.show_name),
-                    );
-                    
-                    // Add HP values from characters or enemy instances
-                    if token.entity_type == crate::models::TokenType::Player {
-                        if let Some(char) = gs.characters.get(&token.entity_id) {
-                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.current_hp)));
-                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(char.max_hp)));
-                            info!("💾 Saved token {} (Player) with HP: {}/{}", token.id, char.current_hp, char.max_hp);
-                        }
-                    } else if token.entity_type == crate::models::TokenType::Enemy {
-                        if let Some(enemy) = gs.get_enemy_instance(&token.entity_id) {
-                            token_data.insert("current_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.current_hp)));
-                            token_data.insert("max_hp".to_string(), serde_json::Value::Number(serde_json::Number::from(enemy.max_hp)));
-                            info!("💾 Saved token {} (Enemy) with HP: {}/{}", token.id, enemy.current_hp, enemy.max_hp);
-                        }
-                    }
-                    
-                    serde_json::Value::Object(token_data)
-                }).collect();
-                state_data.insert("tokens".to_string(), serde_json::Value::Array(tokens_data));
-                
-                // Save combat state if active
-                if gs.combat.active {
-                    let combat_data = serde_json::json!({
-                        "active": true,
-                        "round": gs.combat.round,
-                        "current_turn_index": gs.combat.current_turn_index,
-                        "participants": gs.combat.participants
-                    });
-                    state_data.insert("combat".to_string(), combat_data);
-                    info!("💾 Saved combat state: Round {}, Turn {}", gs.combat.round, gs.combat.current_turn_index);
-                }
-                
-                let map_state_json = serde_json::to_string(&serde_json::Value::Object(state_data)).unwrap_or_default();
-                (token_count, map_state_json, actual_map_id)
-            }; // Lock is dropped here
-            
-            info!("💾 Map state JSON length: {} bytes", map_state_json.len());
-            info!("💾 Saving to map ID: {}", actual_map_id);
-            
-            // Update map in database with state (use actual_map_id, not the passed map_id)
-            if let Err(e) = sqlx::query(
-                "UPDATE maps SET map_state = ? WHERE id = ?"
-            )
-            .bind(&map_state_json)
-            .bind(&actual_map_id)
-            .execute(dnd_db)
-            .await
-            {
-                error!("❌ Failed to save map state to database: {}", e);
-                let error = ServerMessage::Error { 
-                    message: format!("Failed to save map state: {}", e) 
-                };
-                broadcast_message(clients, &error).await;
-            } else {
-                info!("✅ Map state saved successfully for map: {} ({} tokens)", actual_map_id, tokens_count);
-                // Mirror to Star Wars DB when present (maps are shared assets across style DBs).
-                if let Err(e) = sqlx::query("UPDATE maps SET map_state = ? WHERE id = ?")
-                    .bind(&map_state_json)
-                    .bind(&actual_map_id)
-                    .execute(starwars_db)
-                    .await
-                {
-                    tracing::debug!("Star Wars DB map_state mirror skipped/failed (non-fatal): {}", e);
-                }
-                // Broadcast success message
-                let success = ServerMessage::Error { 
-                    message: format!("✅ Map state saved successfully! ({} tokens, {} bytes)", tokens_count, map_state_json.len()) 
-                };
-                broadcast_message(clients, &success).await;
             }
+            send_to_client(clients, session_id, &ServerMessage::MapSaved { map_id }).await;
         }
-        
+
         ClientMessage::ListMaps => {
             let maps = fetch_maps_for_list(dnd_db, starwars_db).await;
             let map_list = ServerMessage::MapList { maps };
@@ -2066,232 +1862,46 @@ async fn handle_client_message(
         }
         
         ClientMessage::LoadMap { map_id, clear_tokens } => {
-            use crate::models::Token;
-            
-            // Load map from database
-            let clear = clear_tokens.unwrap_or(true); // Default to true for backward compatibility
-            info!("Loading map: {} (clear_tokens: {})", map_id, clear);
-            // Maps may exist in either DB (D&D or Star Wars). Try D&D first, then fall back.
-            let mut map_row = sqlx::query_as::<_, (String, String, String, i32, i32, i32, Option<String>)>(
-                "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps WHERE id = ?",
-            )
-            .bind(&map_id)
-            .fetch_optional(dnd_db)
-            .await
-            .ok()
-            .flatten();
-
-            if map_row.is_none() {
-                map_row = sqlx::query_as::<_, (String, String, String, i32, i32, i32, Option<String>)>(
-                    "SELECT id, name, image_path, grid_size, width, height, map_state FROM maps WHERE id = ?",
-                )
-                .bind(&map_id)
-                .fetch_optional(starwars_db)
-                .await
-                .ok()
-                .flatten();
-            }
-
-            if let Some(map_row) = map_row {
-                let map = Map {
-                    id: map_row.0.clone(),
-                    name: map_row.1.clone(),
-                    image_path: map_row.2.clone(),
-                    grid_size: map_row.3,
-                    width: map_row.4,
-                    height: map_row.5,
-                    map_state: map_row.6.clone(),
-                };
-                info!("Map loaded from DB: {} - image_path: {}", map.name, map_row.2);
-                
-                let mut gs = game_state.write().await;
-                gs.load_map(map.clone(), clear);
-                
-                // Restore state if map_state exists and we're not clearing tokens
-                if let Some(ref state_json) = map_row.6 {
-                    if !clear {
-                        info!("🔄 Restoring map state for: {}", map.name);
-                        
-                        if let Ok(state_data) = serde_json::from_str::<serde_json::Value>(state_json) {
-                            // Restore tokens
-                            if let Some(tokens_array) = state_data.get("tokens").and_then(|v| v.as_array()) {
-                                for token_data in tokens_array {
-                                    if let (Some(id), Some(entity_id), Some(entity_type_str), Some(x), Some(y)) = (
-                                        token_data.get("id").and_then(|v| v.as_str()),
-                                        token_data.get("entity_id").and_then(|v| v.as_str()),
-                                        token_data.get("entity_type").and_then(|v| v.as_str()),
-                                        token_data.get("x").and_then(|v| v.as_f64()),
-                                        token_data.get("y").and_then(|v| v.as_f64()),
-                                    ) {
-                                        // Parse entity type
-                                        let entity_type = if entity_type_str == "Player" {
-                                            crate::models::TokenType::Player
-                                        } else if entity_type_str == "Enemy" {
-                                            crate::models::TokenType::Enemy
-                                        } else if entity_type_str == "NPC" {
-                                            crate::models::TokenType::NPC
-                                        } else {
-                                            crate::models::TokenType::Object
-                                        };
-                                        
-                                        let size = token_data.get("size").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-                                        let image_url = token_data
-                                            .get("image_url")
-                                            .and_then(|v| v.as_str())
-                                            .map(|s| s.to_string())
-                                            .filter(|s| !s.trim().is_empty());
-                                        let display_name = token_data
-                                            .get("display_name")
-                                            .and_then(|v| v.as_str())
-                                            .map(|s| s.to_string())
-                                            .filter(|s| !s.trim().is_empty());
-                                        let raw_hidden = token_data
-                                            .get("hidden_from_players")
-                                            .and_then(|v| v.as_bool())
-                                            .unwrap_or(false);
-                                        let hidden_from_players = entity_type
-                                            == crate::models::TokenType::Object
-                                            && raw_hidden;
-
-                                        let show_name = token_data
-                                            .get("show_name")
-                                            .and_then(|v| v.as_bool())
-                                            .unwrap_or(true);
-
-                                        let token = Token {
-                                            id: id.to_string(),
-                                            map_id: map_id.clone(),
-                                            entity_id: entity_id.to_string(),
-                                            entity_type: entity_type.clone(),
-                                            x: x as f32,
-                                            y: y as f32,
-                                            size,
-                                            image_url,
-                                            display_name,
-                                            hidden_from_players,
-                                            show_name,
-                                        };
-                                        
-                                        // Add token if it doesn't exist
-                                        if !gs.tokens.iter().any(|t| t.id == token.id) {
-                                            gs.tokens.push(token.clone());
-                                            
-                                            // Restore HP values
-                                            if let (Some(current_hp), Some(max_hp)) = (
-                                                token_data.get("current_hp").and_then(|v| v.as_i64()),
-                                                token_data.get("max_hp").and_then(|v| v.as_i64()),
-                                            ) {
-                                                if entity_type == crate::models::TokenType::Player {
-                                                    if let Some(char) = gs.characters.get_mut(entity_id) {
-                                                        char.current_hp = current_hp as i32;
-                                                        char.max_hp = max_hp as i32;
-                                                    }
-                                                } else if entity_type == crate::models::TokenType::Enemy {
-                                                    if let Some(enemy) = gs.enemy_instances.get_mut(entity_id) {
-                                                        enemy.current_hp = current_hp as i32;
-                                                        enemy.max_hp = max_hp as i32;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                info!("✅ Restored {} tokens", tokens_array.len());
-                            }
-                            
-                            // Restore combat state if it was saved
-                            if let Some(combat_data) = state_data.get("combat") {
-                                if let Some(active) = combat_data.get("active").and_then(|v| v.as_bool()) {
-                                    if active {
-                                        if let Some(participants) = combat_data.get("participants") {
-                                            if let Ok(participants_vec) = serde_json::from_value::<Vec<CombatParticipant>>(participants.clone()) {
-                                                let round = combat_data.get("round").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
-                                                let current_turn_index = combat_data.get("current_turn_index").and_then(|v| v.as_i64()).unwrap_or(0) as usize;
-                                                
-                                                gs.combat.participants = participants_vec;
-                                                gs.combat.active = true;
-                                                gs.combat.round = round;
-                                                gs.combat.current_turn_index = current_turn_index;
-                                                
-                                                info!("✅ Restored combat state: Round {}, Turn {}", round, current_turn_index);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            warn!("⚠️ Failed to parse map state JSON");
-                        }
-                    }
+            if !game_state.read().await.players.get(session_id).map(|p| p.is_dm).unwrap_or(false) { return; }
+            let query = "SELECT id,name,image_path,grid_size,width,height,map_state FROM maps WHERE id=?";
+            let mut row = sqlx::query_as::<_,(String,String,String,i32,i32,i32,Option<String>)>(query).bind(&map_id).fetch_optional(dnd_db).await.ok().flatten();
+            if row.is_none() { row = sqlx::query_as(query).bind(&map_id).fetch_optional(starwars_db).await.ok().flatten(); }
+            let Some(row) = row else {
+                send_to_client(clients, session_id, &ServerMessage::Error { message:"Map not found".into() }).await;
+                return;
+            };
+            if game_state.read().await.current_map.is_some() {
+                let prior=session_payload(game_state,dnd_db,starwars_db).await;
+                if let Err(message)=crate::table::recovery(&prior,"Before map load").await {
+                    send_to_client(clients,session_id,&ServerMessage::Error {message:format!("Map load recovery failed: {message}")}).await;return;
                 }
-                
-                // Clone while write lock held; do not call read() here — would deadlock with `gs`.
-                let characters: Vec<Character> = gs.characters.values().cloned().collect();
-                let player_map_viewport = gs.player_map_viewport.clone();
-                drop(gs);
-                
-                let character_list = ServerMessage::CharacterList { characters, style: None };
-                broadcast_message(clients, &character_list).await;
-                
-                // Clients need MapLoaded (canvas size + image) BEFORE TokenUpdate applies tokens.
-                let map_loaded = ServerMessage::MapLoaded {
-                    map: map.for_client_wire(),
-                    player_map_viewport: player_map_viewport.clone(),
-                };
-                broadcast_message(clients, &map_loaded).await;
-                let vp_msg = ServerMessage::PlayerMapViewportUpdated {
-                    enabled: player_map_viewport.enabled,
-                    hidden: player_map_viewport.hidden,
-                    x: player_map_viewport.x,
-                    y: player_map_viewport.y,
-                    width: player_map_viewport.width,
-                    height: player_map_viewport.height,
-                };
-                broadcast_message(clients, &vp_msg).await;
-                
-                let tokens = game_state.read().await.tokens.clone();
-                let tokens = enrich_tokens_with_display_names(tokens, game_state, dnd_db, starwars_db).await;
-                let token_update = ServerMessage::TokenUpdate { tokens };
-                broadcast_message(clients, &token_update).await;
-                
-                // Broadcast combat state if restored
-                if let Some(ref state_json) = map_row.6 {
-                    if !clear {
-                        if let Ok(state_data) = serde_json::from_str::<serde_json::Value>(state_json) {
-                            if let Some(combat_data) = state_data.get("combat") {
-                                if let Some(active) = combat_data.get("active").and_then(|v| v.as_bool()) {
-                                    if active {
-                                        let gs = game_state.read().await;
-                                        let participants = gs.combat.participants.clone();
-                                        drop(gs);
-                                        let combat_started = ServerMessage::CombatStarted { participants };
-                                        broadcast_message(clients, &combat_started).await;
-                                        
-                                        // Broadcast current turn
-                                        let gs = game_state.read().await;
-                                        if let Some(current) = gs.combat.get_current_participant() {
-                                            let turn_changed = ServerMessage::TurnChanged {
-                                                current_turn: current.id.clone(),
-                                                participant_name: current.name.clone(),
-                                            };
-                                            drop(gs);
-                                            broadcast_message(clients, &turn_changed).await;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+            }
+            let map = Map {id:row.0,name:row.1,image_path:row.2,grid_size:row.3,width:row.4,height:row.5,map_state:None};
+            let clear = clear_tokens.unwrap_or(true);
+            let mut gs = game_state.write().await;
+            if !clear && row.6.is_some() {
+                let parsed = serde_json::from_str::<serde_json::Value>(row.6.as_ref().unwrap());
+                let mut saved = match parsed {Ok(v)=>v,Err(e)=>{
+                    drop(gs); send_to_client(clients, session_id, &ServerMessage::Error {message:format!("Invalid saved map: {e}")}).await; return;
+                }};
+                saved["currentMap"] = serde_json::to_value(&map).unwrap();
+                if saved.get("characters").is_none() { saved["characters"] = serde_json::to_value(gs.characters.values().collect::<Vec<_>>()).unwrap(); }
+                if saved.get("enemies").is_none() { saved["enemies"] = serde_json::to_value(&gs.saved_enemies).unwrap(); }
+                if saved.get("enemyInstances").is_none() { saved["enemyInstances"] = serde_json::to_value(&gs.enemy_instances).unwrap(); }
+                match crate::session::validate(&saved) {
+                    Ok(mut restored) => { restored.players = gs.players.clone(); *gs = restored; }
+                    Err(message) => { drop(gs); send_to_client(clients, session_id, &ServerMessage::Error {message}).await; return; }
                 }
             } else {
-                warn!("Map not found in database: {}", map_id);
-                let error = ServerMessage::Error {
-                    message: format!("Map not found: {}", map_id),
-                };
-                broadcast_message(clients, &error).await;
+                gs.load_map(map, clear);
+                gs.undo_history.clear();
+                if clear { gs.combat.end_combat(); gs.enemy_instances.clear(); gs.saved_enemies.clear(); }
             }
+            drop(gs);
+            persist_live_characters(game_state, dnd_db, starwars_db).await;
+            send_session(game_state, clients, None, dnd_db, starwars_db).await;
         }
-        
+
         ClientMessage::ClearMap => {
             info!("🗑️ Clearing map and all tokens");
             let mut gs = game_state.write().await;
@@ -2462,103 +2072,10 @@ async fn handle_client_message(
         
         // Character handlers
         ClientMessage::ListCharacters => {
-            // Load characters from both databases and populate game state
-            // DO NOT clear existing characters - merge with database
-            let mut gs = game_state.write().await;
-            let mut loaded_count = 0;
-            
-            // Load from D&D database
-            match sqlx::query(
-                "SELECT id, name, player_name, class, level, max_hp, current_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, proficiency_bonus, character_data, portrait_url, style FROM characters"
-            )
-            .fetch_all(dnd_db)
-            .await
-            {
-                Ok(rows) => {
-                    for row in rows {
-                        let char = Character {
-                            id: row.get::<String, _>(0),
-                            name: row.get::<String, _>(1),
-                            player_name: row.get::<String, _>(2),
-                            class: row.get::<String, _>(3),
-                            level: row.get::<i32, _>(4),
-                            max_hp: row.get::<i32, _>(5),
-                            current_hp: row.get::<i32, _>(6),
-                            armor_class: row.get::<i32, _>(7),
-                            initiative_bonus: row.get::<i32, _>(8),
-                            strength: row.get::<i32, _>(9),
-                            dexterity: row.get::<i32, _>(10),
-                            constitution: row.get::<i32, _>(11),
-                            intelligence: row.get::<i32, _>(12),
-                            wisdom: row.get::<i32, _>(13),
-                            charisma: row.get::<i32, _>(14),
-                            speed: row.get::<i32, _>(15),
-                            proficiency_bonus: row.get::<i32, _>(16),
-                            character_data: row.get::<Option<String>, _>(17),
-                            portrait_url: row.get::<Option<String>, _>(18),
-                        };
-                        gs.characters.insert(char.id.clone(), char);
-                        loaded_count += 1;
-                    }
-                    info!("Loaded {} characters from D&D database", loaded_count);
-                }
-                Err(e) => {
-                    error!("Failed to load characters from D&D database: {}", e);
-                }
-            }
-            
-            // Load from Star Wars database (merge, don't overwrite)
-            match sqlx::query(
-                "SELECT id, name, player_name, class, level, max_hp, current_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, proficiency_bonus, character_data, portrait_url, style FROM characters"
-            )
-            .fetch_all(starwars_db)
-            .await
-            {
-                Ok(rows) => {
-                    let mut sw_count = 0;
-                    for row in rows {
-                        let char = Character {
-                            id: row.get::<String, _>(0),
-                            name: row.get::<String, _>(1),
-                            player_name: row.get::<String, _>(2),
-                            class: row.get::<String, _>(3),
-                            level: row.get::<i32, _>(4),
-                            max_hp: row.get::<i32, _>(5),
-                            current_hp: row.get::<i32, _>(6),
-                            armor_class: row.get::<i32, _>(7),
-                            initiative_bonus: row.get::<i32, _>(8),
-                            strength: row.get::<i32, _>(9),
-                            dexterity: row.get::<i32, _>(10),
-                            constitution: row.get::<i32, _>(11),
-                            intelligence: row.get::<i32, _>(12),
-                            wisdom: row.get::<i32, _>(13),
-                            charisma: row.get::<i32, _>(14),
-                            speed: row.get::<i32, _>(15),
-                            proficiency_bonus: row.get::<i32, _>(16),
-                            character_data: row.get::<Option<String>, _>(17),
-                            portrait_url: row.get::<Option<String>, _>(18),
-                        };
-                        // Only insert if not already present (D&D takes precedence)
-                        if !gs.characters.contains_key(&char.id) {
-                            gs.characters.insert(char.id.clone(), char);
-                            sw_count += 1;
-                        }
-                    }
-                    if sw_count > 0 {
-                        info!("Loaded {} additional characters from Star Wars database", sw_count);
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to load characters from Star Wars database: {}", e);
-                }
-            }
-            
-            let characters: Vec<Character> = gs.characters.values().cloned().collect();
-            info!("Total characters in game state: {}", characters.len());
-            let character_list = ServerMessage::CharacterList { characters, style: None };
-            broadcast_message(clients, &character_list).await;
+            let characters=game_state.read().await.characters.values().cloned().collect();
+            send_to_client(clients,session_id,&ServerMessage::CharacterList {characters,style:None}).await;
         }
-        
+
         ClientMessage::CreateCharacter { character } => {
             info!("💾 Creating character: {} (ID: {})", character.name, character.id);
             info!("   Character data present: {}", character.character_data.is_some());
@@ -2675,81 +2192,23 @@ async fn handle_client_message(
         }
         
         ClientMessage::UpdateCharacter { character } => {
-            // Save to both databases to ensure persistence
-            let style = "dnd"; // Default style
-            
-            // Update in D&D database
-            if let Err(e) = sqlx::query(
-                "INSERT OR REPLACE INTO characters (id, name, player_name, class, level, max_hp, current_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, proficiency_bonus, character_data, portrait_url, style) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(&character.id)
-            .bind(&character.name)
-            .bind(&character.player_name)
-            .bind(&character.class)
-            .bind(character.level)
-            .bind(character.max_hp)
-            .bind(character.current_hp)
-            .bind(character.armor_class)
-            .bind(character.initiative_bonus)
-            .bind(character.strength)
-            .bind(character.dexterity)
-            .bind(character.constitution)
-            .bind(character.intelligence)
-            .bind(character.wisdom)
-            .bind(character.charisma)
-            .bind(character.speed)
-            .bind(character.proficiency_bonus)
-            .bind(character.character_data.as_ref().map(|s| s.as_str()).unwrap_or(""))
-            .bind(character.portrait_url.as_ref().map(|s| s.as_str()))
-            .bind(style)
-            .execute(dnd_db)
-            .await
-            {
-                error!("Failed to update character in D&D database: {}", e);
-            } else {
-                info!("✅ Character updated in D&D database: {}", character.name);
+            let mut gs=game_state.write().await;
+            let owner=gs.players.get(session_id);
+            if !owner.map(|p|p.is_dm||p.character_id.as_deref()==Some(&character.id)).unwrap_or(false) || !gs.characters.contains_key(&character.id) {
+                drop(gs);send_to_client(clients,session_id,&ServerMessage::Error{message:"Select your own character to edit its sheet".into()}).await;return;
             }
-            
-            // Also update in Star Wars database
-            if let Err(e) = sqlx::query(
-                "INSERT OR REPLACE INTO characters (id, name, player_name, class, level, max_hp, current_hp, armor_class, initiative_bonus, strength, dexterity, constitution, intelligence, wisdom, charisma, speed, proficiency_bonus, character_data, portrait_url, style) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(&character.id)
-            .bind(&character.name)
-            .bind(&character.player_name)
-            .bind(&character.class)
-            .bind(character.level)
-            .bind(character.max_hp)
-            .bind(character.current_hp)
-            .bind(character.armor_class)
-            .bind(character.initiative_bonus)
-            .bind(character.strength)
-            .bind(character.dexterity)
-            .bind(character.constitution)
-            .bind(character.intelligence)
-            .bind(character.wisdom)
-            .bind(character.charisma)
-            .bind(character.speed)
-            .bind(character.proficiency_bonus)
-            .bind(character.character_data.as_ref().map(|s| s.as_str()).unwrap_or(""))
-            .bind(character.portrait_url.as_ref().map(|s| s.as_str()))
-            .bind(style)
-            .execute(starwars_db)
-            .await
-            {
-                warn!("Failed to update character in Star Wars database: {}", e);
-            }
-            
-            // Also update in-memory state
-            let mut gs = game_state.write().await;
-            gs.update_character(character.clone());
-            
-            let characters: Vec<Character> = gs.characters.values().cloned().collect();
-            let character_list = ServerMessage::CharacterList { characters, style: None };
-            broadcast_message(clients, &character_list).await;
+            if character.max_hp<0 || character.current_hp<0 || character.current_hp>character.max_hp {drop(gs);send_to_client(clients,session_id,&ServerMessage::Error{message:"Invalid HP totals".into()}).await;return;}
+            let mut rows=std::collections::HashMap::new();rows.insert(character.id.clone(),character.clone());
+            if let Err(e)=crate::session::persist_characters(dnd_db,&rows).await {drop(gs);send_to_client(clients,session_id,&ServerMessage::Error{message:format!("Sheet was not saved: {e}")}).await;return;}
+            if let Err(e)=crate::session::persist_characters(starwars_db,&rows).await{warn!("Sheet mirror failed: {e}");}
+            gs.update_character(character);
+            let characters=gs.characters.values().cloned().collect();drop(gs);
+            broadcast_message(clients,&ServerMessage::CharacterList{characters,style:None}).await;
+            send_session(game_state,clients,None,dnd_db,starwars_db).await;
         }
         
         ClientMessage::DeleteCharacter { character_id } => {
+            if !game_state.read().await.players.get(session_id).map(|p|p.is_dm).unwrap_or(false) {send_to_client(clients,session_id,&ServerMessage::Error{message:"Only the DM can delete characters".into()}).await;return;}
             // Delete from both databases
             if let Err(e) = sqlx::query("DELETE FROM characters WHERE id = ?")
                 .bind(&character_id)
@@ -2779,7 +2238,10 @@ async fn handle_client_message(
         }
         
         ClientMessage::SelectCharacter { character_id } => {
-            game_state.write().await.set_player_character(session_id, character_id);
+            let mut gs=game_state.write().await;
+            if !gs.characters.contains_key(&character_id){drop(gs);send_to_client(clients,session_id,&ServerMessage::Error{message:"Character no longer exists".into()}).await;return;}
+            gs.set_player_character(session_id, character_id);drop(gs);
+            send_session(game_state,clients,None,dnd_db,starwars_db).await;
         }
         
         // Enemy handlers
@@ -2942,6 +2404,63 @@ async fn handle_client_message(
     }
 }
 
+async fn session_payload(game_state: &Arc<RwLock<GameState>>, dnd: &Database, sw: &Database) -> serde_json::Value {
+    let gs = game_state.read().await;
+    let mut snapshot = crate::session::snapshot(&gs);
+    let instances: Vec<_> = gs.enemy_instances.values().cloned().collect();
+    drop(gs);
+    let templates = fetch_enemies_merged(dnd, sw).await;
+    if let Some(enemies) = snapshot["enemies"].as_array_mut() {
+        for instance in instances {
+            if let Some(template) = templates.iter().find(|e| e.id == instance.enemy_id) {
+                let mut row = serde_json::to_value(template).unwrap();
+                row["id"] = serde_json::json!(instance.id);
+                row["enemy_id"] = serde_json::json!(instance.enemy_id);
+                row["name"] = serde_json::json!(instance.name);
+                row["current_hp"] = serde_json::json!(instance.current_hp);
+                row["max_hp"] = serde_json::json!(instance.max_hp);
+                if let Some(existing) = enemies.iter_mut().find(|e| e["id"] == row["id"]) {
+                    // Preserve NPC/import metadata that is not present in the template model.
+                    if let (Some(destination), Some(source)) = (existing.as_object_mut(), row.as_object()) {
+                        destination.extend(source.clone());
+                    }
+                } else { enemies.push(row); }
+            }
+        }
+    }
+    snapshot["campaignNotes"] = crate::session::campaign_notes().await;
+    snapshot
+}
+
+async fn send_session(game_state: &Arc<RwLock<GameState>>, clients: &Clients, session_id: Option<&str>, dnd: &Database, sw: &Database) {
+    use std::hash::{Hash,Hasher};
+    let mut snapshot=session_payload(game_state,dnd,sw).await;
+    if let Some(rows)=snapshot["characters"].as_array_mut(){rows.sort_by_key(|c|c["id"].as_str().unwrap_or("").to_string());}
+    let saved_at=snapshot["savedAt"].as_str().unwrap_or_default().to_string();
+    let mut signature=snapshot.clone();signature.as_object_mut().unwrap().remove("savedAt");
+    let mut hash=std::collections::hash_map::DefaultHasher::new();signature.to_string().hash(&mut hash);let signature=hash.finish();
+    let ids:Vec<String>=if let Some(id)=session_id {vec![id.to_string()]}else{clients.read().await.keys().cloned().collect()};
+    let mut changed=vec![];let mut unchanged=vec![];
+    {
+        let mut gs=game_state.write().await;
+        for id in ids {
+            if gs.snapshot_signatures.get(&id)==Some(&signature){unchanged.push(id);}else{gs.snapshot_signatures.insert(id.clone(),signature);changed.push(id);}
+        }
+    }
+    if !changed.is_empty(){
+        let message=ServerMessage::SessionState{snapshot};
+        let text=serde_json::to_string(&message).unwrap();let clients=clients.read().await;
+        for id in changed {if let Some(sender)=clients.get(&id){let _=sender.send(text.clone());}}
+    }
+    if session_id.is_some(){for id in unchanged{send_to_client(clients,&id,&ServerMessage::SessionUnchanged{saved_at:saved_at.clone()}).await;}}
+}
+
+async fn persist_live_characters(game_state: &Arc<RwLock<GameState>>, dnd: &Database, sw: &Database) {
+    let characters = game_state.read().await.characters.clone();
+    if let Err(e) = crate::session::persist_characters(dnd, &characters).await { error!("HP persistence failed: {e}"); }
+    if let Err(e) = crate::session::persist_characters(sw, &characters).await { warn!("Character mirror failed: {e}"); }
+}
+
 async fn send_to_client(clients: &Clients, session_id: &str, message: &ServerMessage) {
     let json = match serde_json::to_string(message) {
         Ok(json) => json,
@@ -3065,6 +2584,7 @@ async fn list_saved_states() -> Result<axum::Json<serde_json::Value>, StatusCode
 
 async fn get_saved_state(Path(filename): Path<String>) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
     use std::path::Path;
+    if !crate::session::valid_filename(&filename) { return Err(StatusCode::BAD_REQUEST); }
     
     let file_path = Path::new("saves").join(&filename);
     if !file_path.exists() {
@@ -3103,6 +2623,7 @@ async fn save_game_state_internal(
     filename: String,
     body: axum::body::Body,
 ) -> Result<axum::response::Json<serde_json::Value>, StatusCode> {
+    if !crate::session::valid_filename(&filename) { return Err(StatusCode::BAD_REQUEST); }
     info!("📥 Save request received for: {}", filename);
     
     // Read body manually to avoid Json extractor issues
@@ -3126,6 +2647,10 @@ async fn save_game_state_internal(
     };
     
     info!("✅ Parsed JSON successfully");
+    crate::session::validate(&game_state).map_err(|e| {
+        warn!("Invalid session save: {e}");
+        StatusCode::BAD_REQUEST
+    })?;
     
     // Get absolute path to saves directory (relative to server executable)
     let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -3160,7 +2685,7 @@ async fn save_game_state_internal(
     info!("💾 Writing {} bytes to {}", json_len, file_path.display());
     
     // Write file
-    if let Err(e) = tokio::fs::write(&file_path, json_string).await {
+    if let Err(e) = crate::session::atomic_json(&file_path, &game_state).await {
         error!("❌ Failed to write save file {}: {}", file_path.display(), e);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -3255,6 +2780,7 @@ async fn put_campaign_notes(Path(id): Path<String>, body: axum::body::Body) -> R
 }
 
 async fn delete_saved_state(Path(filename): Path<String>) -> Result<StatusCode, StatusCode> {
+    if !crate::session::valid_filename(&filename) { return Err(StatusCode::BAD_REQUEST); }
     use std::path::Path;
     
     let file_path = Path::new("saves").join(&filename);
@@ -3893,4 +3419,44 @@ async fn get_sound_file(Path(filename): Path<String>) -> Result<impl axum::respo
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+async fn get_recovery(Path(filename): Path<String>) -> Response {
+    if !filename.starts_with("auto-") || !crate::session::valid_filename(&filename) { return StatusCode::BAD_REQUEST.into_response(); }
+    match tokio::fs::read_to_string(std::path::Path::new("saves/recovery").join(filename)).await {
+        Ok(data) => ([(header::CONTENT_TYPE,"application/json")],data).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn list_recovery() -> axum::Json<Vec<serde_json::Value>> {
+    let mut files = crate::table::recovery_files().await;
+    files.sort();
+    let mut out = vec![];
+    for filename in files {
+        if let Ok(text) = tokio::fs::read_to_string(std::path::Path::new("saves/recovery").join(&filename)).await {
+            if let Ok(snapshot) = serde_json::from_str::<serde_json::Value>(&text) {
+                out.push(serde_json::json!({"filename":filename,"savedAt":snapshot["savedAt"],"currentMap":{"name":snapshot["currentMap"]["name"]},"recoveryReason":snapshot["recoveryReason"]}));
+            }
+        }
+    }
+    axum::Json(out)
+}
+
+async fn list_encounters() -> axum::Json<Vec<serde_json::Value>> {
+    let mut out=vec![];
+    if let Ok(mut entries)=tokio::fs::read_dir("encounters").await {
+        while let Ok(Some(entry))=entries.next_entry().await {
+            if entry.path().extension().and_then(|s|s.to_str())!=Some("json") {continue;}
+            if let Ok(text)=tokio::fs::read_to_string(entry.path()).await {
+                if let Ok(mut value)=serde_json::from_str::<serde_json::Value>(&text) {value["id"]=serde_json::json!(entry.file_name().to_string_lossy());out.push(value);}
+            }
+        }
+    }
+    out.sort_by_key(|v|v["name"].as_str().unwrap_or("").to_lowercase());
+    axum::Json(out)
+}
+
+async fn list_characters_http(State((_,_,game_state,_,_)):State<(Database,Database,Arc<RwLock<GameState>>,Clients,broadcast::Sender<()>)>) -> axum::Json<Vec<crate::models::Character>> {
+    axum::Json(game_state.read().await.characters.values().cloned().collect())
 }

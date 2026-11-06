@@ -7,11 +7,12 @@
 
     function slotsForEngineerLevel(level) {
         const lv = Math.max(1, Math.min(20, Number(level) || 3));
-        if (lv >= 17) return 8;
-        if (lv >= 13) return 7;
+        if (lv >= 17) return 9;
+        if (lv >= 13) return 8;
+        if (lv >= 11) return 7;
         if (lv >= 9) return 6;
         if (lv >= 5) return 5;
-        return 4;
+        return lv >= 3 ? 4 : 0;
     }
 
     var MODS = [

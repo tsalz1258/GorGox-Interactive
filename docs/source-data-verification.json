@@ -1,0 +1,25 @@
+{
+  "source_campaign_unchanged": true,
+  "checks": [
+    {
+      "file": "gorgox_dnd.db",
+      "unchanged": true,
+      "sha256": "8dde2a360c2cf123392f6c73b732d22a146aa2d9b80a323fb4981288145ceca5"
+    },
+    {
+      "file": "gorgox_starwars.db",
+      "unchanged": true,
+      "sha256": "bc46699cb9888c0607c79443f598fe83749c26a32538467fbd566f28a1dc7583"
+    },
+    {
+      "file": "Stone Cavern for S7.json",
+      "unchanged": true,
+      "sha256": "3a520c3e9dc7695d740ce73d81ce3c17743b9ddb252ceb1da09a77c9faaff493"
+    },
+    {
+      "file": "test.json",
+      "unchanged": true,
+      "sha256": "28446d40f3a45628621a5afaa4c0b2344a0af9af29fc1e0553aa179f127df35a"
+    }
+  ]
+}

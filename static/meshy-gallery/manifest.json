@@ -1,0 +1,412 @@
+{
+  "unique_enemies": 137,
+  "saves": [
+    {
+      "file": "Meshy Gallery - ALL Enemies.json",
+      "count": 137,
+      "names": [
+        "000 Series Protocol Droid",
+        "1.4 FD P-Tower Turret",
+        "3P0 Series",
+        "74-Z Speeder Bike",
+        "AAT",
+        "Acklay, Adolescent",
+        "Acklay, Adult",
+        "Aiwha",
+        "Anooba",
+        "Aryx",
+        "AT-AT",
+        "AT-RT",
+        "AT-ST",
+        "AT-TE",
+        "Auto-Turret",
+        "Ax-108 Sentry Gun",
+        "B'omarr Brain Walker",
+        "B'omarr Monk Initiate",
+        "B1 Series, B1-A",
+        "B1 Series, B1-X",
+        "B1 Series, Squad",
+        "B2 Series, B2-A",
+        "B2 Series, B2-HA",
+        "Bantha, Adolescent",
+        "Bantha, Adult",
+        "Battle Hydra",
+        "BB Series Astromech Droid",
+        "Beggar's Canyon Womp Rat",
+        "Blastromech Series, BT-1",
+        "Blurrg",
+        "Boar-wolf",
+        "Bogwing, Greater",
+        "Bogwing, Lesser",
+        "Bor Gullet",
+        "Brain Worm",
+        "BX Series, BX-5C",
+        "BX Series, BX-A",
+        "C1 Series Astromech Droid",
+        "Cantina Brawl",
+        "Carnivorous Plant",
+        "Cliff Wampa",
+        "Clodhopper",
+        "Condor Dragon",
+        "Cyborg Khagan",
+        "Dark Lord Spirit",
+        "Dark Side Spirit",
+        "Death Trooper",
+        "Destroyer Droid",
+        "Dewback, Adolescent",
+        "Dewback, Adult",
+        "DF.9 Anti-Infantry Turret",
+        "Dianoga, Adolescent",
+        "Dianoga, Adult",
+        "Dr Aphra",
+        "Dr. Aphra",
+        "Dragonsnake",
+        "DRK-1 Tracker Droid",
+        "DSD1 Dwarf Spider Droid",
+        "DUM-Series Pit Droid",
+        "Emperor's Hand",
+        "Energy Spider",
+        "Eopie",
+        "Ewok Pony",
+        "Exogorth, Adolescent",
+        "Exogorth, Adult",
+        "Fambaa",
+        "Fambaa Howdah",
+        "Fathier",
+        "Fexian Skullborer",
+        "Flesh Raider",
+        "Flesh Raider Apprentice",
+        "Flesh Raider Berserker",
+        "Flutterplume",
+        "Force Storm Eye",
+        "Forest Nexu, Adult",
+        "Fyrnock",
+        "Gamorrean Guard",
+        "Geejaw",
+        "GH-7 Medical Analysis Unit",
+        "Ghest",
+        "Giant Worrt",
+        "Gizka",
+        "Gizka Swarm",
+        "Gonk Droid",
+        "Gorak Palas",
+        "Gorax",
+        "Grand Admiral",
+        "Greysor",
+        "Gundark, Adolescent",
+        "Gundark, Adult",
+        "Gundark, Alpha",
+        "Gundark, Matriarch",
+        "Gutkurr",
+        "Hawk-bat",
+        "Hawk-bat Swarm",
+        "Hidden Turret",
+        "Hive Rat",
+        "HK Series, HK-47",
+        "Hooded Figure",
+        "Horned Kath Hound",
+        "Hrumph",
+        "Hssiss",
+        "Hutt Crime Lord",
+        "Hutt Wrestler",
+        "Hyena-Class Bomber",
+        "ID9 Seeker Droid",
+        "IG Series, Model 86",
+        "IG Series, Model 88",
+        "IG-100 Series",
+        "IG-227 Hailfire-Class Droid",
+        "Imperial Guard Champion",
+        "Imperial Royal Guard",
+        "Imperial Senate Guard",
+        "Imperial Shadow Guard",
+        "Inquisitor, Grand",
+        "Inquisitor, Knight",
+        "Inquisitor, Master",
+        "ISB Infiltrator",
+        "ISB Officer",
+        "IT-O Interrog. Unit",
+        "Jakrab",
+        "Jawa Scrapper",
+        "Jawa Shaman",
+        "Jawa Tinkerer",
+        "JK-13 Security Droid",
+        "Jubba Bird",
+        "Jundland Wastes Womp Rat",
+        "Junk Behemoth",
+        "Junk Droid",
+        "K'lor'slug",
+        "Kaadu",
+        "Katarn",
+        "Kath Hound",
+        "Knobby White Spider",
+        "Knobby White Spiderling",
+        "KX-Series Security Droid",
+        "Snow Wampa"
+      ],
+      "map": "/static/meshy-gallery/all-enemies.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 01.json",
+      "count": 8,
+      "names": [
+        "000 Series Protocol Droid",
+        "1.4 FD P-Tower Turret",
+        "3P0 Series",
+        "74-Z Speeder Bike",
+        "AAT",
+        "Acklay, Adolescent",
+        "Acklay, Adult",
+        "Aiwha"
+      ],
+      "map": "/static/meshy-gallery/group-01.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 02.json",
+      "count": 8,
+      "names": [
+        "Anooba",
+        "Aryx",
+        "AT-AT",
+        "AT-RT",
+        "AT-ST",
+        "AT-TE",
+        "Auto-Turret",
+        "Ax-108 Sentry Gun"
+      ],
+      "map": "/static/meshy-gallery/group-02.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 03.json",
+      "count": 8,
+      "names": [
+        "B'omarr Brain Walker",
+        "B'omarr Monk Initiate",
+        "B1 Series, B1-A",
+        "B1 Series, B1-X",
+        "B1 Series, Squad",
+        "B2 Series, B2-A",
+        "B2 Series, B2-HA",
+        "Bantha, Adolescent"
+      ],
+      "map": "/static/meshy-gallery/group-03.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 04.json",
+      "count": 8,
+      "names": [
+        "Bantha, Adult",
+        "Battle Hydra",
+        "BB Series Astromech Droid",
+        "Beggar's Canyon Womp Rat",
+        "Blastromech Series, BT-1",
+        "Blurrg",
+        "Boar-wolf",
+        "Bogwing, Greater"
+      ],
+      "map": "/static/meshy-gallery/group-04.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 05.json",
+      "count": 8,
+      "names": [
+        "Bogwing, Lesser",
+        "Bor Gullet",
+        "Brain Worm",
+        "BX Series, BX-5C",
+        "BX Series, BX-A",
+        "C1 Series Astromech Droid",
+        "Cantina Brawl",
+        "Carnivorous Plant"
+      ],
+      "map": "/static/meshy-gallery/group-05.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 06.json",
+      "count": 8,
+      "names": [
+        "Cliff Wampa",
+        "Clodhopper",
+        "Condor Dragon",
+        "Cyborg Khagan",
+        "Dark Lord Spirit",
+        "Dark Side Spirit",
+        "Death Trooper",
+        "Destroyer Droid"
+      ],
+      "map": "/static/meshy-gallery/group-06.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 07.json",
+      "count": 8,
+      "names": [
+        "Dewback, Adolescent",
+        "Dewback, Adult",
+        "DF.9 Anti-Infantry Turret",
+        "Dianoga, Adolescent",
+        "Dianoga, Adult",
+        "Dr Aphra",
+        "Dr. Aphra",
+        "Dragonsnake"
+      ],
+      "map": "/static/meshy-gallery/group-07.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 08.json",
+      "count": 8,
+      "names": [
+        "DRK-1 Tracker Droid",
+        "DSD1 Dwarf Spider Droid",
+        "DUM-Series Pit Droid",
+        "Emperor's Hand",
+        "Energy Spider",
+        "Eopie",
+        "Ewok Pony",
+        "Exogorth, Adolescent"
+      ],
+      "map": "/static/meshy-gallery/group-08.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 09.json",
+      "count": 8,
+      "names": [
+        "Exogorth, Adult",
+        "Fambaa",
+        "Fambaa Howdah",
+        "Fathier",
+        "Fexian Skullborer",
+        "Flesh Raider",
+        "Flesh Raider Apprentice",
+        "Flesh Raider Berserker"
+      ],
+      "map": "/static/meshy-gallery/group-09.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 10.json",
+      "count": 8,
+      "names": [
+        "Flutterplume",
+        "Force Storm Eye",
+        "Forest Nexu, Adult",
+        "Fyrnock",
+        "Gamorrean Guard",
+        "Geejaw",
+        "GH-7 Medical Analysis Unit",
+        "Ghest"
+      ],
+      "map": "/static/meshy-gallery/group-10.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 11.json",
+      "count": 8,
+      "names": [
+        "Giant Worrt",
+        "Gizka",
+        "Gizka Swarm",
+        "Gonk Droid",
+        "Gorak Palas",
+        "Gorax",
+        "Grand Admiral",
+        "Greysor"
+      ],
+      "map": "/static/meshy-gallery/group-11.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 12.json",
+      "count": 8,
+      "names": [
+        "Gundark, Adolescent",
+        "Gundark, Adult",
+        "Gundark, Alpha",
+        "Gundark, Matriarch",
+        "Gutkurr",
+        "Hawk-bat",
+        "Hawk-bat Swarm",
+        "Hidden Turret"
+      ],
+      "map": "/static/meshy-gallery/group-12.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 13.json",
+      "count": 8,
+      "names": [
+        "Hive Rat",
+        "HK Series, HK-47",
+        "Hooded Figure",
+        "Horned Kath Hound",
+        "Hrumph",
+        "Hssiss",
+        "Hutt Crime Lord",
+        "Hutt Wrestler"
+      ],
+      "map": "/static/meshy-gallery/group-13.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 14.json",
+      "count": 8,
+      "names": [
+        "Hyena-Class Bomber",
+        "ID9 Seeker Droid",
+        "IG Series, Model 86",
+        "IG Series, Model 88",
+        "IG-100 Series",
+        "IG-227 Hailfire-Class Droid",
+        "Imperial Guard Champion",
+        "Imperial Royal Guard"
+      ],
+      "map": "/static/meshy-gallery/group-14.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 15.json",
+      "count": 8,
+      "names": [
+        "Imperial Senate Guard",
+        "Imperial Shadow Guard",
+        "Inquisitor, Grand",
+        "Inquisitor, Knight",
+        "Inquisitor, Master",
+        "ISB Infiltrator",
+        "ISB Officer",
+        "IT-O Interrog. Unit"
+      ],
+      "map": "/static/meshy-gallery/group-15.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 16.json",
+      "count": 8,
+      "names": [
+        "Jakrab",
+        "Jawa Scrapper",
+        "Jawa Shaman",
+        "Jawa Tinkerer",
+        "JK-13 Security Droid",
+        "Jubba Bird",
+        "Jundland Wastes Womp Rat",
+        "Junk Behemoth"
+      ],
+      "map": "/static/meshy-gallery/group-16.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 17.json",
+      "count": 8,
+      "names": [
+        "Junk Droid",
+        "K'lor'slug",
+        "Kaadu",
+        "Katarn",
+        "Kath Hound",
+        "Knobby White Spider",
+        "Knobby White Spiderling",
+        "KX-Series Security Droid"
+      ],
+      "map": "/static/meshy-gallery/group-17.png"
+    },
+    {
+      "file": "Meshy Gallery - Group 18.json",
+      "count": 1,
+      "names": [
+        "Snow Wampa"
+      ],
+      "map": "/static/meshy-gallery/group-18.png"
+    }
+  ]
+}

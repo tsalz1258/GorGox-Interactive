@@ -27,7 +27,8 @@ export function finalizeCharBuilderState(state, registry) {
     const speciesFeats = registry.speciesFeaturesBySpecies.get(String(state.speciesSlug || '').toLowerCase()) || [];
 
     let base = { ...state.baseAbilityScores };
-    base = applySpeciesBonuses(base, speciesFeats);
+    if(state.speciesBonusChoices){for(const key of Object.keys(base))base[key]+=Number(state.speciesBonusChoices[key]||0);}
+    else base = applySpeciesBonuses(base, speciesFeats);
 
     const level = 1;
     const pb = proficiencyBonusFromCharacterLevel(level);
@@ -155,13 +156,14 @@ export function finalizeCharBuilderState(state, registry) {
         techPowers: techNames.slice(),
         forcePowers: forceNames.slice(),
         equipment,
-        speed: { walk: 30 },
+        speed: { walk: state.speedOverride!=null?Number(state.speedOverride): (speciesFeats.map(sf=>String(sf.description||sf.system?.description?.value||"" ).replace(/<[^>]+>/g," ")).join(" ").match(/(?:base walking speed|walking speed) is (\d+)/i)?.[1]*1 || 30) },
         initiative: { mod: abilityMod(base.Dexterity) },
         traits: speciesFeats.map((sf) => sf.name).filter(Boolean),
         features: cfL1.map((cf) => cf.name).filter(Boolean),
         currentStats: { hitPointsLost: 0 },
         ac: { base: 10 + abilityMod(base.Dexterity) },
         builderMeta: {
+            speciesBonusChoices: state.speciesBonusChoices||null,
             version: 1,
             choiceHistory: state.choiceHistory || [],
             identity: state.identity,

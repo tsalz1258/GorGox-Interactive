@@ -1,0 +1,53 @@
+{
+  "results": [
+    {
+      "name": "DM can toggle sight; closed wall hides map pixels and target on player",
+      "status": "PASS",
+      "detail": {
+        "targetHidden": true,
+        "fogPixel": [
+          5,
+          5,
+          8,
+          255
+        ]
+      }
+    },
+    {
+      "name": "Opening a door reveals sight; closing and undo synchronize",
+      "status": "PASS",
+      "detail": "Door open/close and undo agree"
+    },
+    {
+      "name": "DM chooses shared party or selected-character vision",
+      "status": "PASS",
+      "detail": "Both modes and character switching work"
+    },
+    {
+      "name": "Manual reveals work; explicit token hiding keeps precedence",
+      "status": "PASS",
+      "detail": "Map reveal, token override and explicit hide priorities pass"
+    },
+    {
+      "name": "Invalid, stale and player edits reject without changing sight",
+      "status": "PASS",
+      "detail": "Player, stale, invalid geometry and invalid restore rejected"
+    },
+    {
+      "name": "Unrelated HP changes reuse geometry; moving a source updates sight",
+      "status": "PASS",
+      "detail": "HP uses cached polygons; movement rebuilds"
+    },
+    {
+      "name": "Wall placement consumes map clicks and Escape cancels",
+      "status": "PASS",
+      "detail": "Two endpoint clicks save a door; canceled wall is absent"
+    },
+    {
+      "name": "Save/restore, refresh and map-local defaults preserve visibility",
+      "status": "PASS",
+      "detail": "Restore, reconnect and per-map settings pass"
+    }
+  ],
+  "pageErrors": []
+}

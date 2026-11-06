@@ -1,0 +1,49 @@
+{
+  "results": [
+    {
+      "name": "Movement undo reaches both clients",
+      "status": "PASS",
+      "detail": {
+        "x": 2,
+        "y": 2
+      }
+    },
+    {
+      "name": "Batch HP applies once for repeated request and undoes exactly",
+      "status": "PASS",
+      "detail": {
+        "hp": 18
+      }
+    },
+    {
+      "name": "Player cannot issue DM batch or undo",
+      "status": "PASS",
+      "detail": "Server rejected both commands"
+    },
+    {
+      "name": "Invalid restore leaves the live session unchanged",
+      "status": "PASS",
+      "detail": "No partial state replacement"
+    },
+    {
+      "name": "Recovery is created before restore and can be loaded",
+      "status": "PASS",
+      "detail": {
+        "beforeRestoreX": 7,
+        "retentionLimit": 12
+      }
+    },
+    {
+      "name": "Armstech migrates browser data and prefers server data",
+      "status": "PASS",
+      "detail": {
+        "weaponType": "vibro",
+        "blasterStr": false,
+        "vibroDex": true,
+        "equippedIds": [],
+        "version": 1
+      }
+    }
+  ],
+  "pageErrors": []
+}

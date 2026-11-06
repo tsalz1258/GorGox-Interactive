@@ -23,7 +23,7 @@ export function validateClass(state) {
     return e;
 }
 
-export function validateAbilities(state) {
+export function validateAbilities(state, registry) {
     const e = [];
     const b = state.baseAbilityScores || {};
     const need = ['Strength', 'Dexterity', 'Constitution', 'Intelligence', 'Wisdom', 'Charisma'];
@@ -35,6 +35,14 @@ export function validateAbilities(state) {
         if (n < 3 || n > 18) e.push(`${k} must be between 3 and 18.`);
         vals.push(n);
     });
+    const features=registry?.speciesFeaturesBySpecies.get(String(state.speciesSlug||'').toLowerCase())||[];
+    const asi=features.filter(f=>/ability score increase/i.test(f.name||'')).map(f=>f.description||f.system?.description?.value||'').join(' ');
+    if(/choice|choose/i.test(asi)){
+        const bonuses=need.map(k=>Number(state.speciesBonusChoices?.[k]||0));
+        if(bonuses.some(n=>!Number.isInteger(n)||n<0||n>2))e.push('Species bonuses must be 0, 1 or 2.');
+        if(state.speciesSlug==='human') {const sorted=bonuses.filter(Boolean).sort((a,b)=>b-a).join(',');if(!['2,1,1','1,1,1,1'].includes(sorted))e.push('Human: choose +2/+1/+1 on different abilities, or +1 on four different abilities.');}
+        else if(!bonuses.some(Boolean))e.push('Choose your species bonuses from the displayed reference; complex species choices require DM review.');
+    }
     const sortedStd = [...vals].sort((a, b) => b - a);
     const std = [15, 14, 13, 12, 10, 8];
     const okStd = std.every((x, i) => sortedStd[i] === x);
@@ -77,12 +85,13 @@ export function validatePowers(state, registry) {
     const needForce = state.forcePowerNamesRequired || 0;
     if (tech && tech !== 'none') {
         const got = (state.techPowerNames || []).length;
-        if (needTech > 0 && got < needTech) e.push(`Select at least ${needTech} tech powers (selected ${got}).`);
+        if (needTech > 0 && got !== needTech) e.push(`Select exactly ${needTech} tech powers (selected ${got}).`);
     }
     if (force && force !== 'none') {
         const got = (state.forcePowerNames || []).length;
-        if (needForce > 0 && got < needForce) e.push(`Select at least ${needForce} force powers (selected ${got}).`);
+        if (needForce > 0 && got !== needForce) e.push(`Select exactly ${needForce} force powers (selected ${got}).`);
     }
+    for (const pool of ["tech", "force"]) { const names=state[pool+"PowerNames"]||[]; if(new Set(names.map(n=>n.toLowerCase())).size!==names.length)e.push("Choose different powers for each slot."); }
     return e;
 }
 
@@ -106,7 +115,7 @@ export function validateStep(stepId, state, registry) {
         case 'class':
             return validateClass(state);
         case 'abilities':
-            return validateAbilities(state);
+            return validateAbilities(state, registry);
         case 'proficiencies':
             return validateProficiencies(state, registry);
         case 'equipment':

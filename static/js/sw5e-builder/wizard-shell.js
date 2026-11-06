@@ -163,14 +163,14 @@ function renderListSelect(center, state, registry, type, detailEl) {
     if (type === 'species') rows = registry.species;
     else if (type === 'background') rows = registry.backgrounds;
     else rows = registry.classes;
-    rows = rows.filter((r) => !filter || String(r.name).toLowerCase().includes(filter));
+    // Filtering hides cards without replacing the focused search input.
     center.innerHTML = `<div class="sw5e-wiz-search"><input type="search" placeholder="Filter…" class="sw5e-wiz-input" id="sw5eWizSearch" value="${esc(state.searchFilter)}" /></div>
       <div class="sw5e-wiz-card-grid" id="sw5eWizCards"></div>`;
     const grid = center.querySelector('#sw5eWizCards');
     const q = center.querySelector('#sw5eWizSearch');
     q.addEventListener('input', () => {
         state.searchFilter = q.value;
-        renderListSelect(center, state, registry, type, detailEl);
+        center.querySelectorAll('.sw5e-wiz-card').forEach(c=>c.hidden=!c.dataset.search.includes(q.value.toLowerCase()));
     });
     rows.forEach((row) => {
         const id =
@@ -186,13 +186,14 @@ function renderListSelect(center, state, registry, type, detailEl) {
                   ? state.backgroundStableId === id
                   : state.classSlug === id;
         const card = document.createElement('button');
+        card.dataset.search=String(row.name).toLowerCase();
         card.type = 'button';
         card.className = 'sw5e-wiz-card' + (sel ? ' is-selected' : '');
         const icon =
             row._icon_url_app || (type === 'background' ? '' : '');
         card.innerHTML = `${icon ? `<img src="${esc(icon)}" alt="" loading="lazy"/>` : ''}<span class="sw5e-wiz-card-title">${esc(row.name)}</span>`;
         card.onclick = () => {
-            if (type === 'species') state.speciesSlug = id;
+            if (type === 'species') { if(state.speciesSlug!==id)delete state.speciesBonusChoices; state.speciesSlug = id; }
             else if (type === 'background') state.backgroundStableId = id;
             else state.classSlug = id;
             const raw =
@@ -204,11 +205,12 @@ function renderListSelect(center, state, registry, type, detailEl) {
             center.querySelectorAll('.sw5e-wiz-card').forEach((c) => c.classList.remove('is-selected'));
             card.classList.add('is-selected');
         };
+        card.hidden=!!filter&&!card.dataset.search.includes(filter);
         grid.appendChild(card);
     });
 }
 
-function renderAbilities(center, state) {
+function renderAbilities(center, state, registry) {
     const opts = STANDARD_ARRAY.map((n) => `<option value="${n}">${n}</option>`).join('');
     const rows = ABILITIES.map((a) => {
         const v = state.baseAbilityScores[a] ?? 10;
@@ -219,6 +221,14 @@ function renderAbilities(center, state) {
     center.innerHTML = `<p class="sw5e-wiz-hint">Assign the standard array (15–8) to each ability — each value once.</p>
       <button type="button" class="sw5e-wiz-btn-secondary" id="sw5eResetStd">Reset to default order</button>
       <div class="sw5e-wiz-fields">${rows}</div>`;
+    const features=registry.speciesFeaturesBySpecies.get(String(state.speciesSlug||'').toLowerCase())||[];
+    const asi=features.filter(f=>/ability score increase/i.test(f.name||'')).map(f=>f.description||f.system?.description?.value||'').join(' ').replace(/<[^>]*>/g,' ');
+    if(/choice|choose/i.test(asi)){
+        const box=document.createElement('fieldset');const legend=document.createElement('legend');legend.textContent='Species ability increases';box.append(legend);const ref=document.createElement('p');ref.textContent=asi;box.append(ref);
+        state.speciesBonusChoices??={};
+        for(const name of ABILITIES){const label=document.createElement('label');label.textContent=name+' + ';const input=document.createElement('input');input.type='number';input.min=0;input.max=2;input.value=state.speciesBonusChoices[name]||0;input.oninput=()=>state.speciesBonusChoices[name]=Number(input.value);label.append(input);box.append(label);}center.append(box);
+    }
+    const speedLabel=document.createElement('label');speedLabel.textContent='Walking speed override (optional; feet) ';const speed=document.createElement('input');speed.type='number';speed.min=0;speed.max=500;speed.value=state.speedOverride??'';speed.oninput=()=>state.speedOverride=speed.value===''?null:Number(speed.value);speedLabel.append(speed);center.append(speedLabel);
     center.querySelectorAll('select[data-ab]').forEach((sel) => {
         sel.onchange = () => {
             const k = sel.getAttribute('data-ab');
@@ -229,7 +239,7 @@ function renderAbilities(center, state) {
         ABILITIES.forEach((a, i) => {
             state.baseAbilityScores[a] = STANDARD_ARRAY[i];
         });
-        renderAbilities(center, state);
+        renderAbilities(center, state, registry);
     };
 }
 
@@ -294,11 +304,14 @@ function renderProficiencies(center, state, registry) {
     }
 }
 
-function renderEquipment(center, state) {
+function renderEquipment(center, state, registry) {
     const lines = (state.equipmentLines || []).join('\n') || '';
     center.innerHTML = `
-      <p class="sw5e-wiz-hint">Starting equipment is derived from class/backstory in the rules. Add specific inventory lines (one per line). Background bundle is added on finalize.</p>
+      <p class="sw5e-wiz-hint">Choose inventory from the class starting-equipment reference below (one item per line). Choice-based bundles require your selection. The background bundle is added on finalize.</p>
       <textarea id="sw5eEquipLines" class="sw5e-wiz-ta-large" placeholder="Vibrosword&#10;Light energy shield&#10;…">${esc(lines)}</textarea>`;
+    const cls=registry.classesBySlug.get(String(state.classSlug||'').toLowerCase());
+    const reference=document.createElement('details');reference.innerHTML='<summary>Class starting equipment</summary>';
+    const text=document.createElement('p');text.textContent=String(cls?.system?.equipment?.value||cls?.system?.description?.value||'No structured starting-equipment choices in this import; consult your class rules.').replace(/<[^>]*>/g,' ').slice(0,8000);reference.append(text);const rules=document.createElement('a');rules.href='https://sw5e.com/characters/classes/'+encodeURIComponent(cls?.name||'Engineer');rules.target='_blank';rules.rel='noopener';rules.textContent='Open class rules for starting-equipment choices';reference.append(rules);center.prepend(reference);
     center.querySelector('#sw5eEquipLines').addEventListener('input', (e) => {
         state.equipmentLines = e.target.value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     });
@@ -460,9 +473,9 @@ export async function mountSw5eCharacterWizard() {
         else if (step.id === 'species') renderListSelect(center, state, registry, 'species', detail);
         else if (step.id === 'background') renderListSelect(center, state, registry, 'background', detail);
         else if (step.id === 'class') renderListSelect(center, state, registry, 'class', detail);
-        else if (step.id === 'abilities') renderAbilities(center, state);
+        else if (step.id === 'abilities') renderAbilities(center, state, registry);
         else if (step.id === 'proficiencies') renderProficiencies(center, state, registry);
-        else if (step.id === 'equipment') renderEquipment(center, state);
+        else if (step.id === 'equipment') renderEquipment(center, state, registry);
         else if (step.id === 'powers')
             void renderPowers(center, state, registry).then(() => {
                 updatePreview(preview, state, registry);

@@ -4,6 +4,10 @@ mod models;
 mod server;
 mod combat;
 mod game_state;
+mod session;
+mod table;
+mod rules;
+mod vision;
 
 use anyhow::Result;
 use std::sync::Arc;

@@ -6,19 +6,43 @@ The initial balance was 3,834 credits. Textured Meshy 6 Image-to-3D with 4K text
 
 Completed (October run `20261003T173407Z`): 127 new textured models, with nine catalog entries reusing existing models. All originally saved enemies now have model attachments. The catalog had models for 133 of its 271 entries; 138 remained without models (137 not submitted and one rejected by Meshy). Imperial Guard Sentinel was rejected with `provider_content_refused`; its 30 credits were refunded and used for Knobby White Spiderling. There were 128 submissions and 3,810 net credits spent. The API balance dropped to 24 credits.
 
-## Continuation — November 6, 2026
+## Paused — November 6, 2026
 
-Credits were refreshed (API balance **1,444** ≈ **48** textured models at 30 credits each). A new ledger was started at `target/meshy-batch/20261106T174125Z` because the October ledger still caps spending to the old prepaid budget.
+Credits were refreshed to **1,444** and a new ledger was required, because each ledger spends only its own `initial_balance` plus confirmed refunds. The October ledger `20261003T173407Z` stays closed.
 
-- Saved campaign enemies (both DBs): all already have model attachments
-- Catalog: 138 still without models; this run queues those and reuses 133 existing attachments
-- This continuation can finish ~48 of the remaining 138 before credits run out again
-- Resume / monitor:
+Finished ledger: `target/meshy-batch/20261106T174125Z` (updated 2026-11-06T18:09:18Z). This folder is gitignored under `/target`. Do not delete it, `static/arena_stl/`, or the campaign databases. Those files are the only local copy of the models and task history.
+
+| Result | Count |
+| --- | --- |
+| Catalog jobs | 271 |
+| Reused existing models | 133 |
+| New models this run | 47 |
+| Still queued, not submitted | 90 |
+| Failed safety check | 1 |
+| Submissions | 48 |
+| Ending API balance | 34 |
+| Stop reason | Initial prepaid credit budget reached |
+
+**180** catalog names have a model (133 reused + 47 new). **91** do not: the 90 queued names below, plus **Manifestation of Abeloth** (`catalog_index` 146, task `01a1b1f9-1823-73d4-83a4-c2cb830efa7f`). Meshy returned `provider_content_refused` / “This content was declined by a safety check.” Retrying that portrait unchanged can fail again. Saved enemies in both campaign databases already had models before this run. Characters with no portrait were not generated.
+
+Do not `--run` this November ledger after buying more credits. `submitted` is already 48, and the cap is 1,444 credits (48 tasks, plus at most the 30-credit Abeloth refund). A resume would stop immediately, or spend one refunded task, and would leave the rest queued. Do not resume the October ledger either. Do not buy credits from the script, and do not retry an uncertain paid POST.
+
+When credits are back, about **2,700** credits cover the 90 queued creatures (30 each). Abeloth is a 31st submission if she is tried again. Dry-run first. It writes a new ledger and spends nothing. Continue only if `generation_candidates` is about **91**. A much higher number means existing attachments were not seen; stop before `--run`.
+
+```powershell
+python -B scripts/meshy-enemy-batch.py
+python -B scripts/meshy-enemy-batch.py --resume target/meshy-batch/<NEW_STAMP> --run --workers 9
+```
+
+Check progress without spending:
 
 ```powershell
 python -B scripts/meshy-enemy-batch.py --resume target/meshy-batch/20261106T174125Z --status
-python -B scripts/meshy-enemy-batch.py --resume target/meshy-batch/20261106T174125Z --run --workers 9
 ```
+
+Queued catalog names still waiting:
+
+R2 Series Astromech Droid; Rakghoul; Rakghoul, Hulking; Rancor, Adolescent; Rancor, Adult; Rancor, Ancient; Rancor, Juvenile; Rathtar; Rathtar, Dwarf; Reek, Adolescent; Reek, Adult; Riot; Rock Wart; Ronto; SD-K4 Assassin Droid; Sando Aqua Monster; Sarlacc, Adult; Scrange; Scurrier; Shaak; Shrub; Shyrack; Shyrack Swarm; Sibian Hound; Sith Probe Droid; Sketto; Spotlight Sloth; Starweird; Steelpecker; Steep; Stintaril; Stintaril Swarm; Super Tactical Droid; Swamp Slug; Swamp Wampa; T-Series Tactical Droid; T3-Series Utility Droid; TX-225 Occupier Tank; Tauntaun; Terentatek; Trandoshan Elite Warrior; Trandoshan Hunter; Trandoshan Huntmaster; Trandoshan T'doshok; Trandoshan Warrior; Tree; Trooper; Trooper, Captain; Trooper, Demolitions; Trooper, Flame; Trooper, Headhunter; Trooper, Heavy; Trooper, Jump; Trooper, Mounted; Trooper, Scout; Trooper, Shore; Trooper, Sniper; Trooper, Squad; Tuk'ata; Tusk Cat; Tusken Brute; Tusken Chieftain; Tusken Raider; Twirrl; Uprising; Varactyl, Adolescent; Varactyl, Adult; Veermok; Vessel of Abeloth; Vesuvague Tree; Vines; Viper Probe Droid; Vornskr; Voxyn; Vulptex; Vulture-Class Droid; War Wyrm; Weaponized Gonk Droid; Whisper Bird; Woodoo; Wookiee Berserker; Wookiee Engineer; Wookiee Hunter; Worrt; Wraid; Wyyyschokk; Ysalamir; Ysalamiri Swarm; Z-58 Series Security Droid; Zalaaca.
 
 ---
 

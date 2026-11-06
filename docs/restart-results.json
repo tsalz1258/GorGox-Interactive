@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "characterHpAndResourcesSurviveRestart": true,
+  "savedSessionRestoresCombatTokensAndExtras": true,
+  "characters": 9,
+  "tokens": 4
+}

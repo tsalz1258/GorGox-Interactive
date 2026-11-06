@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "sightBlocksPlayer3d": true,
+  "disablingSightAllowsActual3d": true,
+  "enablingSightCloses3dAndRestores2d": true,
+  "pageErrors": []
+}

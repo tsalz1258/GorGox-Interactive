@@ -1,0 +1,99 @@
+{
+  "results": [
+    {
+      "name": "DM and player connect with separate browser storage",
+      "status": "PASS",
+      "detail": {
+        "characters": 9
+      }
+    },
+    {
+      "name": "Load copied campaign map and select player character",
+      "status": "PASS",
+      "detail": {
+        "map": "stone cavern",
+        "characterId": "67e63408-5fa1-4809-8e88-03010ba439b2"
+      }
+    },
+    {
+      "name": "Place player and spawn independent enemy instance",
+      "status": "PASS",
+      "detail": {
+        "enemyTemplate": "a97aceed-aae2-4c25-bc48-770e71c20aef",
+        "tokens": 2
+      }
+    },
+    {
+      "name": "Movement reaches the other client",
+      "status": "PASS",
+      "detail": {
+        "x": 3,
+        "y": 3
+      }
+    },
+    {
+      "name": "Combat starts, initiative advances, damage and healing agree",
+      "status": "PASS",
+      "detail": {
+        "targetHp": 167,
+        "currentTurn": "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8"
+      }
+    },
+    {
+      "name": "Map-state save completes",
+      "status": "PASS",
+      "detail": {
+        "mapId": "d38124c8-8b0b-41fd-9170-1c80b30bc3e6",
+        "tokens": 2,
+        "currentTurn": "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8"
+      }
+    },
+    {
+      "name": "Full-session JSON saves through the UI and round-trips through REST",
+      "status": "PASS",
+      "detail": {
+        "version": "2.0",
+        "tokens": 2
+      }
+    },
+    {
+      "name": "Player reconnect preserves the server current turn",
+      "status": "PASS",
+      "detail": {
+        "expectedTurn": "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8",
+        "actualTurn": "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8"
+      }
+    },
+    {
+      "name": "Map-state reload restores saved participants and turn",
+      "status": "PASS",
+      "detail": {
+        "tokens": 2,
+        "turn": "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8",
+        "ids": [
+          "1379f551-5b9a-4095-ae5e-2b215c6a73ec",
+          "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8"
+        ]
+      }
+    },
+    {
+      "name": "Full-session load restores shared combat",
+      "status": "PASS",
+      "detail": {
+        "dm": {
+          "active": true,
+          "participants": 2,
+          "tokens": 2,
+          "currentTurn": "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8"
+        },
+        "player": {
+          "active": true,
+          "participants": 2,
+          "tokens": 2,
+          "currentTurn": "a98c6ebb-1e7f-4d40-8363-44b5546bf6a8"
+        }
+      }
+    }
+  ],
+  "pageErrors": []
+}
