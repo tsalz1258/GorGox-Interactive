@@ -66,6 +66,15 @@ def request_json(key, endpoint, body=None):
             if body is not None or attempt == 5: raise
             time.sleep(min(10 * (attempt + 1), 60))
 def balance(key): return int(request_json(key, "/balance")["balance"])
+
+def unexplained_credits(current_balance, initial_balance, submitted, failed_count):
+    """Credits above this ledger's prepaid remainder and known failure refunds."""
+    baseline_remaining = initial_balance - submitted * COST
+    return current_balance - baseline_remaining - failed_count * COST
+
+def must_start_new_ledger(current_balance, initial_balance, submitted, failed_count):
+    """A later credit refresh must not be spent by an older ledger's cap."""
+    return unexplained_credits(current_balance, initial_balance, submitted, failed_count) > COST
 def portrait(npc, index):
     return npc.get("sw5e_token_url") or npc.get("sw5e_portrait_url") or f"/static/enemy_portraits/{index}.png"
 def image_uri(value):
@@ -184,6 +193,12 @@ def run(directory, ledger, workers, max_new=None, recover_only=False):
     limit = (ledger["initial_balance"] + refunded) // COST
     started_submitted = ledger["submitted"]
     ledger["stop_reason"] = None
+    if not recover_only and must_start_new_ledger(current_balance, ledger["initial_balance"], ledger["submitted"], sum(e["status"] == "failed" for e in ledger["jobs"])):
+        ledger["balance"] = current_balance
+        ledger["stop_reason"] = "Live balance is above this ledger's prepaid cap and known refunds. Start a new dry-run ledger so the new credits get their own cap. This run submitted nothing."
+        save()
+        print(json.dumps({"finished": True, "balance": current_balance, "stop_reason": ledger["stop_reason"], "ledger": str(ledger_path)}), flush=True)
+        return
     for entry in ledger["jobs"]:
         if entry["status"] == "reuse":
             attach(entry, catalog); entry["status"] = "reused"; entry.pop("portrait", None); save()

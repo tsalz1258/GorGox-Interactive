@@ -76,6 +76,7 @@ console.log('1) Required files');
   'static/style.css',
   'static/js/action-dock.js',
   'static/js/ui-shell.js',
+  'static/js/map-download.js',
   'src/server.rs',
   'src/game_state.rs'
 ].forEach((rel) => {
@@ -87,7 +88,8 @@ console.log('\n2) JS syntax');
 [
   'static/app.js',
   'static/js/action-dock.js',
-  'static/js/ui-shell.js'
+  'static/js/ui-shell.js',
+  'static/js/map-download.js'
 ].forEach((rel) => {
   if (exists(rel)) nodeCheck(rel);
 });
@@ -104,9 +106,19 @@ mustContain('static/app.js', [
   'mapPanCandidate',
   'function updatePlayerActionBarVisibility',
   'function ensurePlayerActionBarExists',
-  'playerActionBar',
-  'function downloadMapAsPng'
+  'playerActionBar'
 ], 'core canvas/action-bar');
+
+mustContain('static/app.js', [
+  'function downloadMapAsPng',
+  'MapDownload.download'
+], 'map download wrapper');
+
+mustContain('static/js/map-download.js', [
+  'global.MapDownload',
+  'sanitizeMapDownloadFilename',
+  'imageElementToPngBlob'
+], 'map download module');
 
 mustContain('static/js/action-dock.js', [
   'global.ActionDock',
@@ -125,11 +137,14 @@ if (exists('static/index.html')) {
   const html = read('static/index.html');
   const dockPos = html.indexOf('action-dock.js');
   const shellPos = html.indexOf('ui-shell.js');
+  const mapDownloadPos = html.indexOf('map-download.js');
   const appPos = html.indexOf('/static/app.js');
   if (dockPos >= 0 && appPos >= 0 && dockPos < appPos) ok('action-dock.js loads before app.js');
   else fail('action-dock.js must load before app.js in index.html');
   if (shellPos >= 0 && appPos >= 0 && shellPos < appPos) ok('ui-shell.js loads before app.js');
   else fail('ui-shell.js must load before app.js in index.html');
+  if (mapDownloadPos >= 0 && appPos >= 0 && mapDownloadPos < appPos) ok('map-download.js loads before app.js');
+  else fail('map-download.js must load before app.js in index.html');
 
   [
     'id="mapCanvas"',
@@ -204,6 +219,14 @@ console.log('\n8) Live server probe (optional)');
     clearTimeout(t);
     if (res.ok) ok('GET ' + BASE_URL + '/api/test → ' + res.status);
     else warn('GET /api/test → HTTP ' + res.status);
+    const role = spawnSync(process.execPath, [path.join(ROOT, 'scripts/session-role-smoke.cjs'), BASE_URL], {
+      encoding: 'utf8',
+      shell: false,
+      timeout: 20000
+    });
+    if (role.status === 0) ok('DM and player roles ' + (role.stdout || '').trim());
+    else if (role.status === 2) warn('live role check skipped: ' + (role.stderr || role.stdout || '').trim());
+    else fail('live DM/player role check failed: ' + (role.stderr || role.stdout || '').trim());
   } catch (e) {
     warn('server not reachable at ' + BASE_URL + ' (' + (e.cause && e.cause.code ? e.cause.code : e.message) + ') — start with start.bat for live checks');
   }

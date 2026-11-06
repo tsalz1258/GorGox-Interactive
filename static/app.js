@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v187'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v188'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -12210,111 +12210,19 @@ function updateCombatParticipantHP(targetId, newHp) {
     }
 }
 
-// Map Management
-function sanitizeMapDownloadFilename(name) {
-    var s = String(name || 'map')
-        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-        .replace(/\s+/g, ' ')
-        .trim();
-    if (!s) s = 'map';
-    if (!/\.png$/i.test(s)) s += '.png';
-    return s;
-}
-
-function triggerBlobDownload(blob, filename) {
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function () {
-        try { URL.revokeObjectURL(url); } catch (e) {}
-    }, 2500);
-}
-
-function loadHtmlImage(src) {
-    return new Promise(function (resolve, reject) {
-        var img = new Image();
-        img.onload = function () { resolve(img); };
-        img.onerror = function () { reject(new Error('Failed to load image')); };
-        img.src = src;
-    });
-}
-
-function imageElementToPngBlob(img) {
-    var w = img.naturalWidth || img.width || 0;
-    var h = img.naturalHeight || img.height || 0;
-    if (!w || !h) return Promise.reject(new Error('Invalid image dimensions'));
-    var c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
-    var cx = c.getContext('2d');
-    if (!cx) return Promise.reject(new Error('Canvas unsupported'));
-    cx.drawImage(img, 0, 0);
-    return new Promise(function (resolve, reject) {
-        c.toBlob(function (blob) {
-            if (blob) resolve(blob);
-            else reject(new Error('PNG encode failed'));
-        }, 'image/png');
-    });
-}
-
-function resolveMapRecordForDownload(mapId) {
-    if (mapId) {
-        if (currentMap && currentMap.id === mapId) return currentMap;
-        if (Array.isArray(savedMapsCache)) {
-            var hit = savedMapsCache.find(function (m) { return m && m.id === mapId; });
-            if (hit) return hit;
-        }
-        return null;
-    }
-    return currentMap || null;
-}
-
-/**
- * DM: download a map's artwork as PNG.
- * @param {string} [mapId] - Optional map id from the saved list; omit to use the currently loaded map.
- */
+// Map Management. PNG encoding lives in static/js/map-download.js.
 async function downloadMapAsPng(mapId) {
-    if (!isDM) {
-        alert('Only the DM can download maps.');
+    if (!window.MapDownload) {
+        alert('Map download is not loaded. Refresh the page.');
         return;
     }
-    var map = resolveMapRecordForDownload(mapId || null);
-    if (!map) {
-        alert(mapId ? 'Map not found in the list. Refresh Maps and try again.' : 'No map is loaded. Load a map first, or download one from the Maps list.');
-        return;
-    }
-
-    var name = map.name || 'map';
-    var imagePath = map.image_path || '';
-    try {
-        var imgEl = null;
-        if (
-            currentMap &&
-            currentMap.id === map.id &&
-            currentMap.image &&
-            currentMap.image.complete &&
-            (currentMap.image.naturalWidth || 0) > 0
-        ) {
-            imgEl = currentMap.image;
-        }
-        if (!imgEl) {
-            if (!imagePath) throw new Error('This map has no image path');
-            var dataUrl = await fetchImageAsDataUrl(imagePath);
-            if (!dataUrl) throw new Error('Could not fetch map image from server');
-            imgEl = await loadHtmlImage(dataUrl);
-        }
-        var blob = await imageElementToPngBlob(imgEl);
-        triggerBlobDownload(blob, sanitizeMapDownloadFilename(name));
-        addLogEntry('📥 Downloaded map PNG: ' + name, 'success');
-    } catch (err) {
-        console.error('❌ downloadMapAsPng failed:', err);
-        alert('Failed to download map PNG: ' + (err && err.message ? err.message : String(err)));
-    }
+    return MapDownload.download({
+        isDM: isDM,
+        currentMap: currentMap,
+        savedMapsCache: savedMapsCache,
+        fetchImageAsDataUrl: fetchImageAsDataUrl,
+        addLogEntry: addLogEntry
+    }, mapId);
 }
 
 function showMapUpload() {

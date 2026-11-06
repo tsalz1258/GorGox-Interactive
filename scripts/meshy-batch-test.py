@@ -45,4 +45,12 @@ class Persistence(unittest.TestCase):
     def test_fractional_catalog_challenge_ratings(self):
         npc={**self.npc,'challenge':'1/4'};self.assertEqual(batch.catalog_row(npc,0,'url')['challenge_rating'],.25)
 
+class LedgerCap(unittest.TestCase):
+    def test_spent_november_ledger_does_not_look_like_new_credits(self):
+        self.assertFalse(batch.must_start_new_ledger(34, 1444, 48, 1))
+    def test_a_later_credit_refresh_requires_a_new_ledger(self):
+        self.assertTrue(batch.must_start_new_ledger(1034, 1444, 48, 1))
+    def test_an_in_progress_ledger_can_still_resume(self):
+        self.assertFalse(batch.must_start_new_ledger(1144, 1444, 10, 0))
+
 if __name__=='__main__':unittest.main()
