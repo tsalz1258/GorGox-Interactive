@@ -24,6 +24,7 @@
     var resizeObserver = null;
     var layoutListenersBound = false;
     var layoutRaf = 0;
+    var interacting = false;
 
     function scheduleLayout() {
         if (layoutRaf) return;
@@ -69,7 +70,7 @@
     }
 
     function getEffectiveMode() {
-        return isDrawerMode() ? 'drawer' : state.mode;
+        return state.mode === 'floating' ? 'floating' : (isDrawerMode() ? 'drawer' : 'docked');
     }
 
     function getSidebarRects() {
@@ -104,8 +105,8 @@
 
     function syncGlobalHeight() {
         var h = getEffectiveHeight();
-        if (typeof global.playerActionBarHeight !== 'undefined') {
-            global.playerActionBarHeight = state.height;
+        if (typeof playerActionBarHeight !== 'undefined') {
+            playerActionBarHeight = state.height;
         }
         document.body.style.setProperty('--player-action-bar-height', h + 'px');
         document.body.style.setProperty('--action-dock-height', h + 'px');
@@ -154,69 +155,88 @@
         }
     }
 
-    function setupResize() {
-        var edge = document.getElementById('actionDockResizeEdge');
-        if (!edge || !barEl) return;
-        edge.onpointerdown = function (e) {
+    function beginResize(e, edge) {
             if (state.collapsed) return;
+            if (e.button !== 0) return;
             if (e.target.closest('.action-dock__chrome-actions')) return;
-            if (e.target.closest('.action-dock__drag-handle')) return;
             e.preventDefault();
             e.stopPropagation();
+            interacting = true;
             edge.setPointerCapture(e.pointerId);
             var startY = e.clientY;
             var startH = state.height;
+            var startTop = barEl.getBoundingClientRect().top;
             function onMove(ev) {
                 var dy = startY - ev.clientY;
-                var nh = Math.max(HEIGHT_MIN, Math.min(HEIGHT_MAX, Math.round(startH + dy)));
+                var limit = Math.min(HEIGHT_MAX, global.innerHeight - VIEWPORT_MARGIN * 2);
+                var nh = Math.max(HEIGHT_MIN, Math.min(limit, Math.round(startH + dy)));
                 state.height = nh;
-                if (typeof global.playerActionBarHeight !== 'undefined') {
-                    global.playerActionBarHeight = nh;
-                }
+                if (getEffectiveMode() === 'floating') state.floatY = startTop + startH - nh;
                 scheduleLayout();
             }
             function onUp() {
-                edge.releasePointerCapture(e.pointerId);
                 edge.removeEventListener('pointermove', onMove);
                 edge.removeEventListener('pointerup', onUp);
                 edge.removeEventListener('pointercancel', onUp);
+                edge.removeEventListener('lostpointercapture', onUp);
+                if (edge.hasPointerCapture(e.pointerId)) edge.releasePointerCapture(e.pointerId);
+                interacting = false;
+                applyLayout();
                 saveState();
             }
             edge.addEventListener('pointermove', onMove);
             edge.addEventListener('pointerup', onUp);
             edge.addEventListener('pointercancel', onUp);
-        };
+            edge.addEventListener('lostpointercapture', onUp);
+    }
+
+    function setupResize() {
+        var edge = document.getElementById('actionDockResizeEdge');
+        var grip = document.getElementById('actionDockResizeGrip');
+        if (!barEl) return;
+        [edge, grip].forEach(function (target) {
+            if (target) target.onpointerdown = function (e) { beginResize(e, target); };
+        });
     }
 
     function setupDrag() {
         var handle = document.getElementById('actionDockDragHandle');
         if (!handle || !barEl) return;
         handle.onpointerdown = function (e) {
-            if (isDrawerMode()) return;
             if (e.target.closest('button')) return;
-            if (state.mode !== 'floating') return;
+            if (e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
+            if (getEffectiveMode() !== 'floating') {
+                var rect = barEl.getBoundingClientRect();
+                state.mode = 'floating';
+                state.floatX = rect.left;
+                state.floatY = rect.top;
+                applyLayout();
+            }
             handle.setPointerCapture(e.pointerId);
             var startX = e.clientX;
             var startY = e.clientY;
-            var origX = state.floatX;
-            var origY = state.floatY;
+            var origX = rect ? rect.left : state.floatX;
+            var origY = rect ? rect.top : state.floatY;
             function onMove(ev) {
                 state.floatX = origX + (ev.clientX - startX);
                 state.floatY = origY + (ev.clientY - startY);
                 scheduleLayout();
             }
             function onUp() {
-                handle.releasePointerCapture(e.pointerId);
                 handle.removeEventListener('pointermove', onMove);
                 handle.removeEventListener('pointerup', onUp);
                 handle.removeEventListener('pointercancel', onUp);
+                handle.removeEventListener('lostpointercapture', onUp);
+                if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+                applyLayout();
                 saveState();
             }
             handle.addEventListener('pointermove', onMove);
             handle.addEventListener('pointerup', onUp);
             handle.addEventListener('pointercancel', onUp);
+            handle.addEventListener('lostpointercapture', onUp);
         };
     }
 
@@ -235,7 +255,6 @@
         }
         if (undockBtn) {
             undockBtn.onclick = function () {
-                if (isDrawerMode()) return;
                 state.mode = state.mode === 'floating' ? 'docked' : 'floating';
                 if (state.mode === 'floating' && state.floatX === null) {
                     var rect = barEl.getBoundingClientRect();
@@ -281,12 +300,14 @@
     }
 
     function init(bar) {
-        barEl = bar || document.getElementById('playerActionBar');
+        var nextBar = bar || document.getElementById('playerActionBar');
+        if (barEl === nextBar && barEl) {
+            setupResize(); setupDrag(); setupChromeButtons(); setupTabKeyboard();
+            applyLayout(); return;
+        }
+        barEl = nextBar;
         if (!barEl) return;
         loadState();
-        state.mode = 'docked';
-        state.floatX = null;
-        state.floatY = null;
         barEl.classList.add('action-dock');
         setupResize();
         setupDrag();
@@ -314,7 +335,7 @@
             tabs[idx].focus();
         }
         var activeIdx = tabs.findIndex(function (t) { return t.classList.contains('active'); });
-        focusTab(activeIdx >= 0 ? activeIdx : 0);
+        tabs.forEach(function (tab, idx) { tab.tabIndex = idx === (activeIdx >= 0 ? activeIdx : 0) ? 0 : -1; });
         if (tabBar.dataset.keyboardBound === '1') return;
         tabBar.dataset.keyboardBound = '1';
         tabBar.addEventListener('keydown', function (e) {
@@ -395,6 +416,7 @@
         setHeight: setHeight,
         resetToDocked: resetToDocked,
         getState: function () { return state; },
+        isInteracting: function () { return interacting; },
         HEIGHT_MIN: HEIGHT_MIN,
         HEIGHT_MAX: HEIGHT_MAX,
         HEIGHT_DEFAULT: HEIGHT_DEFAULT

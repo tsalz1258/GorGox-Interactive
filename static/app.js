@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v176'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v181'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -7569,7 +7569,8 @@ function populateCombatActionPanel() {
 var ACTION_DOCK_CHROME_HTML =
     '<div class="action-dock__chrome">' +
     '<div class="action-dock__resize-strip" id="actionDockResizeEdge" aria-label="Resize action dock"></div>' +
-    '<div class="action-dock__drag-handle" id="actionDockDragHandle" title="Drag when floating" aria-label="Drag handle"></div>' +
+    '<div class="action-dock__resize-grip" id="actionDockResizeGrip" title="Drag up or down to resize" aria-label="Resize action bar">↕ Resize</div>' +
+    '<div class="action-dock__drag-handle" id="actionDockDragHandle" title="Drag to move the action bar" aria-label="Move action bar">Move</div>' +
     '<div class="action-dock__chrome-actions">' +
     '<button type="button" class="action-dock__chrome-btn" id="actionDockCollapseBtn" aria-expanded="true" aria-label="Collapse action dock">▼</button>' +
     '<button type="button" class="action-dock__chrome-btn" id="actionDockUndockBtn" aria-label="Toggle floating dock" title="Float / dock">⬚</button>' +
@@ -8240,6 +8241,10 @@ function wireDmEnemyRollPanel(panel, enemyName) {
 
 // Load saved action bar height and apply the effective height to the bar + main content
 function applyPlayerActionBarHeight() {
+    if (typeof ActionDock !== 'undefined' && ActionDock.isInteracting()) {
+        ActionDock.scheduleLayout();
+        return;
+    }
     try {
         const savedH = localStorage.getItem('playerActionBarHeight');
         if (savedH !== null) {

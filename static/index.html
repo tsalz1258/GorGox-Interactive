@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=177">
+    <link rel="stylesheet" href="/static/style.css?v=181">
 </head>
 <body>
     <div id="app">
@@ -1163,9 +1163,9 @@
 
     <script src="/static/data/armstech_data.js?v=68"></script>
     <script src="/static/arena3d-boot.js?v=20"></script>
-    <script src="/static/js/action-dock.js?v=3"></script>
+    <script src="/static/js/action-dock.js?v=5"></script>
     <script src="/static/js/ui-shell.js?v=3"></script>
-    <script src="/static/app.js?v=180"></script>
+    <script src="/static/app.js?v=181"></script>
     <script type="module" src="/static/js/sw5e-builder/bootstrap.js?v=8"></script>
     <script>
         // Verify connect function is available
@@ -1186,7 +1186,8 @@
     <div id="playerActionBar" class="player-action-bar action-dock hidden" aria-label="Player action bar">
         <div class="action-dock__chrome">
             <div class="action-dock__resize-strip" id="actionDockResizeEdge" aria-label="Resize action dock"></div>
-            <div class="action-dock__drag-handle" id="actionDockDragHandle" title="Drag when floating" aria-label="Drag handle"></div>
+            <div class="action-dock__resize-grip" id="actionDockResizeGrip" title="Drag up or down to resize" aria-label="Resize action bar">↕ Resize</div>
+            <div class="action-dock__drag-handle" id="actionDockDragHandle" title="Drag to move the action bar" aria-label="Move action bar">Move</div>
             <div class="action-dock__chrome-actions">
                 <button type="button" class="action-dock__chrome-btn" id="actionDockCollapseBtn" aria-expanded="true" aria-label="Collapse action dock">▼</button>
                 <button type="button" class="action-dock__chrome-btn" id="actionDockUndockBtn" aria-label="Toggle floating dock" title="Float / dock">⬚</button>
