@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v188'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v191'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -7533,6 +7533,7 @@ var PLAYER_ACTION_BAR_HTML = ACTION_DOCK_CHROME_HTML +
     '<button type="button" class="player-bar-tab-btn" data-tab="powers" role="tab" tabindex="-1">Powers</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="class" role="tab" tabindex="-1">Class</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="dice" role="tab" tabindex="-1">Dice</button>' +
+    '<button type="button" class="player-bar-tab-btn" data-tab="inventory" role="tab" tabindex="-1">Inventory</button>' +
     '<button type="button" class="player-bar-tab-btn" data-tab="notes" role="tab" tabindex="-1">Notes</button>' +
     '</div>' +
     '<div class="player-bar-inner">' +
@@ -7563,6 +7564,9 @@ var PLAYER_ACTION_BAR_HTML = ACTION_DOCK_CHROME_HTML +
     '</div></div>' +
     '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
     '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
+    '</div>' +
+    '<div class="player-bar-tab-panel vtt-inventory-tab-shell" id="playerBarPanelInventory" data-tab="inventory" role="tabpanel">' +
+    '<div class="player-bar-section player-bar-inventory" id="playerBarInventoryContent"></div>' +
     '</div>' +
     '<div class="player-bar-tab-panel vtt-notes-tab-shell" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">' +
     '<div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>' +
@@ -8260,7 +8264,408 @@ function setupPlayerActionBarResize(bar) {
     }
 }
 
-// Switch action bar tab (Combat, Abilities, Powers, Dice, Notes); persists to localStorage
+function ensurePlayerBarHasInventoryTab(bar) {
+    if (!bar) return;
+    const tabBar = bar.querySelector('.player-bar-tabs');
+    if (tabBar && !tabBar.querySelector('[data-tab="inventory"]')) {
+        const notesBtn = tabBar.querySelector('[data-tab="notes"]');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'player-bar-tab-btn';
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('tabindex', '-1');
+        btn.dataset.tab = 'inventory';
+        btn.textContent = 'Inventory';
+        if (notesBtn) tabBar.insertBefore(btn, notesBtn);
+        else tabBar.appendChild(btn);
+    }
+    const panels = bar.querySelector('.player-bar-tab-panels');
+    if (panels && !panels.querySelector('[data-tab="inventory"]')) {
+        const panel = document.createElement('div');
+        panel.className = 'player-bar-tab-panel vtt-inventory-tab-shell';
+        panel.id = 'playerBarPanelInventory';
+        panel.dataset.tab = 'inventory';
+        panel.setAttribute('role', 'tabpanel');
+        panel.innerHTML = '<div class="player-bar-section player-bar-inventory" id="playerBarInventoryContent"></div>';
+        const notesPanel = panels.querySelector('[data-tab="notes"]');
+        if (notesPanel) panels.insertBefore(panel, notesPanel);
+        else panels.appendChild(panel);
+    }
+}
+
+function equipmentEntriesFromCharData(data) {
+    var out = [];
+    if (!data || !data.equipment) return out;
+    function pushEntry(item, index) {
+        if (!item) return;
+        if (typeof item === 'string') {
+            var text = item.trim();
+            if (text) out.push({ name: text, quantity: 1, equipped: false, notes: '', index: index });
+            return;
+        }
+        var name = item.name || item.Name || '';
+        name = String(name).trim();
+        if (!name) return;
+        var qty = parseInt(item.quantity != null ? item.quantity : item.qty, 10);
+        if (isNaN(qty) || qty < 1) qty = 1;
+        out.push({
+            name: name,
+            quantity: qty,
+            equipped: !!item.equipped || item.attuned === true,
+            notes: item.notes || item.description || '',
+            index: index
+        });
+    }
+        if (Array.isArray(data.equipment)) {
+        data.equipment.forEach(function (item, index) { pushEntry(item, index); });
+    } else if (Array.isArray(data.equipment.items)) {
+        data.equipment.items.forEach(function (item, index) { pushEntry(item, index); });
+    }
+    return out;
+}
+
+function classifyInventoryItemType(name) {
+    var key = String(name || '').toLowerCase().trim();
+    if (!key) return '';
+    if (weaponsCache[key]) return 'weapon';
+    if (armorCache[key]) return 'armor';
+    if (gearCache[key]) return 'gear';
+    if (itemsCache[key]) return 'item';
+    return '';
+}
+
+var itemIconIndex = null;
+var itemIconIndexLoading = null;
+var inventoryCatalogOptionsHtml = '';
+var INVENTORY_FALLBACK_ICON = '/static/sw5e-assets/packs/Icons/item-bag.webp';
+
+function inventoryIconKey(name) {
+    return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function loadItemIconIndex() {
+    if (itemIconIndex) return Promise.resolve(itemIconIndex);
+    if (itemIconIndexLoading) return itemIconIndexLoading;
+    itemIconIndexLoading = fetch('/static/data/item-icon-index.json')
+        .then(function (response) { return response.ok ? response.json() : {}; })
+        .then(function (data) {
+            itemIconIndex = data && typeof data === 'object' ? data : {};
+            return itemIconIndex;
+        })
+        .catch(function () {
+            itemIconIndex = {};
+            return itemIconIndex;
+        });
+    return itemIconIndexLoading;
+}
+
+function itemIconUrl(name) {
+    if (!itemIconIndex) return '';
+    return itemIconIndex[inventoryIconKey(name)] || '';
+}
+
+function inventoryItemPictureHtml(name) {
+    var src = itemIconUrl(name) || INVENTORY_FALLBACK_ICON;
+    return '<img class="vtt-inv-pic" src="' + escapeHtml(src) + '" alt="" onerror="this.onerror=null;this.src=\'' + INVENTORY_FALLBACK_ICON + '\'">';
+}
+
+function inventoryChipHtml(entry, withRemove) {
+    var linked = classifyInventoryItemType(entry.name);
+    var type = linked || 'gear';
+    var label = entry.name + (entry.quantity > 1 ? ' ×' + entry.quantity : '') + (entry.equipped ? ' ★' : '');
+    var cls = 'vtt-inv-chip' + (entry.equipped ? ' is-equipped' : '') + (linked ? '' : ' is-unmatched');
+    var chip = '<button type="button" class="' + cls + '" data-inv-name="' + escapeHtml(entry.name) + '" data-inv-type="' + type + '" data-inv-notes="' + escapeHtml(entry.notes || '') + '">' + inventoryItemPictureHtml(entry.name) + '<span>' + escapeHtml(label) + '</span></button>';
+    if (!withRemove) return chip;
+    return '<div class="vtt-inv-row">' + chip + '<button type="button" class="vtt-inv-remove" data-inv-remove="' + entry.index + '">Remove</button></div>';
+}
+
+function wireInventoryHover(root) {
+    if (!root || root.dataset.invHoverWired === '1') return;
+    root.dataset.invHoverWired = '1';
+    root.addEventListener('mouseover', function (ev) {
+        var chip = ev.target.closest('[data-inv-name]');
+        if (!chip || !root.contains(chip)) return;
+        showItemTooltip(chip.getAttribute('data-inv-name'), chip.getAttribute('data-inv-type') || 'gear', ev, chip.getAttribute('data-inv-notes') || '');
+    });
+    root.addEventListener('mouseout', function (ev) {
+        var chip = ev.target.closest('[data-inv-name]');
+        if (!chip) return;
+        var next = ev.relatedTarget;
+        if (next && chip.contains(next)) return;
+        hideSpellTooltip();
+    });
+    root.addEventListener('click', function (ev) {
+        var removeBtn = ev.target.closest('[data-inv-remove]');
+        if (!removeBtn || !root.contains(removeBtn)) return;
+        ev.preventDefault();
+        removeOwnInventoryItem(parseInt(removeBtn.getAttribute('data-inv-remove'), 10));
+    });
+}
+
+var playerInventoryFilterText = '';
+var playerInventoryRenderToken = 0;
+
+function ownInventoryCharacter() {
+    if (!myCharacterId || !Array.isArray(characters)) return null;
+    return characters.find(function (c) { return c && String(c.id) === String(myCharacterId); }) || null;
+}
+
+function ownInventoryData() {
+    var char = ownInventoryCharacter();
+    if (!char) return null;
+    var parsed = parseCharacterDataWrapper(char);
+    return parsed.data || null;
+}
+
+function readCharacterCredits(data) {
+    var n = data && data.credits != null ? Number(data.credits) : 0;
+    if (!isFinite(n) || n < 0) return 0;
+    return Math.floor(n);
+}
+
+function ownEquipmentArray(data) {
+    if (!data.equipment || typeof data.equipment !== 'object') data.equipment = [];
+    if (Array.isArray(data.equipment)) return data.equipment;
+    if (!Array.isArray(data.equipment.items)) data.equipment.items = [];
+    return data.equipment.items;
+}
+
+function canonicalCatalogItemName(name) {
+    var key = String(name || '').toLowerCase().trim();
+    var caches = [weaponsCache, armorCache, gearCache, itemsCache];
+    for (var i = 0; i < caches.length; i++) {
+        var item = caches[i] && caches[i][key];
+        if (item) return item.name || item.Name || name;
+    }
+    return String(name || '').trim();
+}
+
+function ensureInventoryCatalogOptions() {
+    if (inventoryCatalogOptionsHtml) return inventoryCatalogOptionsHtml;
+    var names = [];
+    [weaponsCache, armorCache, gearCache, itemsCache].forEach(function (cache) {
+        Object.keys(cache || {}).forEach(function (key) {
+            var item = cache[key];
+            var n = item && (item.name || item.Name);
+            if (n) names.push(String(n));
+        });
+    });
+    names.sort(function (a, b) { return a.localeCompare(b); });
+    var seen = {};
+    var html = '';
+    names.forEach(function (n) {
+        var key = n.toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        html += '<option value="' + escapeHtml(n) + '"></option>';
+    });
+    inventoryCatalogOptionsHtml = html;
+    return html;
+}
+
+function commitOwnInventoryChange(char, full, data, logText) {
+    applyEquipmentDerivedStats(char, data);
+    char.character_data = serializeCharacterDataWrapper(char, full, data);
+    lastPlayerBarCharData = data;
+    sendMessage({ type: 'UpdateCharacter', character: buildCharacterUpdatePayload(char) });
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(char.id)) {
+        currentViewingCharacterData = data;
+        currentViewingCharacterFullData = full;
+        if (typeof renderCharacterSheetContent === 'function') renderCharacterSheetContent();
+    }
+    renderPlayerCombatInventoryColumn();
+    paintPlayerInventoryList();
+    if (String(myCharacterId) === String(char.id) && typeof populateCombatActionPanel === 'function') {
+        populateCombatActionPanel();
+    }
+    if (logText) addLogEntry(logText, 'info');
+}
+
+function saveOwnInventoryCredits(raw) {
+    var char = ownInventoryCharacter();
+    if (!char || !canEditCharacterEquipment(char)) {
+        alert('Select your character before changing credits.');
+        return;
+    }
+    var parsed = parseCharacterDataWrapper(char);
+    if (!parsed.data) return;
+    var next = Math.max(0, Math.floor(Number(raw) || 0));
+    if (readCharacterCredits(parsed.data) === next && parsed.data.credits != null) return;
+    parsed.data.credits = next;
+    commitOwnInventoryChange(char, parsed.full, parsed.data, char.name + ' credits: ' + next);
+}
+
+function submitOwnInventoryAdd() {
+    var input = document.getElementById('playerBarInventoryAdd');
+    var name = canonicalCatalogItemName(input && input.value);
+    if (!name) return;
+    var char = ownInventoryCharacter();
+    if (!char || !canEditCharacterEquipment(char)) {
+        alert('Select your character before adding items.');
+        return;
+    }
+    var parsed = parseCharacterDataWrapper(char);
+    if (!parsed.data) return;
+    var list = ownEquipmentArray(parsed.data);
+    var key = name.toLowerCase();
+    var existing = null;
+    for (var i = 0; i < list.length; i++) {
+        var row = list[i];
+        var rowName = typeof row === 'string' ? row : (row && (row.name || row.Name));
+        if (rowName && String(rowName).toLowerCase() === key) {
+            existing = row;
+            break;
+        }
+    }
+    if (existing && typeof existing === 'object') {
+        var qty = parseInt(existing.quantity != null ? existing.quantity : existing.qty, 10);
+        existing.quantity = (isNaN(qty) || qty < 1 ? 1 : qty) + 1;
+    } else if (typeof existing === 'string') {
+        var at = list.indexOf(existing);
+        list[at] = { name: name, quantity: 2, equipped: false, notes: '' };
+    } else {
+        list.push({ name: name, quantity: 1, equipped: false, notes: '' });
+    }
+    if (input) input.value = '';
+    commitOwnInventoryChange(char, parsed.full, parsed.data, char.name + ' added ' + name);
+}
+
+function removeOwnInventoryItem(index) {
+    var char = ownInventoryCharacter();
+    if (!char || !canEditCharacterEquipment(char)) {
+        alert('Select your character before removing items.');
+        return;
+    }
+    var parsed = parseCharacterDataWrapper(char);
+    if (!parsed.data) return;
+    var list = ownEquipmentArray(parsed.data);
+    if (index < 0 || index >= list.length) return;
+    var row = list[index];
+    var name = typeof row === 'string' ? row : (row && (row.name || row.Name)) || 'item';
+    var qty = typeof row === 'object' && row ? (row.quantity || row.qty || 1) : 1;
+    var label = name + (qty > 1 ? ' ×' + qty : '');
+    if (!confirm('Remove ' + label + ' from your inventory?')) return;
+    list.splice(index, 1);
+    commitOwnInventoryChange(char, parsed.full, parsed.data, char.name + ' removed ' + label);
+}
+
+function renderPlayerCombatInventoryColumn() {
+    var invColPb = document.getElementById('playerBarInventoryCol');
+    if (!invColPb) return;
+    var entries = equipmentEntriesFromCharData(lastPlayerBarCharData);
+    var html = '';
+    if (!entries.length) {
+        html = '<span class="vtt-ab-empty-hint">No items on this sheet</span>';
+    } else {
+        entries.forEach(function (entry) { html += inventoryChipHtml(entry); });
+    }
+    html += '<button type="button" class="vtt-chip vtt-chip--inv" onclick="switchPlayerActionBarTab(\'inventory\')">Inventory</button>';
+    invColPb.innerHTML = html;
+    wireInventoryHover(invColPb);
+}
+
+function ensureEquipmentCatalogThenRefreshInventory() {
+    var catalogReady = weaponsLoaded && armorLoaded && gearLoaded && itemsLoaded && itemIconIndex;
+    if (catalogReady) return;
+    Promise.all([
+        catalogReady ? Promise.resolve() : loadAllEquipment(),
+        loadItemIconIndex()
+    ]).then(function () {
+        renderPlayerCombatInventoryColumn();
+        var bar = document.getElementById('playerActionBar');
+        var active = bar && bar.querySelector('.player-bar-tab-btn.active');
+        if (active && active.dataset.tab === 'inventory') renderPlayerInventoryTab();
+    }).catch(function () {});
+}
+
+function paintPlayerInventoryList() {
+    var el = document.getElementById('playerBarInventoryContent');
+    if (!el) return;
+    var char = ownInventoryCharacter();
+    var data = ownInventoryData();
+    var filter = String(playerInventoryFilterText || '').trim().toLowerCase();
+    var credits = readCharacterCredits(data);
+    var entries = data ? equipmentEntriesFromCharData(data) : [];
+    var shown = entries.filter(function (entry) {
+        return !filter || entry.name.toLowerCase().indexOf(filter) !== -1;
+    });
+    var html = '<div class="vtt-inv-toolbar">' +
+        '<input type="search" class="vtt-inv-filter" id="playerBarInventoryFilter" placeholder="Search your items" value="' + escapeHtml(playerInventoryFilterText || '') + '">' +
+        '<span class="vtt-inv-summary">' + shown.length + ' carried</span></div>';
+    if (!char) {
+        html += '<div class="vtt-inv-empty">Select your character to see your inventory.</div>';
+        el.innerHTML = html;
+        return;
+    }
+    html += '<div class="vtt-inv-controls">' +
+        '<label class="vtt-inv-credits">Credits <input id="playerBarInventoryCredits" type="number" min="0" step="1" value="' + credits + '"></label>' +
+        '<input class="vtt-inv-add-name" id="playerBarInventoryAdd" list="playerBarInventoryCatalog" placeholder="Add an item from the catalog">' +
+        '<datalist id="playerBarInventoryCatalog">' + ensureInventoryCatalogOptions() + '</datalist>' +
+        '<button type="button" class="vtt-inv-add-btn" id="playerBarInventoryAddBtn">Add</button></div>';
+    html += '<div class="vtt-inv-list">';
+    if (!shown.length) {
+        html += '<div class="vtt-inv-empty">Nothing in your inventory.</div>';
+    } else {
+        shown.forEach(function (entry) { html += inventoryChipHtml(entry, true); });
+    }
+    html += '</div>';
+    el.innerHTML = html;
+    var input = document.getElementById('playerBarInventoryFilter');
+    if (input) {
+        input.addEventListener('input', function () {
+            playerInventoryFilterText = input.value;
+            var start = input.selectionStart;
+            paintPlayerInventoryList();
+            var again = document.getElementById('playerBarInventoryFilter');
+            if (again) {
+                again.focus();
+                try { again.setSelectionRange(start, start); } catch (e) {}
+            }
+        });
+    }
+    var addBtn = document.getElementById('playerBarInventoryAddBtn');
+    if (addBtn) addBtn.onclick = submitOwnInventoryAdd;
+    var addInput = document.getElementById('playerBarInventoryAdd');
+    if (addInput) {
+        addInput.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                submitOwnInventoryAdd();
+            }
+        });
+    }
+    var creditsInput = document.getElementById('playerBarInventoryCredits');
+    if (creditsInput) {
+        creditsInput.addEventListener('change', function () {
+            saveOwnInventoryCredits(creditsInput.value);
+        });
+    }
+    wireInventoryHover(el);
+}
+
+function renderPlayerInventoryTab() {
+    var el = document.getElementById('playerBarInventoryContent');
+    if (!el) return;
+    var token = ++playerInventoryRenderToken;
+    var catalogReady = weaponsLoaded && armorLoaded && gearLoaded && itemsLoaded;
+    if (!catalogReady || !itemIconIndex) {
+        el.innerHTML = '<div class="vtt-inv-empty">Loading your inventory…</div>';
+        Promise.all([
+            catalogReady ? Promise.resolve() : loadAllEquipment(),
+            loadItemIconIndex()
+        ]).then(function () {
+            if (token !== playerInventoryRenderToken) return;
+            paintPlayerInventoryList();
+        }).catch(function () {
+            if (token !== playerInventoryRenderToken) return;
+            paintPlayerInventoryList();
+        });
+        return;
+    }
+    paintPlayerInventoryList();
+}
+
+// Switch action bar tab (Combat, Abilities, Powers, Class, Dice, Inventory, Notes); persists to localStorage
 function switchPlayerActionBarTab(tabId) {
     const bar = document.getElementById('playerActionBar');
     if (!bar) return;
@@ -8305,6 +8710,17 @@ function switchPlayerActionBarTab(tabId) {
             } catch (e2) {}
         }
         applyPlayerActionBarHeight();
+    }
+    if (tabId === 'inventory') {
+        const invTargetH = Math.min(PLAYER_ACTION_BAR_HEIGHT_MAX, Math.max(playerActionBarHeight, 340));
+        if (invTargetH > playerActionBarHeight) {
+            playerActionBarHeight = invTargetH;
+            try {
+                localStorage.setItem('playerActionBarHeight', String(playerActionBarHeight));
+            } catch (eInv) {}
+        }
+        applyPlayerActionBarHeight();
+        renderPlayerInventoryTab();
     }
     if (tabId === 'class' && lastPlayerBarCharData && typeof populatePlayerSw5eClassKit === 'function') {
         const mc = typeof myCharacterId !== 'undefined'
@@ -10336,18 +10752,22 @@ function populatePlayerActionBar() {
             '<div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">' +
             '<div class="player-bar-section player-bar-dice" id="playerBarDice"></div>' +
             '</div>' +
+            '<div class="player-bar-tab-panel vtt-inventory-tab-shell" id="playerBarPanelInventory" data-tab="inventory" role="tabpanel">' +
+            '<div class="player-bar-section player-bar-inventory" id="playerBarInventoryContent"></div>' +
+            '</div>' +
             '<div class="player-bar-tab-panel" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">' +
             '<div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>' +
             '</div></div>';
     }
     ensurePlayerBarHasClassTab(bar);
+    ensurePlayerBarHasInventoryTab(bar);
     // Bind tab clicks and restore saved tab (tabBar already in scope)
     if (tabBar) {
         tabBar.querySelectorAll('.player-bar-tab-btn').forEach(btn => {
             btn.onclick = function() { switchPlayerActionBarTab(this.dataset.tab); };
         });
         const savedTab = localStorage.getItem('playerActionBarTab');
-        if (savedTab && ['combat', 'abilities', 'powers', 'class', 'dice', 'notes'].indexOf(savedTab) >= 0) {
+        if (savedTab && ['combat', 'abilities', 'powers', 'class', 'dice', 'inventory', 'notes'].indexOf(savedTab) >= 0) {
             switchPlayerActionBarTab(savedTab);
         }
     }
@@ -10472,7 +10892,7 @@ function populatePlayerActionBar() {
             sheetButtonHtml:
                 '<button type="button" class="vtt-ab-sheet-mini" onclick="showMyCharacterSheet()">Sheet</button>',
             inventoryButtonHtml:
-                '<button type="button" class="vtt-ab-inventory-mini" onclick="openMyInventoryFromActionBar()">Inventory</button>'
+                '<button type="button" class="vtt-ab-inventory-mini" onclick="switchPlayerActionBarTab(\'inventory\')">Inventory</button>'
         });
     }
 
@@ -10571,14 +10991,8 @@ function populatePlayerActionBar() {
             JSON.stringify(charName + ' uses the Ready action (set trigger).') +
             ', \'info\')">Ready</button>';
     }
-    var invColPb = document.getElementById('playerBarInventoryCol');
-    if (invColPb) {
-        invColPb.innerHTML =
-            '<button type="button" class="vtt-chip vtt-chip--inv" onclick="addLogEntry(' +
-            JSON.stringify(charName + ' uses an item.') +
-            ', \'info\')">Use item</button>' +
-            '<button type="button" class="vtt-chip vtt-chip--inv" onclick="showMyCharacterSheet()">Open sheet</button>';
-    }
+    renderPlayerCombatInventoryColumn();
+    ensureEquipmentCatalogThenRefreshInventory();
 
     // Abilities (click to roll check)
     const abilitiesEl = document.getElementById('playerBarAbilities');
@@ -17923,6 +18337,7 @@ async function fetchSpellDataAndDisplay(spellName, tooltip, content, event) {
 function hideSpellTooltip() {
     // Delay hiding to allow moving mouse to tooltip
     spellTooltipTimeout = setTimeout(() => {
+        itemTooltipSeq++;
         const tooltip = document.getElementById('spellTooltip');
         if (tooltip) {
             tooltip.style.display = 'none';
@@ -18205,7 +18620,55 @@ function getOrdinalSuffix(num) {
 
 // ==================== EQUIPMENT TOOLTIPS ====================
 
-function showItemTooltip(itemName, itemType, event) {
+var itemTooltipSeq = 0;
+
+function formatCatalogEntryTooltip(type, entry) {
+    if (type === 'weapon') return formatWeaponTooltip(entry);
+    if (type === 'armor') return formatArmorTooltip(entry);
+    if (type === 'feat') return formatFeatTooltip(entry);
+    if (type === 'gear') return formatGearTooltip(entry);
+    if (type === 'item') return formatItemTooltip(entry);
+    if (type === 'maneuver') return formatManeuverTooltip(entry);
+    return '';
+}
+
+function inventoryItemNotFoundHtml(itemName, sheetNotes) {
+    var notes = sheetNotes ? String(sheetNotes).trim() : '';
+    var html = '<div style="text-align:center;color:#ffaa44;padding:12px 8px;">📦 ' + escapeHtml(itemName) +
+        '<br><span style="font-size:12px;opacity:0.8;">Not found in the item catalog</span></div>';
+    if (notes) {
+        html += '<div style="font-size:12px;line-height:1.5;white-space:pre-line;margin-top:8px;">' + escapeHtml(notes) + '</div>';
+    }
+    return html;
+}
+
+async function resolveCatalogTooltipHtml(itemName, itemType, sheetNotes) {
+    var key = String(itemName || '').toLowerCase().trim();
+    var hinted = itemType || 'gear';
+    if (hinted === 'feat') {
+        if (!featsLoaded) await loadFeats();
+        return featsCache[key] ? formatFeatTooltip(featsCache[key]) : inventoryItemNotFoundHtml(itemName, sheetNotes);
+    }
+    if (hinted === 'maneuver') {
+        if (!maneuversLoaded) await loadManeuvers();
+        return maneuversCache[key] ? formatManeuverTooltip(maneuversCache[key]) : inventoryItemNotFoundHtml(itemName, sheetNotes);
+    }
+    if (!weaponsLoaded || !armorLoaded || !gearLoaded || !itemsLoaded) {
+        await loadAllEquipment();
+    }
+    var order = [hinted, 'weapon', 'armor', 'gear', 'item'];
+    var seen = {};
+    for (var i = 0; i < order.length; i++) {
+        var type = order[i];
+        if (!type || seen[type] || type === 'feat' || type === 'maneuver') continue;
+        seen[type] = true;
+        var cache = type === 'weapon' ? weaponsCache : type === 'armor' ? armorCache : type === 'gear' ? gearCache : itemsCache;
+        if (cache && cache[key]) return formatCatalogEntryTooltip(type, cache[key]);
+    }
+    return inventoryItemNotFoundHtml(itemName, sheetNotes);
+}
+
+function showItemTooltip(itemName, itemType, event, sheetNotes) {
     const tooltip = document.getElementById('spellTooltip');
     const content = document.getElementById('spellTooltipContent');
     
@@ -18215,80 +18678,26 @@ function showItemTooltip(itemName, itemType, event) {
         clearTimeout(spellTooltipTimeout);
         spellTooltipTimeout = null;
     }
+    const seq = ++itemTooltipSeq;
+    const notes = sheetNotes || '';
     
-    // Show loading state
-    content.innerHTML = `<div style="text-align: center; opacity: 0.7; padding: 20px;">⏳ Loading ${itemName}...</div>`;
+    content.innerHTML = `<div style="text-align: center; opacity: 0.7; padding: 20px;">⏳ Loading ${escapeHtml(itemName)}...</div>`;
     tooltip.style.display = 'block';
     tooltip.style.zIndex = '99999';
     tooltip.style.left = (event.clientX + 15) + 'px';
     tooltip.style.top = (event.clientY + 15) + 'px';
     
-    // Load item data and display
-    const cacheKey = itemName.toLowerCase().trim();
-    let item = null;
-    
-    switch(itemType) {
-        case 'weapon':
-            if (!weaponsLoaded) loadWeapons();
-            item = weaponsCache[cacheKey];
-            if (item) {
-                content.innerHTML = formatWeaponTooltip(item);
-                adjustTooltipPosition(tooltip, event);
-            } else {
-                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">⚔️ ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
-            }
-            break;
-        case 'armor':
-            if (!armorLoaded) loadArmor();
-            item = armorCache[cacheKey];
-            if (item) {
-                content.innerHTML = formatArmorTooltip(item);
-                adjustTooltipPosition(tooltip, event);
-            } else {
-                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">🛡️ ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
-            }
-            break;
-        case 'feat':
-            if (!featsLoaded) loadFeats();
-            item = featsCache[cacheKey];
-            if (item) {
-                content.innerHTML = formatFeatTooltip(item);
-                adjustTooltipPosition(tooltip, event);
-            } else {
-                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">⭐ ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
-            }
-            break;
-        case 'gear':
-            if (!gearLoaded) loadGear();
-            item = gearCache[cacheKey];
-            if (item) {
-                content.innerHTML = formatGearTooltip(item);
-                adjustTooltipPosition(tooltip, event);
-            } else {
-                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">🎒 ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
-            }
-            break;
-        case 'item':
-            if (!itemsLoaded) loadItems();
-            item = itemsCache[cacheKey];
-            if (item) {
-                content.innerHTML = formatItemTooltip(item);
-                adjustTooltipPosition(tooltip, event);
-            } else {
-                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">📦 ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
-            }
-            break;
-        case 'maneuver':
-            if (!maneuversLoaded) loadManeuvers();
-            item = maneuversCache[cacheKey];
-            if (item) {
-                content.innerHTML = formatManeuverTooltip(item);
-                adjustTooltipPosition(tooltip, event);
-            } else {
-                content.innerHTML = `<div style="text-align: center; color: #ffaa44; padding: 20px;">🎯 ${itemName}<br><span style="font-size: 12px; opacity: 0.8;">Not found in database</span></div>`;
-            }
-            break;
-    }
+    resolveCatalogTooltipHtml(itemName, itemType, notes).then(function (html) {
+        if (seq !== itemTooltipSeq) return;
+        const tip = document.getElementById('spellTooltip');
+        const body = document.getElementById('spellTooltipContent');
+        if (!tip || !body || tip.style.display === 'none') return;
+        body.innerHTML = html;
+        adjustTooltipPosition(tip, event);
+    }).catch(function () {
+        if (seq !== itemTooltipSeq) return;
+        content.innerHTML = inventoryItemNotFoundHtml(itemName, notes);
+    });
 }
 
 function formatWeaponTooltip(weapon) {

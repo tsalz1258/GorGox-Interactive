@@ -12,7 +12,7 @@
         }
     }
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=181">
+    <link rel="stylesheet" href="/static/style.css?v=184">
 </head>
 <body>
     <div id="app">
@@ -1175,7 +1175,7 @@
     <script src="/static/js/vision-geometry.js?v=1"></script>
     <script src="/static/js/vision-tools.js?v=1"></script>
     <script src="/static/js/map-download.js?v=1"></script>
-    <script src="/static/app.js?v=188"></script>
+    <script src="/static/app.js?v=191"></script>
     <script type="module" src="/static/js/sw5e-builder/bootstrap.js?v=8"></script>
     <script>
         // Verify connect function is available
@@ -1210,6 +1210,7 @@
             <button type="button" class="player-bar-tab-btn" data-tab="powers" role="tab" tabindex="-1">Powers</button>
             <button type="button" class="player-bar-tab-btn" data-tab="class" role="tab" tabindex="-1">Class</button>
             <button type="button" class="player-bar-tab-btn" data-tab="dice" role="tab" tabindex="-1">Dice</button>
+            <button type="button" class="player-bar-tab-btn" data-tab="inventory" role="tab" tabindex="-1">Inventory</button>
             <button type="button" class="player-bar-tab-btn" data-tab="notes" role="tab" tabindex="-1">Notes</button>
         </div>
         <div class="player-bar-inner">
@@ -1243,6 +1244,9 @@
                 </div>
                 <div class="player-bar-tab-panel" id="playerBarPanelDice" data-tab="dice" role="tabpanel">
                     <div class="player-bar-section player-bar-dice" id="playerBarDice"></div>
+                </div>
+                <div class="player-bar-tab-panel vtt-inventory-tab-shell" id="playerBarPanelInventory" data-tab="inventory" role="tabpanel">
+                    <div class="player-bar-section player-bar-inventory" id="playerBarInventoryContent"></div>
                 </div>
                 <div class="player-bar-tab-panel vtt-notes-tab-shell" id="playerBarPanelNotes" data-tab="notes" role="tabpanel">
                     <div class="player-bar-section player-bar-notes" id="playerBarNotesContent"></div>

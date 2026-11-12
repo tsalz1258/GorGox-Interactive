@@ -1015,11 +1015,12 @@ body.player-action-bar-visible .map-toolbar {
     line-height: 1;
     text-shadow: 0 0 8px rgba(201, 162, 39, 0.6);
 }
-/* Tab bar: Combat | Abilities | Powers | Dice */
+/* Tab bar: Combat | Abilities | Powers | Class | Dice | Inventory | Notes */
 .player-bar-tabs {
     flex-shrink: 0;
     display: flex;
     flex-direction: row;
+    flex-wrap: wrap;
     gap: 2px;
     padding: 2px 8px 0;
     background: rgba(0, 0, 0, 0.25);
@@ -3547,6 +3548,125 @@ body.player-action-bar-visible .map-toolbar {
     display: flex;
     flex-direction: column;
     width: 100%;
+}
+.player-bar-tab-panel.vtt-inventory-tab-shell {
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    align-content: stretch !important;
+    align-items: stretch !important;
+    gap: 0 !important;
+    padding: 8px 10px !important;
+    overflow: auto !important;
+}
+.player-bar-section.player-bar-inventory {
+    width: 100%;
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 auto;
+    align-items: stretch;
+    justify-content: flex-start;
+    overflow: auto;
+}
+.vtt-inv-toolbar,
+.vtt-inv-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: rgba(28, 22, 16, 0.96);
+    padding: 2px 0;
+}
+.vtt-inv-filter,
+.vtt-inv-add-name,
+.vtt-inv-credits input {
+    min-width: 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(201, 162, 39, 0.45);
+    background: rgba(0, 0, 0, 0.35);
+    color: #f3ead2;
+    font-size: 12px;
+}
+.vtt-inv-filter,
+.vtt-inv-add-name {
+    flex: 1;
+}
+.vtt-inv-credits {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #e8d5a3;
+    font-size: 12px;
+    font-weight: 700;
+}
+.vtt-inv-credits input {
+    width: 110px;
+}
+.vtt-inv-add-btn,
+.vtt-inv-remove {
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(201, 162, 39, 0.55);
+    background: rgba(201, 162, 39, 0.18);
+    color: #f3ead2;
+    font-size: 11px;
+    cursor: pointer;
+}
+.vtt-inv-remove {
+    border-color: rgba(255, 100, 100, 0.55);
+    background: rgba(180, 40, 40, 0.25);
+}
+.vtt-inv-summary {
+    font-size: 11px;
+    color: rgba(232, 213, 163, 0.75);
+    white-space: nowrap;
+}
+.vtt-inv-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.vtt-inv-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.vtt-inv-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 9px 4px 4px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 170, 68, 0.35);
+    background: rgba(255, 170, 68, 0.12);
+    color: #fff;
+    font-size: 12px;
+    cursor: help;
+    text-align: left;
+}
+.vtt-inv-pic {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.35);
+    flex-shrink: 0;
+}
+.vtt-inv-chip.is-equipped {
+    border-color: #ffaa44;
+    background: rgba(255, 170, 68, 0.28);
+}
+.vtt-inv-chip.is-unmatched {
+    border-style: dashed;
+    opacity: 0.85;
+}
+.vtt-inv-empty {
+    font-size: 11px;
+    opacity: 0.7;
 }
 .vtt-notes-console {
     display: flex;
