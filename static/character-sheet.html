@@ -4,465 +4,1531 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Character Sheet - Gorgox Interactive</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --ddb-bg: #070b12;
+            --ddb-panel: rgba(16, 24, 36, 0.88);
+            --ddb-panel-2: rgba(12, 18, 28, 0.92);
+            --ddb-border: rgba(201, 162, 39, 0.35);
+            --ddb-gold: #d4b04a;
+            --ddb-text: #eef3f8;
+            --ddb-muted: #8fa0b5;
+            --ddb-accent: #4ec7ff;
+            --ddb-force: #c77dff;
+            --ddb-danger: #d35b5b;
+            --ddb-tech: #00d4ff;
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
         body {
             margin: 0;
-            padding: 20px;
-            background: #1a1a2e;
-            color: #fff;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            min-height: 100vh;
-            box-sizing: border-box;
+            height: 100vh;
+            overflow: hidden;
+            background:
+                radial-gradient(ellipse 80% 50% at 15% 0%, rgba(0, 170, 220, 0.14), transparent 55%),
+                radial-gradient(ellipse 55% 45% at 95% 85%, rgba(140, 50, 180, 0.14), transparent 50%),
+                radial-gradient(circle at 70% 20%, rgba(212, 176, 74, 0.05), transparent 40%),
+                linear-gradient(180deg, #0b1220 0%, #070b12 55%, #05080e 100%);
+            color: var(--ddb-text);
+            font-family: "Rajdhani", "Segoe UI", sans-serif;
+            font-weight: 600;
         }
-        .character-sheet-container {
-            display: flex;
-            flex-direction: row;
-            gap: 20px;
-            max-width: none;
-            width: 100%;
-            margin: 0;
-            padding: 20px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 10px;
-            min-height: 0;
-            box-sizing: border-box;
-            height: calc(100vh - 40px);
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0.35;
+            background-image:
+                radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,0.45), transparent),
+                radial-gradient(1px 1px at 28% 62%, rgba(255,255,255,0.35), transparent),
+                radial-gradient(1px 1px at 48% 28%, rgba(255,255,255,0.28), transparent),
+                radial-gradient(1px 1px at 66% 74%, rgba(255,255,255,0.4), transparent),
+                radial-gradient(1px 1px at 82% 22%, rgba(255,255,255,0.3), transparent),
+                radial-gradient(1.5px 1.5px at 91% 48%, rgba(180,220,255,0.5), transparent);
+            z-index: 0;
         }
-        .sheet-main {
-            flex: 1;
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
+        .shell {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 210px;
+            gap: 6px;
+            padding: 6px;
+            height: 100vh;
             overflow: hidden;
         }
-        .header {
+        .sheet-wrap {
+            min-width: 0;
+            min-height: 0;
+            height: 100%;
+            overflow: hidden;
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #444;
-            flex-shrink: 0;
+            flex-direction: column;
+            border: 1px solid var(--ddb-border);
+            border-radius: 8px;
+            background:
+                linear-gradient(180deg, rgba(14,22,34,0.72), rgba(8,12,20,0.82)),
+                rgba(8,12,20,0.55);
+            box-shadow: inset 0 1px 0 rgba(212,176,74,0.08);
+            backdrop-filter: blur(5px);
         }
-        .header h1 {
+        .toolbar {
+            display: none;
+        }
+        .toolbar h1 {
             margin: 0;
-            color: #4a9eff;
+            font-family: "Orbitron", sans-serif;
+            font-size: 13px;
+            letter-spacing: 0.08em;
+            color: var(--ddb-gold);
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .toolbar button, .ddb-btn, .ddb-mini, .ddb-chip, .ddb-insp, .ddb-attack, .ddb-ability, .ddb-row, .ddb-tab, .ddb-dice button, .ddb-resource button, .ddb-inv-row button, .ddb-add-row button, .ddb-credits button, .ddb-power-row, .ddb-inv-name, .ddb-feature, .ddb-detail-btn, .ddb-vital-btn {
+            font-family: inherit;
+            cursor: pointer;
         }
         .refresh-btn {
-            background: #4a9eff;
+            background: linear-gradient(180deg, #2a5f8f, #1d456a);
             color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 14px;
-        }
-        .refresh-btn:hover {
-            background: #3a8eef;
+            border: 1px solid rgba(78,199,255,0.4);
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
         }
         #characterSheetContent {
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 5px;
-            padding: 20px;
-            overflow-y: auto;
+            padding: 8px 10px 6px;
             flex: 1;
             min-height: 0;
+            overflow: hidden;
+        }
+        .ddb-sheet {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-height: 0;
+        }
+        .ddb-btn-ghost {
+            background: rgba(78,199,255,0.08) !important;
+            border-color: rgba(78,199,255,0.35) !important;
         }
         .standalone-rolls-panel {
-            width: 320px;
-            flex-shrink: 0;
-            background: linear-gradient(135deg, rgba(170, 136, 255, 0.2) 0%, rgba(74, 158, 255, 0.15) 100%);
-            border: 2px solid rgba(170, 136, 255, 0.5);
+            border: 1px solid rgba(78,199,255,0.28);
             border-radius: 10px;
-            padding: 15px;
-            box-shadow: 0 4px 20px rgba(170, 136, 255, 0.2);
+            background: linear-gradient(165deg, rgba(20,40,70,0.7), rgba(8,12,20,0.92));
+            padding: 10px;
             display: flex;
             flex-direction: column;
             min-height: 0;
-            max-height: calc(100vh - 40px);
+            height: 100%;
+            overflow: hidden;
         }
         .standalone-rolls-panel h3 {
-            margin: 0 0 12px 0;
-            color: #aa88ff;
-            font-size: 16px;
-            flex-shrink: 0;
+            margin: 0 0 8px;
+            color: var(--ddb-accent);
+            font-family: "Orbitron", sans-serif;
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
         #standaloneRollsLog {
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 8px;
-            padding: 12px;
-            overflow-y: auto;
-            overflow-x: hidden;
-            font-size: 14px;
-            min-height: 120px;
             flex: 1;
-            border: 1px solid rgba(170, 136, 255, 0.3);
-            -webkit-overflow-scrolling: touch;
+            overflow: auto;
+            background: rgba(0,0,0,0.28);
+            border-radius: 8px;
+            padding: 8px;
+            border: 1px solid rgba(78,199,255,0.15);
         }
-        #standaloneRollsLog .roll-entry {
-            padding: 10px 12px;
-            margin: 5px 0;
+        .roll-entry { padding: 6px 8px; margin: 4px 0; border-radius: 6px; font-size: 12px; line-height: 1.35; }
+        .roll-entry.nat20 { border-left: 3px solid #44ff44; background: rgba(68,255,68,0.12); color: #b7ffb7; }
+        .roll-entry.nat1 { border-left: 3px solid #ff4444; background: rgba(255,68,68,0.12); color: #ffb0b0; }
+        .roll-entry.normal { border-left: 3px solid #ffaa44; background: rgba(255,170,68,0.1); color: #ffd9ad; }
+        .error-message, .loading-message { text-align: center; padding: 40px; color: #ffaa44; }
+
+        .ddb-header { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-shrink: 0; }
+        .ddb-identity { display: flex; gap: 10px; align-items: center; min-width: 0; }
+        .ddb-portrait {
+            width: 48px; height: 48px; border-radius: 8px; object-fit: cover;
+            border: 1px solid var(--ddb-gold); background: #111;
+            flex-shrink: 0;
+        }
+        .ddb-portrait-fallback {
+            display: flex; align-items: center; justify-content: center;
+            color: var(--ddb-gold); font-size: 20px;
+        }
+        .ddb-identity-text { min-width: 0; }
+        .ddb-name {
+            font-family: "Orbitron", sans-serif;
+            font-size: 20px;
+            color: var(--ddb-gold);
+            line-height: 1.1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .ddb-sub { color: var(--ddb-muted); margin-top: 2px; font-size: 13px; }
+        .ddb-rests { display: flex; gap: 6px; flex-wrap: wrap; }
+        .ddb-btn, .ddb-add-row button, .ddb-credits button, .ddb-resource button, .ddb-inv-row button {
+            background: rgba(212,176,74,0.1);
+            border: 1px solid var(--ddb-gold);
+            color: var(--ddb-text);
             border-radius: 6px;
+            padding: 5px 9px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+        }
+        .ddb-topstats {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(260px, 1fr);
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .ddb-abilities { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; }
+        .ddb-ability {
+            background: linear-gradient(180deg, rgba(24,34,48,0.95), rgba(12,18,28,0.95));
+            border: 1px solid var(--ddb-border);
+            border-radius: 6px;
+            color: var(--ddb-text);
+            padding: 4px 3px 6px;
+            text-align: center;
+        }
+        .ddb-ability:hover { border-color: var(--ddb-accent); box-shadow: 0 0 0 1px rgba(78,199,255,0.2); }
+        .ddb-ability-label { font-size: 9px; text-transform: uppercase; color: var(--ddb-muted); letter-spacing: 0.08em; }
+        .ddb-ability-mod { font-family: "Orbitron", sans-serif; font-size: 18px; font-weight: 700; color: var(--ddb-gold); margin: 1px 0; }
+        .ddb-ability-score {
+            display: inline-block;
+            min-width: 28px;
+            padding: 1px 6px;
+            border-radius: 999px;
+            border: 1px solid rgba(201,162,39,0.35);
+            font-size: 12px;
+            background: rgba(0,0,0,0.25);
+        }
+        .ddb-vitals { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+        .ddb-vital, .ddb-vital-btn {
+            background: var(--ddb-panel-2);
+            border: 1px solid var(--ddb-border);
+            border-radius: 8px;
+            padding: 6px 8px;
+            color: var(--ddb-text);
+            text-align: center;
+        }
+        .ddb-vital span, .ddb-vital-btn span { display: block; font-size: 10px; color: var(--ddb-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        .ddb-vital strong, .ddb-vital-btn strong { font-size: 16px; font-family: "Orbitron", sans-serif; }
+        .ddb-ac {
+            background: radial-gradient(circle at 50% 30%, rgba(78,199,255,0.16), transparent 60%), var(--ddb-panel-2);
+            border-color: rgba(78,199,255,0.45);
+        }
+        .ddb-hp-input {
+            width: 52px;
+            background: rgba(0,0,0,0.35);
+            border: 1px solid var(--ddb-border);
+            color: var(--ddb-text);
+            border-radius: 4px;
+            padding: 1px 4px;
             font-size: 14px;
+            text-align: center;
+        }
+        .ddb-hp-bar {
+            margin-top: 4px;
+            height: 4px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.08);
+            overflow: hidden;
+        }
+        .ddb-hp-bar i {
+            display: block;
+            height: 100%;
+            background: linear-gradient(90deg, #1f8f5f, #4ecf8e);
+        }
+        .ddb-layout {
+            display: grid;
+            grid-template-columns: 158px 188px minmax(0, 1fr) 158px;
+            gap: 6px;
+            align-items: stretch;
+            flex: 1;
+            min-height: 0;
+        }
+        .ddb-col { min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(212,176,74,0.35) transparent; }
+        .ddb-col-main { display: flex; flex-direction: column; min-height: 0; }
+        .ddb-tab-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; }
+        .ddb-card {
+            background: linear-gradient(165deg, rgba(18,26,38,0.92), rgba(10,15,24,0.94));
+            border: 1px solid var(--ddb-border);
+            border-radius: 6px;
+            padding: 7px;
+            margin-bottom: 6px;
+        }
+        .ddb-card-compact { padding: 6px 7px; }
+        .ddb-card h3 {
+            margin: 0 0 5px;
+            font-family: "Orbitron", sans-serif;
+            font-size: 9px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--ddb-gold);
+        }
+        .ddb-list { display: flex; flex-direction: column; gap: 2px; }
+        .ddb-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid transparent;
+            color: var(--ddb-text);
+            border-radius: 5px;
+            padding: 4px 6px;
+            text-align: left;
+            font-size: 12px;
+        }
+        button.ddb-row:hover { border-color: rgba(78,199,255,0.4); background: rgba(78,199,255,0.08); }
+        .ddb-row strong { margin-left: auto; color: var(--ddb-accent); font-family: "Orbitron", sans-serif; font-size: 11px; }
+        .ddb-row em { font-style: normal; opacity: 0.45; font-size: 10px; }
+        .ddb-prof { width: 12px; color: #667; font-size: 10px; }
+        .ddb-prof.is-on { color: #55d975; }
+        .ddb-prof.is-exp { color: var(--ddb-gold); }
+        .ddb-profs { display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+        .ddb-profs strong { color: var(--ddb-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+        .ddb-muted { color: var(--ddb-muted); }
+        .ddb-tabs { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; flex-shrink: 0; }
+        .ddb-tab {
+            background: transparent;
+            border: 1px solid rgba(201,162,39,0.25);
+            color: var(--ddb-muted);
+            border-radius: 999px;
+            padding: 4px 9px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+        }
+        .ddb-tab.active { color: #0b1018; background: var(--ddb-gold); border-color: var(--ddb-gold); }
+        .ddb-attack-row { display: flex; gap: 5px; align-items: stretch; margin-bottom: 5px; }
+        .ddb-attack, .ddb-feature {
+            width: 100%;
+            text-align: left;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(201,162,39,0.22);
+            border-radius: 7px;
+            color: var(--ddb-text);
+            padding: 7px 8px;
+            margin-bottom: 5px;
+        }
+        .ddb-attack { display: flex; gap: 8px; align-items: center; }
+        .ddb-attack-row .ddb-attack { margin-bottom: 0; flex: 1; }
+        .ddb-attack-text { min-width: 0; }
+        .ddb-detail-btn {
+            flex-shrink: 0;
+            background: rgba(78,199,255,0.08);
+            border: 1px solid rgba(78,199,255,0.35);
+            color: var(--ddb-accent);
+            border-radius: 7px;
+            padding: 0 10px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        .ddb-attack:hover, .ddb-feature:hover, .ddb-inv-name:hover, .ddb-power-row:hover { border-color: var(--ddb-gold); }
+        .ddb-attack-name { font-weight: 700; font-size: 13px; }
+        .ddb-attack-meta { font-size: 11px; color: var(--ddb-muted); margin-top: 1px; }
+        .ddb-feature-wrap { display: flex; flex-direction: column; gap: 3px; margin-bottom: 5px; }
+        .ddb-feature-wrap .ddb-feature { margin-bottom: 0; }
+        .ddb-feature-body { white-space: pre-wrap; font-size: 11px; color: var(--ddb-muted); margin: 4px 0 0; line-height: 1.35; }
+        .ddb-ico, .ddb-ico-fallback {
+            width: 26px; height: 26px; flex-shrink: 0;
+            border-radius: 4px;
+            object-fit: contain;
+            background: rgba(0,0,0,0.45);
+            border: 1px solid rgba(212,176,74,0.22);
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.35);
+        }
+        .ddb-ico-fallback {
+            display: inline-flex; align-items: center; justify-content: center;
+            font-size: 12px; color: var(--ddb-accent);
+        }
+        .ddb-card-powers .ddb-powers-headrow {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .ddb-card-powers .ddb-powers-headrow h3 { margin: 0; }
+        .ddb-points-card {
+            display: grid;
+            grid-template-columns: auto auto auto;
+            grid-template-rows: auto auto;
+            gap: 2px 8px;
+            align-items: center;
+            background: rgba(0,0,0,0.28);
+            border: 1px solid rgba(0,212,255,0.28);
+            border-radius: 6px;
+            padding: 5px 8px;
+            min-width: 150px;
+        }
+        .ddb-points-card--force { border-color: rgba(199,125,255,0.35); }
+        .ddb-points-label {
+            grid-column: 1 / -1;
+            font-size: 9px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--ddb-muted);
+        }
+        .ddb-points-value {
+            font-family: "Orbitron", sans-serif;
+            font-size: 16px;
+            color: var(--ddb-tech);
+            line-height: 1;
+        }
+        .ddb-points-card--force .ddb-points-value { color: var(--ddb-force); }
+        .ddb-points-value small { font-size: 11px; opacity: 0.7; margin-left: 1px; }
+        .ddb-points-spent { font-size: 11px; color: var(--ddb-muted); }
+        .ddb-points-actions { display: flex; gap: 4px; justify-self: end; }
+        .ddb-power-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 0 0 6px;
+        }
+        .ddb-filter-chip {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(201,162,39,0.28);
+            color: var(--ddb-muted);
+            border-radius: 999px;
+            padding: 3px 9px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+        }
+        .ddb-filter-chip.active {
+            color: #0b1018;
+            background: var(--ddb-gold);
+            border-color: var(--ddb-gold);
+        }
+        .ddb-power-head, .ddb-power-line {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 46px 52px;
+            gap: 6px;
+            align-items: center;
+            width: 100%;
+        }
+        .ddb-power-head {
+            padding: 0 2px 4px;
+            font-size: 9px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--ddb-muted);
+        }
+        .ddb-power-head span:first-child { grid-column: 1; }
+        .ddb-power-list { display: flex; flex-direction: column; gap: 3px; }
+        .ddb-power-row {
+            display: grid;
+            grid-template-columns: 26px minmax(0, 1.4fr) 72px 78px 54px;
+            gap: 8px;
+            align-items: center;
+            width: 100%;
+            text-align: left;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(0,212,255,0.18);
+            border-radius: 5px;
+            color: var(--ddb-text);
+            padding: 5px 8px;
+        }
+        .ddb-power-row.force { border-color: rgba(199,125,255,0.24); }
+        .ddb-power-name { font-weight: 700; font-size: 13px; min-width: 0; }
+        .ddb-power-name em {
+            display: block;
+            font-style: normal;
+            font-size: 10px;
+            color: var(--ddb-muted);
+            font-weight: 600;
+        }
+        .ddb-power-cell {
+            font-size: 11px;
+            color: var(--ddb-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .ddb-power-tag {
+            justify-self: end;
+            font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+            color: var(--ddb-tech); border: 1px solid rgba(0,212,255,0.3);
+            border-radius: 999px; padding: 2px 6px;
+        }
+        .ddb-power-row.force .ddb-power-tag { color: var(--ddb-force); border-color: rgba(199,125,255,0.35); }
+        .ddb-power-track {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 34px;
+            border-radius: 5px;
+            border: 1px solid rgba(201,162,39,0.28);
+            background: rgba(0,0,0,0.25);
+            line-height: 1.05;
+        }
+        .ddb-power-track span {
+            font-family: "Orbitron", sans-serif;
+            font-size: 13px;
+            color: var(--ddb-gold);
+        }
+        .ddb-power-track small {
+            font-size: 9px;
+            color: var(--ddb-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .ddb-power-use {
+            min-height: 34px;
+            background: rgba(0,212,255,0.12) !important;
+            border-color: rgba(0,212,255,0.45) !important;
+            color: var(--ddb-accent) !important;
+        }
+        .ddb-power-line .ddb-power-row.force ~ .ddb-power-use,
+        .ddb-power-line:has(.ddb-power-row.force) .ddb-power-use {
+            background: rgba(199,125,255,0.12) !important;
+            border-color: rgba(199,125,255,0.45) !important;
+            color: var(--ddb-force) !important;
+        }
+        .ddb-inv-name {
+            flex: 1;
+            display: flex; align-items: center; gap: 8px;
+            text-align: left;
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--ddb-text);
+            border-radius: 6px;
+            padding: 4px 6px;
+            font-size: 13px;
+        }
+        .ddb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .ddb-chip {
+            border-radius: 999px;
+            border: 1px solid var(--ddb-border);
+            background: rgba(255,255,255,0.04);
+            color: var(--ddb-text);
+            padding: 5px 9px;
+            font-size: 12px;
+        }
+        .ddb-chip.tech { border-color: rgba(0,212,255,0.5); }
+        .ddb-chip.force { border-color: rgba(255,0,255,0.45); }
+        .ddb-empty { opacity: 0.65; font-size: 12px; padding: 6px 0; }
+        .ddb-resources, .ddb-inv-list, .ddb-features-mini { display: flex; flex-direction: column; gap: 5px; }
+        .ddb-resource, .ddb-inv-row, .ddb-credits, .ddb-add-row {
+            display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+        }
+        .ddb-credits input, .ddb-add-row input, .ddb-notes-edit {
+            flex: 1;
+            min-width: 100px;
+            background: rgba(0,0,0,0.35);
+            border: 1px solid var(--ddb-border);
+            color: var(--ddb-text);
+            border-radius: 6px;
+            padding: 6px 8px;
+        }
+        .ddb-notes, .ddb-notes-edit {
+            width: 100%;
+            white-space: pre-wrap;
+            font-family: inherit;
+            font-size: 13px;
             line-height: 1.4;
         }
-        #standaloneRollsLog .roll-entry.nat20 {
-            border-left: 4px solid #44ff44;
-            background: linear-gradient(135deg, rgba(68, 255, 68, 0.3) 0%, rgba(34, 200, 34, 0.2) 100%);
-            color: #88ff88;
-            font-weight: bold;
+        .ddb-dice { display: flex; flex-wrap: wrap; gap: 6px; }
+        .ddb-dice button {
+            background: rgba(78,199,255,0.1);
+            border: 1px solid rgba(78,199,255,0.4);
+            color: var(--ddb-text);
+            border-radius: 7px;
+            padding: 8px 10px;
+            font-weight: 700;
         }
-        #standaloneRollsLog .roll-entry.nat1 {
-            border-left: 4px solid #ff4444;
-            background: linear-gradient(135deg, rgba(255, 68, 68, 0.3) 0%, rgba(200, 34, 34, 0.2) 100%);
-            color: #ff8888;
-            font-weight: bold;
+        .ddb-insp {
+            width: 100%;
+            padding: 10px 8px;
+            border-radius: 7px;
+            border: 1px dashed var(--ddb-border);
+            background: rgba(255,255,255,0.03);
+            color: var(--ddb-muted);
+            font-weight: 700;
         }
-        #standaloneRollsLog .roll-entry.normal {
-            border-left: 4px solid #ffaa44;
-            background: linear-gradient(135deg, rgba(255, 170, 68, 0.2) 0%, rgba(255, 140, 40, 0.1) 100%);
-            color: #ffd4a0;
+        .ddb-insp.on {
+            border-style: solid;
+            border-color: #55d975;
+            color: #9dffb3;
+            background: rgba(68,255,68,0.1);
         }
-        .error-message {
-            text-align: center;
-            padding: 40px;
-            color: #ff4444;
-            font-size: 18px;
+        .danger { border-color: var(--ddb-danger) !important; color: #ffc4c4 !important; background: rgba(211,91,91,0.15) !important; }
+        .ddb-mini { padding: 3px 7px; font-size: 11px; }
+
+        .ddb-detail-backdrop {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9000;
         }
-        .loading-message {
-            text-align: center;
-            padding: 40px;
-            color: #ffaa44;
-            font-size: 18px;
+        .ddb-detail-backdrop.open { display: block; }
+        .ddb-detail-drawer {
+            position: fixed; top: 0; right: 0; width: min(400px, 100vw); height: 100vh;
+            background: linear-gradient(180deg, #152032 0%, #0c121c 100%);
+            border-left: 2px solid var(--ddb-gold);
+            box-shadow: -12px 0 40px rgba(0,0,0,0.55);
+            z-index: 9001; transform: translateX(105%); transition: transform 0.22s ease;
+            display: flex; flex-direction: column;
+        }
+        .ddb-detail-drawer.open { transform: translateX(0); }
+        .ddb-detail-head {
+            padding: 14px 16px 10px; border-bottom: 1px solid var(--ddb-border);
+            display: flex; justify-content: space-between; gap: 12px; align-items: flex-start;
+        }
+        .ddb-detail-title { margin: 0; font-family: "Orbitron", sans-serif; font-size: 18px; color: var(--ddb-gold); line-height: 1.15; }
+        .ddb-detail-sub { margin-top: 4px; color: var(--ddb-muted); font-size: 12px; }
+        .ddb-detail-close {
+            background: transparent; border: 1px solid var(--ddb-border); color: var(--ddb-text);
+            border-radius: 6px; width: 32px; height: 32px; font-size: 18px; line-height: 1;
+        }
+        .ddb-detail-actions {
+            padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--ddb-border);
+        }
+        .ddb-detail-actions .ddb-btn.primary { background: #1f6b4a; border-color: #3ecf8e; color: #fff; }
+        .ddb-detail-body { padding: 12px 16px 20px; overflow: auto; flex: 1; font-size: 13px; line-height: 1.5; }
+        .ddb-detail-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 12px; }
+        .ddb-detail-meta div {
+            background: rgba(255,255,255,0.04); border: 1px solid var(--ddb-border); border-radius: 6px; padding: 7px 9px;
+        }
+        .ddb-detail-meta span { display: block; font-size: 10px; text-transform: uppercase; color: var(--ddb-muted); letter-spacing: 0.04em; }
+        .ddb-detail-meta strong { font-size: 12px; }
+        .ddb-detail-desc { white-space: pre-wrap; }
+        .ddb-detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+        .ddb-detail-tags span {
+            border: 1px solid var(--ddb-border); border-radius: 999px; padding: 3px 9px; font-size: 11px; color: var(--ddb-muted);
+        }
+        .ddb-adv-menu {
+            display: none; position: fixed; z-index: 9500; min-width: 180px;
+            background: #121925; border: 1px solid var(--ddb-gold); border-radius: 8px;
+            box-shadow: 0 10px 28px rgba(0,0,0,0.5); padding: 6px;
+        }
+        .ddb-adv-menu.open { display: block; }
+        .ddb-adv-menu button {
+            display: block; width: 100%; text-align: left; background: transparent; border: none;
+            color: var(--ddb-text); padding: 8px 10px; border-radius: 6px; font-size: 13px; font-weight: 700;
+        }
+        .ddb-adv-menu button:hover { background: rgba(212,176,74,0.16); }
+        .ddb-adv-menu .hint { padding: 4px 10px 8px; font-size: 11px; color: var(--ddb-muted); }
+
+        @media (max-width: 1280px) {
+            .shell { grid-template-columns: 1fr 210px; }
+            .ddb-layout { grid-template-columns: 150px 170px minmax(0, 1fr) 150px; }
+        }
+        @media (max-width: 1100px) {
+            .shell { grid-template-columns: 1fr; height: auto; min-height: 100vh; overflow: auto; }
+            body { overflow: auto; height: auto; }
+            .sheet-wrap { height: auto; max-height: none; overflow: visible; }
+            #characterSheetContent { overflow: visible; }
+            .ddb-sheet { height: auto; }
+            .ddb-layout { grid-template-columns: 1fr 1fr; height: auto; }
+            .ddb-topstats { grid-template-columns: 1fr; }
+            .standalone-rolls-panel { max-height: 220px; }
+        }
+        @media (max-width: 720px) {
+            .ddb-layout { grid-template-columns: 1fr; }
+            .ddb-abilities, .ddb-vitals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
     </style>
 </head>
 <body>
-    <div class="character-sheet-container">
-        <div class="sheet-main">
-            <div class="header">
+    <div class="shell">
+        <div class="sheet-wrap">
+            <div class="toolbar">
                 <h1 id="sheetTitle">Character Sheet</h1>
-                <button class="refresh-btn" onclick="refreshCharacterSheet()">🔄 Refresh</button>
+                <button class="refresh-btn" type="button" onclick="refreshCharacterSheet()">Refresh</button>
             </div>
             <div id="characterSheetContent">
                 <div class="loading-message">Loading character sheet...</div>
             </div>
         </div>
         <div class="standalone-rolls-panel">
-            <h3>🎲 Rolls log</h3>
+            <h3>Rolls log</h3>
             <div id="standaloneRollsLog">
-                <div style="opacity: 0.6; font-size: 13px; text-align: center; padding: 16px; font-style: italic;">Rolls for this character will appear here...</div>
+                <div style="opacity:0.6;font-size:13px;text-align:center;padding:16px;font-style:italic;">Rolls for this character will appear here...</div>
             </div>
         </div>
     </div>
 
-    <!-- Spell Tooltip (needed for spell/ability tooltips) -->
-    <div id="spellTooltip" onmouseover="keepSpellTooltip()" onmouseout="hideSpellTooltip()" style="
-        display: none; 
-        position: fixed; 
-        background: linear-gradient(135deg, #2a1a4a 0%, #1a0a2e 100%); 
-        border: 2px solid #aa88ff; 
-        border-radius: 8px; 
-        padding: 15px; 
-        max-width: 400px; 
-        min-width: 250px;
-        z-index: 200000; 
-        box-shadow: 0 8px 32px rgba(170,136,255,0.5); 
-        color: #fff; 
-        font-size: 13px; 
-        line-height: 1.6;
-        pointer-events: auto;">
+    <div id="ddbDetailBackdrop" class="ddb-detail-backdrop" onclick="closeDetailDrawer()"></div>
+    <aside id="ddbDetailDrawer" class="ddb-detail-drawer" aria-hidden="true">
+        <div class="ddb-detail-head">
+            <div>
+                <h2 id="ddbDetailTitle" class="ddb-detail-title">Details</h2>
+                <div id="ddbDetailSub" class="ddb-detail-sub"></div>
+            </div>
+            <button type="button" class="ddb-detail-close" onclick="closeDetailDrawer()" aria-label="Close">×</button>
+        </div>
+        <div id="ddbDetailActions" class="ddb-detail-actions"></div>
+        <div id="ddbDetailBody" class="ddb-detail-body"></div>
+    </aside>
+    <div id="ddbAdvMenu" class="ddb-adv-menu" role="menu"></div>
+
+    <div id="spellTooltip" onmouseover="keepSpellTooltip()" onmouseout="hideSpellTooltip()" style="display:none;position:fixed;background:linear-gradient(135deg,#2a1a4a 0%,#1a0a2e 100%);border:2px solid #aa88ff;border-radius:8px;padding:15px;max-width:400px;min-width:250px;z-index:200000;box-shadow:0 8px 32px rgba(170,136,255,0.5);color:#fff;font-size:13px;line-height:1.6;pointer-events:auto;">
         <div id="spellTooltipContent">Loading...</div>
-        <div style="text-align: center; font-size: 10px; opacity: 0.5; margin-top: 10px;">📚 Powered by Open5e API</div>
     </div>
 
+    <script src="/static/js/beyond-sheet.js?v=196"></script>
     <script>
-        // Standalone character sheet: all clickable roll/tooltip handlers run here and forward to parent via postMessage.
-        // Do NOT load app.js in this window so these handlers are never overwritten.
+        var characterData = null;
+        var characterFullData = null;
+        var characterParsed = null;
+        var computedSheet = null;
+        var lastTimestamp = 0;
+        var activeTab = 'actions';
+        var powerFilter = { tech: 'all', force: 'all' };
+        var powerUses = {};
+        var spellTooltipTimeout = null;
+        var openDetailContext = null;
+        var pendingAdvRoll = null;
+        var localItemIconIndex = null;
+        var localTechPowerIcons = null;
+        var localForcePowerIcons = null;
+        var localPowerMeta = null;
+        var iconsLoading = false;
+        var iconWaiters = [];
+        var FALLBACK_ITEM_ICON = '/static/sw5e-assets/packs/Icons/item-bag.webp';
 
-        function sendRollToParent(rollType, params) {
-            const parent = window.opener;
-            if (parent && parent !== window && !parent.closed) {
-                parent.postMessage({
-                    type: 'characterSheetRoll',
-                    rollType: rollType,
-                    ...params
-                }, window.location.origin);
-                return true;
-            }
-            console.warn('⚠️ Parent window not available');
-            alert('⚠️ Cannot roll dice: Parent game window is not available. Please keep the main game window open.');
-            return false;
+        function iconKey(name) {
+            return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         }
 
-        // Roll handlers (forward to parent)
-        window.rollAbilityCheck = function(ability, modifier, characterName) {
-            sendRollToParent('abilityCheck', { ability, modifier, characterName });
-        };
-        window.rollSavingThrow = function(ability, modifier, characterName) {
-            sendRollToParent('savingThrow', { ability, modifier, characterName });
-        };
-        window.rollSkill = function(skillName, modifier, characterName) {
-            sendRollToParent('skill', { skillName, modifier, characterName });
-        };
-        window.rollAttack = function(weaponName, toHitMod, damageNotation, damageType, characterName) {
-            sendRollToParent('attack', { weaponName, toHitMod, damageNotation, damageType, characterName });
-        };
-        window.rollActionFromSheet = function(index) {
-            sendRollToParent('actionFromSheet', { index: index });
-        };
-        window.resetLegendaryActions = function(enemyId, storageKey) {
-            sendRollToParent('resetLegendaryActions', { enemyId: enemyId, storageKey: storageKey });
-        };
-
-        // rollDice: run locally so inline onclicks like "const dmgResult = rollDice('2d6'); addLogEntry(...)" work; addLogEntry sends to parent
-        window.rollDice = function(notation) {
-            const flatMatch = (notation || '').match(/^(\d+)$/);
-            if (flatMatch) {
-                return { total: parseInt(flatMatch[1], 10), rolls: [], breakdown: String(notation) };
-            }
-            const match = (notation || '').match(/(\d+)d(\d+)([+-]\d+)?/i);
-            if (!match) {
-                return { total: 0, rolls: [], breakdown: String(notation) };
-            }
-            const numDice = parseInt(match[1], 10);
-            const diceSize = parseInt(match[2], 10);
-            const modifier = match[3] ? parseInt(match[3], 10) : 0;
-            let rolls = [];
-            let total = modifier;
-            for (let i = 0; i < numDice; i++) {
-                const r = Math.floor(Math.random() * diceSize) + 1;
-                rolls.push(r);
-                total += r;
-            }
-            const breakdown = '(' + rolls.join('+') + ')' + (modifier !== 0 ? (modifier >= 0 ? '+' + modifier : modifier) : '') + ' = ' + total;
-            return { total, rolls, breakdown };
-        };
-        window.addLogEntry = function(text, type) {
-            sendRollToParent('addLogEntry', { text: String(text), type: type || 'info' });
-        };
-
-        // Tooltips: show in this window (no app.js dependency)
-        let spellTooltipTimeout = null;
-        window.showSpellTooltip = function(spellName, event) {
-            const tooltip = document.getElementById('spellTooltip');
-            const content = document.getElementById('spellTooltipContent');
-            if (!tooltip || !content) return;
-            if (spellTooltipTimeout) {
-                clearTimeout(spellTooltipTimeout);
-                spellTooltipTimeout = null;
-            }
-            content.innerHTML = '<div style="padding:12px; white-space:pre-wrap;">' + escapeHtml(spellName) + '</div>';
-            tooltip.style.display = 'block';
-            tooltip.style.left = (event.clientX + 15) + 'px';
-            tooltip.style.top = (event.clientY + 15) + 'px';
-        };
-        window.showAttackTooltip = function(description, event) {
-            const tooltip = document.getElementById('spellTooltip');
-            const content = document.getElementById('spellTooltipContent');
-            if (!tooltip || !content) return;
-            if (spellTooltipTimeout) {
-                clearTimeout(spellTooltipTimeout);
-                spellTooltipTimeout = null;
-            }
-            content.innerHTML = '<div style="padding:12px; white-space:pre-wrap; max-width:400px;">' + escapeHtml(description) + '</div>';
-            tooltip.style.display = 'block';
-            tooltip.style.left = (event.clientX + 15) + 'px';
-            tooltip.style.top = (event.clientY + 15) + 'px';
-        };
-        window.hideSpellTooltip = function() {
-            const tooltip = document.getElementById('spellTooltip');
-            if (!tooltip) return;
-            spellTooltipTimeout = setTimeout(function() {
-                tooltip.style.display = 'none';
-                spellTooltipTimeout = null;
-            }, 150);
-        };
-        window.keepSpellTooltip = function() {
-            if (spellTooltipTimeout) {
-                clearTimeout(spellTooltipTimeout);
-                spellTooltipTimeout = null;
-            }
-        };
-        function escapeHtml(text) {
-            if (!text) return '';
-            var div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+        function powerUsesStorageKey() {
+            return 'beyondPowerUses_' + (charId() || charName() || 'unknown');
         }
 
-        // Character sheet data and load (no app.js – we always use stored HTML from parent)
-        let characterData = null;
-        let characterFullData = null;
-        let lastTimestamp = 0;
-
-        function loadCharacterSheet() {
+        function loadPowerUses() {
             try {
-                const stored = sessionStorage.getItem('characterSheetData');
-                if (!stored) {
-                    document.getElementById('characterSheetContent').innerHTML = 
-                        '<div class="error-message">❌ No character data found. Please open the character sheet from the main game window.</div>';
-                    return;
-                }
-
-                const data = JSON.parse(stored);
-                characterData = data.character;
-                characterFullData = data.fullData || data.characterData;
-
-                if (!characterData) {
-                    document.getElementById('characterSheetContent').innerHTML = 
-                        '<div class="error-message">❌ Invalid character data.</div>';
-                    return;
-                }
-
-                // Set title
-                document.getElementById('sheetTitle').textContent = `${characterData.name} - Character Sheet`;
-
-                // If HTML is already rendered, use it directly (preferred method)
-                if (data.html) {
-                    document.getElementById('characterSheetContent').innerHTML = data.html;
-                    lastTimestamp = data.timestamp || 0;
-                    setupCharacterSheetRollHandlersInStandalone();
-                    setupDiceRollButtonsInStandalone();
-                } else {
-                    // Fallback: try to render using functions from app.js
-                    renderStandaloneCharacterSheet();
-                }
+                var raw = sessionStorage.getItem(powerUsesStorageKey());
+                powerUses = raw ? (JSON.parse(raw) || {}) : {};
             } catch (e) {
-                console.error('Error loading character sheet:', e);
-                document.getElementById('characterSheetContent').innerHTML = 
-                    '<div class="error-message">❌ Error loading character sheet: ' + e.message + '</div>';
+                powerUses = {};
             }
         }
 
-        function renderStandaloneCharacterSheet() {
-            // Standalone page does not load app.js; use simple fallback if no stored HTML
-            if (!characterData) {
-                document.getElementById('characterSheetContent').innerHTML =
-                    '<div class="error-message">❌ No character data available.</div>';
+        function savePowerUses() {
+            try {
+                sessionStorage.setItem(powerUsesStorageKey(), JSON.stringify(powerUses || {}));
+            } catch (e) {}
+        }
+
+        function loadPowerFilters() {
+            try {
+                powerFilter.tech = localStorage.getItem('beyondPowerFilter_tech') || 'all';
+                powerFilter.force = localStorage.getItem('beyondPowerFilter_force') || 'all';
+            } catch (e) {
+                powerFilter = { tech: 'all', force: 'all' };
+            }
+        }
+
+        function setPowerFilter(kind, tier) {
+            if (!kind) return;
+            powerFilter[kind] = tier || 'all';
+            try { localStorage.setItem('beyondPowerFilter_' + kind, powerFilter[kind]); } catch (e) {}
+            paintBeyondSheet();
+        }
+
+        function bumpPowerUse(powerType, name) {
+            var key = String(powerType || 'tech') + ':' + String(name || '').toLowerCase().trim();
+            if (!key || key === 'tech:' || key === 'force:') return 0;
+            powerUses[key] = (Number(powerUses[key]) || 0) + 1;
+            savePowerUses();
+            return powerUses[key];
+        }
+
+        function indexFromPowerRows(rows) {
+            var out = {};
+            var meta = {};
+            if (!Array.isArray(rows)) return { icons: out, meta: meta };
+            rows.forEach(function (row) {
+                if (!row || !row.name) return;
+                var url = '';
+                if (typeof row._icon_url_app === 'string') url = row._icon_url_app.trim();
+                if (!url && typeof row.img === 'string') url = row.img.trim();
+                if (!url) return;
+                var k = iconKey(row.name);
+                out[k] = url;
+                out[String(row.name).toLowerCase().trim()] = url;
+                meta[k] = {
+                    name: row.name,
+                    level: row.level || '',
+                    casting: row.casting_time || row.casting_period || '',
+                    range: row.range || '',
+                    duration: row.duration || ''
+                };
+            });
+            return { icons: out, meta: meta };
+        }
+
+        function lookupIndexedIcon(map, name) {
+            if (!map || !name) return '';
+            var lower = String(name).toLowerCase().trim();
+            var key = iconKey(name);
+            if (map[lower]) return map[lower];
+            if (map[key]) return map[key];
+            var exact = '';
+            var bestKey = '';
+            var bestExtra = Infinity;
+            Object.keys(map).forEach(function (k) {
+                var ck = iconKey(k);
+                if (!ck) return;
+                if (ck === key) {
+                    exact = k;
+                    return;
+                }
+                if (exact) return;
+                if (ck.indexOf(key) !== 0) return;
+                var extra = ck.length - key.length;
+                // Allow short suffixes (Push/Pull → pushpull) but not unrelated compounds (Burst → BurstOfFlame).
+                if (extra > 0 && extra <= 4 && extra < bestExtra) {
+                    bestKey = k;
+                    bestExtra = extra;
+                }
+            });
+            if (exact) return map[exact];
+            return bestKey ? map[bestKey] : '';
+        }
+
+        function ensureSheetIcons(done) {
+            if (localItemIconIndex && localTechPowerIcons && localForcePowerIcons) {
+                done();
                 return;
             }
-            renderSimpleCharacterSheet();
-        }
+            if (iconsLoading) { iconWaiters.push(done); return; }
+            iconsLoading = true;
+            var p = parentWin();
+            if (p && p.itemIconIndex) localItemIconIndex = p.itemIconIndex;
 
-        function renderSimpleCharacterSheet() {
-            const char = characterData;
+            var jobs = [];
+            if (!localItemIconIndex) {
+                jobs.push(
+                    fetch('/static/data/item-icon-index.json')
+                        .then(function (r) { return r.ok ? r.json() : {}; })
+                        .then(function (data) { localItemIconIndex = data && typeof data === 'object' ? data : {}; })
+                        .catch(function () { localItemIconIndex = {}; })
+                );
+            }
+            jobs.push(
+                fetch('/static/data/sw5e_compendium/techpowers_from_packs.json')
+                    .then(function (r) { return r.ok ? r.json() : []; })
+                    .then(function (rows) {
+                        var parsed = indexFromPowerRows(rows);
+                        localTechPowerIcons = parsed.icons;
+                        localPowerMeta = Object.assign({}, localPowerMeta || {}, parsed.meta);
+                    })
+                    .catch(function () { localTechPowerIcons = {}; })
+            );
+            jobs.push(
+                fetch('/static/data/sw5e_compendium/force_powers_from_packs.json')
+                    .then(function (r) { return r.ok ? r.json() : []; })
+                    .then(function (rows) {
+                        var parsed = indexFromPowerRows(rows);
+                        localForcePowerIcons = parsed.icons;
+                        localPowerMeta = Object.assign({}, localPowerMeta || {}, parsed.meta);
+                    })
+                    .catch(function () { localForcePowerIcons = {}; })
+            );
 
-            if (!char) return;
-
-            let html = `
-                <div style="background: rgba(0, 0, 0, 0.3); padding: 20px; border-radius: 10px; margin-bottom: 20px;">
-                    <h2 style="color: #4a9eff; margin-top: 0;">${escapeHtml(char.name || 'Unknown')}</h2>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
-                        <div><strong>Class:</strong> ${escapeHtml(char.class || 'N/A')}</div>
-                        <div><strong>Level:</strong> ${char.level || 0}</div>
-                        <div><strong>HP:</strong> ${char.current_hp || 0} / ${char.max_hp || 0}</div>
-                        <div><strong>AC:</strong> ${char.armor_class || 0}</div>
-                    </div>
-                </div>
-                <div style="color: #ffaa44; text-align: center; padding: 20px;">
-                    ⚠️ Full character sheet rendering requires the main game window.<br>
-                    Please keep the main game window open and refresh this page to see updates.
-                </div>
-            `;
-
-            document.getElementById('characterSheetContent').innerHTML = html;
-        }
-
-        function escapeHtml(text) {
-            if (!text) return '';
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function refreshCharacterSheet() {
-            // Reload from sessionStorage (parent window should update it)
-            loadCharacterSheet();
-        }
-
-        // Character sheet roll buttons (ability, skill, save, attack): forward to parent
-        function setupCharacterSheetRollHandlersInStandalone() {
-            const content = document.getElementById('characterSheetContent');
-            if (!content || content._standaloneSheetRollAttached) return;
-            content._standaloneSheetRollAttached = true;
-            content.addEventListener('click', function(e) {
-                const el = e.target.closest('[data-sheet-roll]');
-                if (!el) return;
-                e.preventDefault();
-                e.stopPropagation();
-                const kind = el.getAttribute('data-sheet-roll');
-                const charName = el.getAttribute('data-char-name') || (characterData && characterData.name) || '';
-                if (!charName) return;
-                if (kind === 'ability') {
-                    sendRollToParent('abilityCheck', { ability: el.getAttribute('data-ability'), modifier: parseInt(el.getAttribute('data-mod'), 10) || 0, characterName: charName });
-                } else if (kind === 'skill') {
-                    sendRollToParent('skill', { skillName: el.getAttribute('data-skill-name') || '', modifier: parseInt(el.getAttribute('data-mod'), 10) || 0, characterName: charName });
-                } else if (kind === 'save') {
-                    sendRollToParent('savingThrow', { ability: el.getAttribute('data-ability'), modifier: parseInt(el.getAttribute('data-mod'), 10) || 0, characterName: charName });
-                } else if (kind === 'attack') {
-                    sendRollToParent('attack', {
-                        weaponName: el.getAttribute('data-weapon') || '',
-                        toHitMod: parseInt(el.getAttribute('data-to-hit'), 10) || 0,
-                        damageNotation: el.getAttribute('data-damage') || '',
-                        damageType: el.getAttribute('data-damage-type') || '',
-                        characterName: charName
-                    });
-                }
-            }, true);
-        }
-
-        // Dice tray (D4, D6, D8, D10, D12, D20, D100): wire clicks so they run in parent
-        function setupDiceRollButtonsInStandalone() {
-            const content = document.getElementById('characterSheetContent');
-            if (!content) return;
-            const container = content.querySelector('.dice-roll-container');
-            if (!container) return;
-            const characterName = container.getAttribute('data-character-name') || (characterData && characterData.name) || 'Character';
-            container.addEventListener('click', function(e) {
-                const btn = e.target.closest('.dice-roll-button');
-                if (!btn) return;
-                e.preventDefault();
-                e.stopPropagation();
-                const sides = parseInt(btn.getAttribute('data-sides'), 10);
-                const name = container.getAttribute('data-character-name') || characterName;
-                if (sides && name) sendRollToParent('flatDice', { sides: sides, characterName: name });
+            Promise.all(jobs).then(function () {
+                if (!localItemIconIndex) localItemIconIndex = {};
+                if (!localTechPowerIcons) localTechPowerIcons = {};
+                if (!localForcePowerIcons) localForcePowerIcons = {};
+                if (!localPowerMeta) localPowerMeta = {};
+                iconsLoading = false;
+                done();
+                while (iconWaiters.length) iconWaiters.shift()();
             });
         }
 
-        // Add a roll entry to the standalone rolls log (only for this character's rolls)
-        function appendRollToStandaloneLog(text, isNat20, isNat1) {
-            const charName = (characterData && characterData.name) ? characterData.name : '';
-            if (!charName || text.indexOf(charName) === -1) return;
-            const log = document.getElementById('standaloneRollsLog');
-            if (!log) return;
-            const placeholder = log.querySelector('div[style*="opacity: 0.6"]');
-            if (placeholder) placeholder.remove();
-            const entry = document.createElement('div');
-            entry.className = 'roll-entry ' + (isNat20 ? 'nat20' : isNat1 ? 'nat1' : 'normal');
-            const ts = new Date().toLocaleTimeString();
-            const escaped = (function(s) {
-                const d = document.createElement('div');
-                d.textContent = s;
-                return d.innerHTML;
-            })(text);
-            entry.innerHTML = '<span style="opacity:0.7;font-size:11px;margin-right:8px;">[' + ts + ']</span> ' + escaped;
-            log.appendChild(entry);
-            log.scrollTop = log.scrollHeight;
-            const maxEntries = 100;
-            while (log.children.length > maxEntries) log.removeChild(log.firstChild);
+        function ensureItemIconIndex(done) {
+            ensureSheetIcons(function () { done(localItemIconIndex || {}); });
         }
 
-        // Listen for messages from parent window
-        window.addEventListener('message', (event) => {
-            // Only accept messages from same origin
+        function buildIconsMap(index) {
+            var items = {};
+            var powers = {};
+            var powerMeta = {};
+            var p = parentWin();
+            var idx = index || localItemIconIndex || {};
+
+            function putItem(name) {
+                if (!name) return;
+                var url = '';
+                if (p && typeof p.itemIconUrl === 'function') {
+                    try { url = p.itemIconUrl(name) || ''; } catch (e) {}
+                }
+                if (!url) url = lookupIndexedIcon(idx, name);
+                if (!url) url = FALLBACK_ITEM_ICON;
+                items[String(name).toLowerCase().trim()] = url;
+                items[iconKey(name)] = url;
+            }
+
+            var gear = [];
+            if (characterParsed && characterParsed.equipment) {
+                gear = Array.isArray(characterParsed.equipment) ? characterParsed.equipment : (characterParsed.equipment.items || []);
+            }
+            gear.forEach(function (it) {
+                putItem(typeof it === 'string' ? it : (it && (it.name || it.Name)));
+            });
+            var attacks = (computedSheet && computedSheet.attacks) || (characterParsed && characterParsed.attacks) || [];
+            attacks.forEach(function (a) { putItem(a && (a.name || a.weapon_name)); });
+
+            function putPower(name, type) {
+                if (!name) return;
+                var row = null;
+                var url = '';
+                try {
+                    if (p) {
+                        if (type === 'force' && typeof p.findForcePowerInCacheGlobal === 'function') row = p.findForcePowerInCacheGlobal(name);
+                        else if (typeof p.findTechPowerInCacheGlobal === 'function') row = p.findTechPowerInCacheGlobal(name);
+                        if (row && typeof p.resolveDisplayedSw5ePowerIconUrl === 'function') {
+                            url = p.resolveDisplayedSw5ePowerIconUrl(row) || '';
+                        }
+                        if (!url && row) url = row._icon_url_app || '';
+                    }
+                } catch (e) {}
+                var localMap = type === 'force' ? localForcePowerIcons : localTechPowerIcons;
+                if (!url) url = lookupIndexedIcon(localMap, name);
+                if (!url && type === 'tech') url = lookupIndexedIcon(localForcePowerIcons, name);
+                if (!url && type === 'force') url = lookupIndexedIcon(localTechPowerIcons, name);
+                if (url) {
+                    powers[String(name).toLowerCase().trim()] = url;
+                    powers[iconKey(name)] = url;
+                }
+                var meta = (localPowerMeta && (localPowerMeta[iconKey(name)] || null)) || null;
+                if (!meta && localPowerMeta) {
+                    var want = iconKey(name);
+                    Object.keys(localPowerMeta).forEach(function (k) {
+                        if (meta) return;
+                        if (k === want || k.indexOf(want) === 0) meta = localPowerMeta[k];
+                    });
+                }
+                if (meta) {
+                    powerMeta[String(name).toLowerCase().trim()] = meta;
+                    powerMeta[iconKey(name)] = meta;
+                }
+            }
+
+            function powerList(pool) {
+                if (!characterParsed) return [];
+                var top = pool === 'tech'
+                    ? (characterParsed.techPowers || characterParsed.tech_powers || [])
+                    : (characterParsed.forcePowers || characterParsed.force_powers || []);
+                var names = [];
+                (top || []).forEach(function (n) {
+                    var nm = typeof n === 'string' ? n : (n && n.name);
+                    if (nm && names.indexOf(nm) === -1) names.push(nm);
+                });
+                if (Array.isArray(characterParsed.classes)) {
+                    characterParsed.classes.forEach(function (cls) {
+                        var arr = pool === 'tech' ? cls.techPowers : cls.forcePowers;
+                        (arr || []).forEach(function (n) {
+                            var nm = typeof n === 'string' ? n : (n && n.name);
+                            if (nm && names.indexOf(nm) === -1) names.push(nm);
+                        });
+                    });
+                }
+                return names;
+            }
+            (powerList('tech') || []).forEach(function (n) { putPower(n, 'tech'); });
+            (powerList('force') || []).forEach(function (n) { putPower(n, 'force'); });
+            return { items: items, powers: powers, powerMeta: powerMeta, fallbackItem: FALLBACK_ITEM_ICON };
+        }
+
+        function sendToParent(rollType, params) {
+            var parent = window.opener;
+            if (parent && parent !== window && !parent.closed) {
+                parent.postMessage(Object.assign({ type: 'characterSheetRoll', rollType: rollType }, params || {}), window.location.origin);
+                return true;
+            }
+            alert('Keep the main game window open so this sheet can sync rolls and changes.');
+            return false;
+        }
+
+        function charName() {
+            return (window.BeyondSheet && BeyondSheet.displayName(characterData, characterParsed)) || (characterData && characterData.name) || 'Character';
+        }
+
+        function charId() {
+            return characterData && characterData.id;
+        }
+
+        function escHtml(text) {
+            if (text == null) return '';
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function parentWin() {
+            var p = window.opener;
+            return (p && p !== window && !p.closed) ? p : null;
+        }
+
+        function cacheLookup(cache, name) {
+            if (!cache || !name) return null;
+            var key = String(name).toLowerCase().trim().replace(/\s+/g, ' ');
+            if (cache[key]) return cache[key];
+            var keys = Object.keys(cache);
+            for (var i = 0; i < keys.length; i++) {
+                var k = keys[i].toLowerCase().trim().replace(/\s+/g, ' ');
+                if (k === key || k.indexOf(key) !== -1 || key.indexOf(k) !== -1) return cache[keys[i]];
+            }
+            return null;
+        }
+
+        function findCatalogItem(name) {
+            var p = parentWin();
+            if (!p) return null;
+            return cacheLookup(p.weaponsCache, name) || cacheLookup(p.armorCache, name) || cacheLookup(p.gearCache, name) || cacheLookup(p.itemsCache, name);
+        }
+
+        function findPower(name, powerType) {
+            var p = parentWin();
+            if (!p) return null;
+            if (powerType === 'force') {
+                if (typeof p.findForcePowerInCacheGlobal === 'function') return p.findForcePowerInCacheGlobal(name);
+                return cacheLookup(p.forcePowersCache, name);
+            }
+            if (typeof p.findTechPowerInCacheGlobal === 'function') return p.findTechPowerInCacheGlobal(name);
+            return cacheLookup(p.techPowersCache, name) || cacheLookup(p.forcePowersCache, name);
+        }
+
+        function pickField(obj, keys) {
+            if (!obj) return '';
+            for (var i = 0; i < keys.length; i++) {
+                var v = obj[keys[i]];
+                if (v != null && String(v).trim() !== '') return v;
+            }
+            return '';
+        }
+
+        function openDetailDrawer(model) {
+            openDetailContext = model || null;
+            var drawer = document.getElementById('ddbDetailDrawer');
+            var backdrop = document.getElementById('ddbDetailBackdrop');
+            document.getElementById('ddbDetailTitle').textContent = model.title || 'Details';
+            document.getElementById('ddbDetailSub').textContent = model.subtitle || '';
+            var actions = document.getElementById('ddbDetailActions');
+            actions.innerHTML = '';
+            (model.actions || []).forEach(function (a) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'ddb-btn' + (a.primary ? ' primary' : '');
+                btn.textContent = a.label;
+                btn.addEventListener('click', function () { a.onClick(); });
+                actions.appendChild(btn);
+            });
+            var body = document.getElementById('ddbDetailBody');
+            var html = '';
+            if (model.meta && model.meta.length) {
+                html += '<div class="ddb-detail-meta">';
+                model.meta.forEach(function (m) {
+                    html += '<div><span>' + escHtml(m.label) + '</span><strong>' + escHtml(m.value) + '</strong></div>';
+                });
+                html += '</div>';
+            }
+            if (model.description) html += '<div class="ddb-detail-desc">' + escHtml(model.description) + '</div>';
+            if (model.tags && model.tags.length) {
+                html += '<div class="ddb-detail-tags">';
+                model.tags.forEach(function (t) { html += '<span>' + escHtml(t) + '</span>'; });
+                html += '</div>';
+            }
+            if (!model.description && !(model.meta && model.meta.length)) {
+                html += '<div class="ddb-detail-desc">No catalog details found for this entry yet.</div>';
+            }
+            body.innerHTML = html;
+            drawer.classList.add('open');
+            backdrop.classList.add('open');
+            drawer.setAttribute('aria-hidden', 'false');
+        }
+
+        function closeDetailDrawer() {
+            openDetailContext = null;
+            var drawer = document.getElementById('ddbDetailDrawer');
+            var backdrop = document.getElementById('ddbDetailBackdrop');
+            drawer.classList.remove('open');
+            backdrop.classList.remove('open');
+            drawer.setAttribute('aria-hidden', 'true');
+        }
+
+        function showDetailFromEl(el) {
+            var kind = el.getAttribute('data-beyond-detail');
+            var name = el.getAttribute('data-name') || '';
+            if (kind === 'power') {
+                var powerType = el.getAttribute('data-power-type') || 'tech';
+                var row = findPower(name, powerType) || {};
+                var casting = pickField(row, ['casting_time', 'castingTime', 'activation', 'time']) || '1 action';
+                var range = pickField(row, ['range', 'powerrange', 'Range']) || '—';
+                var duration = pickField(row, ['duration', 'Duration']) || '—';
+                var level = pickField(row, ['level', 'power_level', 'Level']) || (powerType === 'tech' ? 'Tech power' : 'Force power');
+                var comps = pickField(row, ['components', 'Components']) || '';
+                var desc = pickField(row, ['description', 'desc', 'text', 'content']) || '';
+                openDetailDrawer({
+                    title: name,
+                    subtitle: (powerType === 'force' ? 'Force' : 'Tech') + ' · ' + level,
+                    meta: [
+                        { label: 'Casting Time', value: casting },
+                        { label: 'Range / Area', value: range },
+                        { label: 'Duration', value: duration },
+                        { label: 'Components', value: comps || '—' }
+                    ],
+                    description: desc,
+                    tags: [powerType === 'force' ? 'Force' : 'Tech', level].filter(Boolean),
+                    actions: [
+                        {
+                            label: /at-will|at will/i.test(String(level)) || String(level) === '0' ? 'Use At-will' : 'Cast',
+                            primary: true,
+                            onClick: function () {
+                                var tierInfo = (function () {
+                                    var s = String(level || '').trim().toLowerCase();
+                                    if (!s || s === 'at-will' || s === 'at will' || s === '0') return 0;
+                                    var m = s.match(/(\d+)/);
+                                    return m ? parseInt(m[1], 10) : 0;
+                                })();
+                                var cost = tierInfo > 0 ? tierInfo : 0;
+                                var pts = (computedSheet && (powerType === 'force' ? computedSheet.forcePts : computedSheet.techPts)) || { current: 0, max: 0 };
+                                if (cost > 0 && Number(pts.current || 0) < cost) {
+                                    alert('Not enough ' + (powerType === 'force' ? 'Force' : 'Tech') + ' points (need ' + cost + ', have ' + (pts.current || 0) + ').');
+                                    return;
+                                }
+                                if (cost > 0) sendToParent('resourceDelta', { pool: powerType, delta: -cost, characterId: charId() });
+                                bumpPowerUse(powerType, name);
+                                sendToParent('powerTarget', { powerType: powerType, powerName: name, characterName: charName() });
+                                sendToParent('addLogEntry', {
+                                    text: charName() + ' uses ' + name + (cost > 0 ? (' (−' + cost + ' ' + (powerType === 'force' ? 'FP' : 'TP') + ')') : ' (at-will)'),
+                                    type: 'info'
+                                });
+                                closeDetailDrawer();
+                                paintBeyondSheet();
+                            }
+                        }
+                    ]
+                });
+                return;
+            }
+            if (kind === 'item') {
+                var item = findCatalogItem(name) || {};
+                var itype = pickField(item, ['type', 'item_type', 'armor_type', 'weapon_type']) || 'Item';
+                var dmg = pickField(item, ['damage', 'Damage']);
+                var ac = pickField(item, ['ac', 'armor_class', 'AC']);
+                var props = pickField(item, ['properties', 'Properties']);
+                var cost = pickField(item, ['cost', 'Cost', 'price']);
+                var weight = pickField(item, ['weight', 'Weight']);
+                var idesc = pickField(item, ['description', 'desc', 'text', 'content']);
+                var meta = [{ label: 'Type', value: itype }];
+                if (dmg) meta.push({ label: 'Damage', value: dmg });
+                if (ac) meta.push({ label: 'AC', value: ac });
+                if (props) meta.push({ label: 'Properties', value: props });
+                if (cost) meta.push({ label: 'Cost', value: String(cost) + (String(cost).indexOf('credit') === -1 ? ' credits' : '') });
+                if (weight) meta.push({ label: 'Weight', value: String(weight) });
+                var idx = el.getAttribute('data-index');
+                openDetailDrawer({
+                    title: name,
+                    subtitle: itype,
+                    meta: meta,
+                    description: idesc,
+                    tags: [itype],
+                    actions: idx != null ? [
+                        {
+                            label: 'Toggle Equip',
+                            primary: true,
+                            onClick: function () {
+                                sendToParent('equipToggle', { index: Number(idx), characterId: charId() });
+                            }
+                        }
+                    ] : []
+                });
+                return;
+            }
+            if (kind === 'feature') {
+                openDetailDrawer({
+                    title: name,
+                    subtitle: 'Feature & Trait',
+                    meta: [],
+                    description: el.getAttribute('data-content') || '',
+                    tags: ['Feature'],
+                    actions: [
+                        {
+                            label: 'Use',
+                            primary: true,
+                            onClick: function () {
+                                sendToParent('addLogEntry', { text: charName() + ' uses ' + name, type: 'info' });
+                                closeDetailDrawer();
+                            }
+                        }
+                    ]
+                });
+                return;
+            }
+            if (kind === 'attack') {
+                var toHit = el.getAttribute('data-to-hit') || '0';
+                var damage = el.getAttribute('data-damage') || '';
+                var dtype = el.getAttribute('data-damage-type') || '';
+                var range = el.getAttribute('data-range') || '';
+                var weapon = findCatalogItem(name) || {};
+                var wdesc = pickField(weapon, ['description', 'desc', 'text', 'content']);
+                openDetailDrawer({
+                    title: name,
+                    subtitle: 'Attack',
+                    meta: [
+                        { label: 'To Hit', value: (Number(toHit) >= 0 ? '+' : '') + toHit },
+                        { label: 'Damage', value: damage + (dtype ? ' ' + dtype : '') },
+                        { label: 'Range', value: range || '—' },
+                        { label: 'Properties', value: pickField(weapon, ['properties', 'Properties']) || '—' }
+                    ],
+                    description: wdesc,
+                    tags: ['Attack', dtype].filter(Boolean),
+                    actions: [
+                        {
+                            label: 'Attack',
+                            primary: true,
+                            onClick: function () {
+                                sendToParent('attack', {
+                                    weaponName: name,
+                                    toHitMod: Number(toHit) || 0,
+                                    damageNotation: damage,
+                                    damageType: dtype,
+                                    characterName: charName(),
+                                    range: range,
+                                    mode: 'normal'
+                                });
+                                closeDetailDrawer();
+                            }
+                        },
+                        {
+                            label: 'Attack (ADV)',
+                            onClick: function () {
+                                sendToParent('attack', {
+                                    weaponName: name,
+                                    toHitMod: Number(toHit) || 0,
+                                    damageNotation: damage,
+                                    damageType: dtype,
+                                    characterName: charName(),
+                                    range: range,
+                                    mode: 'advantage'
+                                });
+                                closeDetailDrawer();
+                            }
+                        },
+                        {
+                            label: 'Attack (DIS)',
+                            onClick: function () {
+                                sendToParent('attack', {
+                                    weaponName: name,
+                                    toHitMod: Number(toHit) || 0,
+                                    damageNotation: damage,
+                                    damageType: dtype,
+                                    characterName: charName(),
+                                    range: range,
+                                    mode: 'disadvantage'
+                                });
+                                closeDetailDrawer();
+                            }
+                        }
+                    ]
+                });
+            }
+        }
+
+        function fireRollFromEl(roll, mode) {
+            var kind = roll.getAttribute('data-beyond-roll');
+            var name = charName();
+            var m = mode || 'normal';
+            if (kind === 'ability') sendToParent('abilityCheck', { ability: roll.getAttribute('data-ability'), modifier: Number(roll.getAttribute('data-mod')) || 0, characterName: name, mode: m });
+            else if (kind === 'save') sendToParent('savingThrow', { ability: roll.getAttribute('data-ability'), modifier: Number(roll.getAttribute('data-mod')) || 0, characterName: name, mode: m });
+            else if (kind === 'skill') sendToParent('skill', { skillName: roll.getAttribute('data-skill'), modifier: Number(roll.getAttribute('data-mod')) || 0, characterName: name, mode: m });
+            else if (kind === 'initiative') sendToParent('abilityCheck', { ability: 'dex', modifier: Number(roll.getAttribute('data-mod')) || 0, characterName: name + ' (Initiative)', mode: m });
+            else if (kind === 'attack') sendToParent('attack', {
+                weaponName: roll.getAttribute('data-weapon') || '',
+                toHitMod: Number(roll.getAttribute('data-to-hit')) || 0,
+                damageNotation: roll.getAttribute('data-damage') || '',
+                damageType: roll.getAttribute('data-damage-type') || '',
+                characterName: name,
+                range: roll.getAttribute('data-range') || '',
+                mode: m
+            });
+            else if (kind === 'flat') sendToParent('flatDice', { sides: Number(roll.getAttribute('data-sides')) || 20, characterName: name });
+        }
+
+        function closeAdvMenu() {
+            pendingAdvRoll = null;
+            var menu = document.getElementById('ddbAdvMenu');
+            if (menu) menu.classList.remove('open');
+        }
+
+        function openAdvMenu(ev, rollEl) {
+            ev.preventDefault();
+            pendingAdvRoll = rollEl;
+            var menu = document.getElementById('ddbAdvMenu');
+            menu.innerHTML = '<div class="hint">Choose roll mode</div>' +
+                '<button type="button" data-mode="advantage">Advantage</button>' +
+                '<button type="button" data-mode="normal">Normal</button>' +
+                '<button type="button" data-mode="disadvantage">Disadvantage</button>';
+            menu.classList.add('open');
+            var x = Math.min(ev.clientX, window.innerWidth - 200);
+            var y = Math.min(ev.clientY, window.innerHeight - 160);
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+        }
+
+        function loadCharacterSheet() {
+            try {
+                var stored = sessionStorage.getItem('characterSheetData');
+                if (!stored) {
+                    document.getElementById('characterSheetContent').innerHTML = '<div class="error-message">No character data found. Open this sheet from the main game window.</div>';
+                    return;
+                }
+                var data = JSON.parse(stored);
+                characterData = data.character;
+                characterFullData = data.fullData || data.characterData;
+                characterParsed = data.characterData || (characterFullData && characterFullData.character) || characterFullData || null;
+                computedSheet = data.computed || null;
+                if (!characterData) {
+                    document.getElementById('characterSheetContent').innerHTML = '<div class="error-message">Invalid character data.</div>';
+                    return;
+                }
+                document.getElementById('sheetTitle').textContent = charName() + ' — Character Sheet';
+                lastTimestamp = data.timestamp || 0;
+                paintBeyondSheet();
+            } catch (e) {
+                console.error(e);
+                document.getElementById('characterSheetContent').innerHTML = '<div class="error-message">Error loading character sheet: ' + e.message + '</div>';
+            }
+        }
+
+        function paintBeyondSheet() {
+            var root = document.getElementById('characterSheetContent');
+            if (!window.BeyondSheet) {
+                root.innerHTML = '<div class="error-message">Beyond sheet renderer failed to load.</div>';
+                return;
+            }
+            ensureSheetIcons(function () {
+                loadPowerFilters();
+                loadPowerUses();
+                root.innerHTML = BeyondSheet.render({
+                    character: characterData,
+                    characterData: characterParsed || {},
+                    computed: computedSheet || {},
+                    icons: buildIconsMap(localItemIconIndex),
+                    tab: activeTab,
+                    powerFilter: powerFilter,
+                    powerUses: powerUses
+                });
+                wireBeyondSheet(root);
+                fillCatalogOptions();
+            });
+        }
+
+        function fillCatalogOptions() {
+            var list = document.getElementById('beyondItemCatalog');
+            if (!list || list.options.length) return;
+            var parent = parentWin();
+            try {
+                if (!parent) return;
+                var names = [];
+                [parent.weaponsCache, parent.armorCache, parent.gearCache, parent.itemsCache].forEach(function (cache) {
+                    if (!cache) return;
+                    Object.keys(cache).forEach(function (k) {
+                        var item = cache[k];
+                        var n = item && (item.name || item.Name);
+                        if (n) names.push(String(n));
+                    });
+                });
+                names.sort();
+                var seen = {};
+                names.forEach(function (n) {
+                    var key = n.toLowerCase();
+                    if (seen[key]) return;
+                    seen[key] = true;
+                    var opt = document.createElement('option');
+                    opt.value = n;
+                    list.appendChild(opt);
+                });
+            } catch (e) {}
+        }
+
+        function wireBeyondSheet(root) {
+            if (!root || root._beyondWired) return;
+            root._beyondWired = true;
+            root.addEventListener('click', function (ev) {
+                closeAdvMenu();
+                var filterBtn = ev.target.closest('[data-beyond-filter]');
+                if (filterBtn) {
+                    setPowerFilter(filterBtn.getAttribute('data-beyond-filter'), filterBtn.getAttribute('data-tier') || 'all');
+                    return;
+                }
+                var tabBtn = ev.target.closest('[data-beyond-tab]');
+                if (tabBtn) {
+                    activeTab = tabBtn.getAttribute('data-beyond-tab');
+                    paintBeyondSheet();
+                    return;
+                }
+                var action = ev.target.closest('[data-beyond-action]');
+                if (action) {
+                    var act = action.getAttribute('data-beyond-action');
+                    var id = charId();
+                    if (act === 'short-rest') sendToParent('rest', { long: false, characterId: id });
+                    else if (act === 'long-rest') sendToParent('rest', { long: true, characterId: id });
+                    else if (act === 'toggle-inspiration') sendToParent('inspirationToggle', { characterId: id });
+                    else if (act === 'use-tech') sendToParent('resourceDelta', { pool: 'tech', delta: -1, characterId: id });
+                    else if (act === 'use-force') sendToParent('resourceDelta', { pool: 'force', delta: -1, characterId: id });
+                    else if (act === 'restore-tech') sendToParent('rest', { long: false, characterId: id });
+                    else if (act === 'restore-force') sendToParent('rest', { long: true, characterId: id });
+                    else if (act === 'use-power') {
+                        var pname = action.getAttribute('data-name') || '';
+                        var ptype = action.getAttribute('data-power-type') || 'tech';
+                        var cost = Number(action.getAttribute('data-cost')) || 0;
+                        var pts = (computedSheet && (ptype === 'force' ? computedSheet.forcePts : computedSheet.techPts)) || { current: 0, max: 0 };
+                        if (cost > 0 && Number(pts.current || 0) < cost) {
+                            alert('Not enough ' + (ptype === 'force' ? 'Force' : 'Tech') + ' points (need ' + cost + ', have ' + (pts.current || 0) + ').');
+                            return;
+                        }
+                        if (cost > 0) sendToParent('resourceDelta', { pool: ptype, delta: -cost, characterId: id });
+                        bumpPowerUse(ptype, pname);
+                        sendToParent('powerTarget', { powerType: ptype, powerName: pname, characterName: charName() });
+                        sendToParent('addLogEntry', {
+                            text: charName() + ' uses ' + pname + (cost > 0 ? (' (−' + cost + ' ' + (ptype === 'force' ? 'FP' : 'TP') + ')') : ' (at-will)'),
+                            type: 'info'
+                        });
+                        paintBeyondSheet();
+                        return;
+                    }
+                    else if (act === 'save-credits') {
+                        var creditsInput = root.querySelector('.ddb-credits-input');
+                        sendToParent('inventoryCredits', { value: creditsInput ? creditsInput.value : 0, characterId: id });
+                    } else if (act === 'add-item') {
+                        var addInput = root.querySelector('.ddb-add-item');
+                        sendToParent('inventoryAdd', { name: addInput ? addInput.value : '', characterId: id });
+                    } else if (act === 'remove-item') sendToParent('inventoryRemove', { index: Number(action.getAttribute('data-index')), characterId: id });
+                    else if (act === 'toggle-equip') sendToParent('equipToggle', { index: Number(action.getAttribute('data-index')), characterId: id });
+                    else if (act === 'save-notes') {
+                        var notes = root.querySelector('.ddb-notes-edit');
+                        sendToParent('patchSheetFields', { characterId: id, fields: { notes: notes ? notes.value : '' } });
+                    } else if (act === 'add-condition') {
+                        var cin = root.querySelector('.ddb-add-condition');
+                        var cval = cin && cin.value.trim();
+                        if (!cval) return;
+                        var conditions = (characterParsed && Array.isArray(characterParsed.activeConditions)) ? characterParsed.activeConditions.slice() : [];
+                        conditions.push(cval);
+                        sendToParent('patchSheetFields', { characterId: id, fields: { activeConditions: conditions } });
+                    } else if (act === 'remove-condition') {
+                        var conditions2 = (characterParsed && Array.isArray(characterParsed.activeConditions)) ? characterParsed.activeConditions.slice() : [];
+                        conditions2.splice(Number(action.getAttribute('data-index')), 1);
+                        sendToParent('patchSheetFields', { characterId: id, fields: { activeConditions: conditions2 } });
+                    } else if (act === 'add-defense') {
+                        var din = root.querySelector('.ddb-add-defense');
+                        var dval = din && din.value.trim();
+                        if (!dval) return;
+                        var defenses = (characterParsed && Array.isArray(characterParsed.defenses)) ? characterParsed.defenses.slice() : [];
+                        defenses.push(dval);
+                        sendToParent('patchSheetFields', { characterId: id, fields: { defenses: defenses } });
+                    } else if (act === 'remove-defense') {
+                        var defenses2 = (characterParsed && Array.isArray(characterParsed.defenses)) ? characterParsed.defenses.slice() : [];
+                        defenses2.splice(Number(action.getAttribute('data-index')), 1);
+                        sendToParent('patchSheetFields', { characterId: id, fields: { defenses: defenses2 } });
+                    } else if (act === 'log-feature') {
+                        sendToParent('addLogEntry', { text: charName() + ' uses ' + (action.getAttribute('data-feature') || 'a feature'), type: 'info' });
+                    }
+                    return;
+                }
+                var detail = ev.target.closest('[data-beyond-detail]');
+                if (detail) {
+                    showDetailFromEl(detail);
+                    return;
+                }
+                var roll = ev.target.closest('[data-beyond-roll]');
+                if (roll) {
+                    fireRollFromEl(roll, 'normal');
+                    return;
+                }
+            });
+            root.addEventListener('contextmenu', function (ev) {
+                var roll = ev.target.closest('[data-beyond-roll]');
+                if (!roll) return;
+                var kind = roll.getAttribute('data-beyond-roll');
+                if (kind === 'flat') return;
+                openAdvMenu(ev, roll);
+            });
+            root.addEventListener('change', function (ev) {
+                if (ev.target && ev.target.classList.contains('ddb-hp-input')) {
+                    sendToParent('setHP', { characterId: charId(), value: ev.target.value });
+                }
+            });
+        }
+
+        document.getElementById('ddbAdvMenu').addEventListener('click', function (ev) {
+            var btn = ev.target.closest('button[data-mode]');
+            if (!btn || !pendingAdvRoll) return;
+            var mode = btn.getAttribute('data-mode');
+            var el = pendingAdvRoll;
+            closeAdvMenu();
+            fireRollFromEl(el, mode);
+        });
+        document.addEventListener('click', function (ev) {
+            if (!ev.target.closest('#ddbAdvMenu')) closeAdvMenu();
+        });
+        document.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Escape') {
+                closeAdvMenu();
+                closeDetailDrawer();
+            }
+        });
+
+        function refreshCharacterSheet() { loadCharacterSheet(); }
+
+        function appendRollToStandaloneLog(text, isNat20, isNat1) {
+            var name = charName();
+            if (!name || String(text || '').indexOf(name) === -1) return;
+            var log = document.getElementById('standaloneRollsLog');
+            if (!log) return;
+            var placeholder = log.querySelector('div[style*="opacity:0.6"]');
+            if (placeholder) placeholder.remove();
+            var entry = document.createElement('div');
+            entry.className = 'roll-entry ' + (isNat20 ? 'nat20' : isNat1 ? 'nat1' : 'normal');
+            var ts = new Date().toLocaleTimeString();
+            var d = document.createElement('div');
+            d.textContent = text;
+            entry.innerHTML = '<span style="opacity:0.7;font-size:11px;margin-right:8px;">[' + ts + ']</span> ' + d.innerHTML;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+            while (log.children.length > 100) log.removeChild(log.firstChild);
+        }
+
+        window.showSpellTooltip = function (spellName, event) {
+            var tooltip = document.getElementById('spellTooltip');
+            var content = document.getElementById('spellTooltipContent');
+            if (!tooltip || !content) return;
+            if (spellTooltipTimeout) { clearTimeout(spellTooltipTimeout); spellTooltipTimeout = null; }
+            content.textContent = spellName;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.clientX + 15) + 'px';
+            tooltip.style.top = (event.clientY + 15) + 'px';
+        };
+        window.hideSpellTooltip = function () {
+            spellTooltipTimeout = setTimeout(function () {
+                var tooltip = document.getElementById('spellTooltip');
+                if (tooltip) tooltip.style.display = 'none';
+            }, 150);
+        };
+        window.keepSpellTooltip = function () {
+            if (spellTooltipTimeout) { clearTimeout(spellTooltipTimeout); spellTooltipTimeout = null; }
+        };
+
+        window.addEventListener('message', function (event) {
             if (event.origin !== window.location.origin) return;
-            
             if (event.data && event.data.type === 'characterSheetUpdate') {
-                // Update character sheet data
-                const data = event.data.characterData;
+                var data = event.data.characterData;
                 if (data) {
                     sessionStorage.setItem('characterSheetData', JSON.stringify(data));
                     loadCharacterSheet();
@@ -472,29 +1538,17 @@
             }
         });
 
-        // Load on page load (after app.js is loaded)
-        window.addEventListener('load', () => {
-            // Wait a bit for app.js to fully load
-            setTimeout(() => {
-                loadCharacterSheet();
-            }, 100);
-        });
-
-        // Poll for updates every 2 seconds (since storage events don't work for same-origin)
-        setInterval(() => {
-            const stored = sessionStorage.getItem('characterSheetData');
-            if (stored) {
-                try {
-                    const data = JSON.parse(stored);
-                    // Refresh if timestamp changed (meaning the sheet was updated)
-                    if (data.timestamp && data.timestamp !== lastTimestamp) {
-                        lastTimestamp = data.timestamp;
-                        loadCharacterSheet();
-                    }
-                } catch (e) {
-                    // Ignore parse errors
+        window.addEventListener('load', function () { setTimeout(loadCharacterSheet, 50); });
+        setInterval(function () {
+            var stored = sessionStorage.getItem('characterSheetData');
+            if (!stored) return;
+            try {
+                var data = JSON.parse(stored);
+                if (data.timestamp && data.timestamp !== lastTimestamp) {
+                    lastTimestamp = data.timestamp;
+                    loadCharacterSheet();
                 }
-            }
+            } catch (e) {}
         }, 2000);
     </script>
 </body>

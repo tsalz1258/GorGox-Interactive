@@ -1,5 +1,5 @@
 // GORGOX_APP_VERSION=combat-cycles-all-tokens (unique ids per token; server unique placeholders; patch by index)
-const APP_UI_VERSION = 'v191'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
+const APP_UI_VERSION = 'v196'; // Bump this when you deploy; tab title + badge show this so you know latest assets loaded
 /** Above player action bar (99999) and Armstech modal (100050) */
 const SPELL_POWER_TOOLTIP_Z_INDEX = 200000;
 const DEBUG_TOKEN_SYNC = false; // enable only for debugging; token updates are hot-path
@@ -12583,7 +12583,7 @@ function animateHealthBar(token, oldHp, newHp, maxHp) {
 function persistTokenCharacterHP(characterId, value) {
     const num = parseInt(value, 10);
     if (isNaN(num) || num < 0) return;
-    const char = characters.find(c => c.id === characterId);
+    const char = characters.find(c => String(c.id) === String(characterId));
     if (!char) return;
     const newHp = Math.min(Math.max(0, num), char.max_hp || 999);
     char.current_hp = newHp;
@@ -18906,19 +18906,42 @@ function formatManeuverTooltip(maneuver) {
 }
 
 // Ability Check Rolling
-function rollAbilityCheck(ability, modifier, characterName) {
+function normalizeRollMode(mode) {
+    const m = String(mode || 'normal').toLowerCase();
+    if (m === 'advantage' || m === 'adv') return 'advantage';
+    if (m === 'disadvantage' || m === 'disadv' || m === 'dis') return 'disadvantage';
+    return 'normal';
+}
+
+/** Roll one or two d20s for normal / advantage / disadvantage. */
+function rollD20WithMode(mode) {
+    const m = normalizeRollMode(mode);
+    const a = Math.floor(Math.random() * 20) + 1;
+    if (m === 'normal') return { mode: m, rolls: [a], used: a, tag: '', detail: String(a) };
+    const b = Math.floor(Math.random() * 20) + 1;
+    const used = m === 'advantage' ? Math.max(a, b) : Math.min(a, b);
+    return {
+        mode: m,
+        rolls: [a, b],
+        used,
+        tag: m === 'advantage' ? ' (ADV)' : ' (DIS)',
+        detail: `[${a}, ${b}] → ${used}`
+    };
+}
+
+function rollAbilityCheck(ability, modifier, characterName, mode) {
     const mod = (typeof modifier === 'number' && !isNaN(modifier)) ? modifier : 0;
     console.log(`🎲 Rolling ${ability.toUpperCase()} check for ${characterName}`);
     console.log(`   Modifier: ${mod}`);
     
-    // Roll 1d20
-    const roll = Math.floor(Math.random() * 20) + 1;
+    const d20 = rollD20WithMode(mode);
+    const roll = d20.used;
     const total = roll + mod;
     
-    console.log(`   Roll: ${roll} + ${mod} = ${total}`);
+    console.log(`   Roll: ${d20.detail} + ${mod} = ${total}`);
     
     const abilityNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
-    const abilityLine = `🎲 ${formatRollCharacterName(characterName)} rolled ${ability.toUpperCase()} check: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${abilityNatText}`;
+    const abilityLine = `🎲 ${formatRollCharacterName(characterName)} rolled ${ability.toUpperCase()} check${d20.tag}: ${d20.detail} ${mod >= 0 ? '+' : ''}${mod} = ${total}${abilityNatText}`;
     // Persist to shared history so LogHistory sync / refresh keep the line
     broadcastRollOrChatEntry({ pane: 'rolls', message: abilityLine, isNat20: roll === 20, isNat1: roll === 1 });
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -18928,25 +18951,27 @@ function rollAbilityCheck(ability, modifier, characterName) {
             ability: ability,
             roll: roll,
             modifier: mod,
-            total: total
+            total: total,
+            mode: d20.mode,
+            rolls: d20.rolls
         });
     }
 }
 
 // Saving Throw Rolling
-function rollSavingThrow(ability, modifier, characterName) {
+function rollSavingThrow(ability, modifier, characterName, mode) {
     const mod = (typeof modifier === 'number' && !isNaN(modifier)) ? modifier : 0;
     console.log(`🛡️ Rolling ${ability.toUpperCase()} save for ${characterName}`);
     console.log(`   Save Modifier: ${mod}`);
     
-    // Roll 1d20
-    const roll = Math.floor(Math.random() * 20) + 1;
+    const d20 = rollD20WithMode(mode);
+    const roll = d20.used;
     const total = roll + mod;
     
-    console.log(`   Roll: ${roll} + ${mod} = ${total}`);
+    console.log(`   Roll: ${d20.detail} + ${mod} = ${total}`);
     
     const saveNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
-    const saveLine = `🛡️ ${formatRollCharacterName(characterName)} rolled ${ability.toUpperCase()} save: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${saveNatText}`;
+    const saveLine = `🛡️ ${formatRollCharacterName(characterName)} rolled ${ability.toUpperCase()} save${d20.tag}: ${d20.detail} ${mod >= 0 ? '+' : ''}${mod} = ${total}${saveNatText}`;
     broadcastRollOrChatEntry({ pane: 'rolls', message: saveLine, isNat20: roll === 20, isNat1: roll === 1 });
     if (ws && ws.readyState === WebSocket.OPEN) {
         sendMessage({
@@ -18955,7 +18980,9 @@ function rollSavingThrow(ability, modifier, characterName) {
             ability: ability,
             roll: roll,
             modifier: mod,
-            total: total
+            total: total,
+            mode: d20.mode,
+            rolls: d20.rolls
         });
     }
 }
@@ -19105,19 +19132,19 @@ function rollFlatDice(sides, characterName) {
 }
 
 // Skill Check Rolling
-function rollSkill(skillName, modifier, characterName) {
+function rollSkill(skillName, modifier, characterName, mode) {
     const mod = (typeof modifier === 'number' && !isNaN(modifier)) ? modifier : 0;
     console.log(`🎯 Rolling ${skillName} for ${characterName}`);
     console.log(`   Modifier: ${mod}`);
     
-    // Roll 1d20
-    const roll = Math.floor(Math.random() * 20) + 1;
+    const d20 = rollD20WithMode(mode);
+    const roll = d20.used;
     const total = roll + mod;
     
-    console.log(`   Roll: ${roll} + ${mod} = ${total}`);
+    console.log(`   Roll: ${d20.detail} + ${mod} = ${total}`);
     
     const skillNatText = roll === 20 ? ' ✨ NATURAL 20!' : (roll === 1 ? ' ❌ NATURAL 1!' : '');
-    const skillLine = `🎯 ${formatRollCharacterName(characterName)} rolled ${skillName}: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${skillNatText}`;
+    const skillLine = `🎯 ${formatRollCharacterName(characterName)} rolled ${skillName}${d20.tag}: ${d20.detail} ${mod >= 0 ? '+' : ''}${mod} = ${total}${skillNatText}`;
     broadcastRollOrChatEntry({ pane: 'rolls', message: skillLine, isNat20: roll === 20, isNat1: roll === 1 });
     if (ws && ws.readyState === WebSocket.OPEN) {
         sendMessage({
@@ -19126,6 +19153,8 @@ function rollSkill(skillName, modifier, characterName) {
             skill: skillName,
             roll: roll,
             modifier: mod,
+            mode: d20.mode,
+            rolls: d20.rolls,
             total: total
         });
     }
@@ -19372,7 +19401,8 @@ function resolveTargetedAttack(targetToken) {
     }
     const targetAC = getTokenAC(targetToken);
     const targetName = getTokenDisplayName(targetToken);
-    const toHitRoll = Math.floor(Math.random() * 20) + 1;
+    const d20 = rollD20WithMode(p.rollMode);
+    const toHitRoll = d20.used;
     const toHitTotal = toHitRoll + p.toHitMod;
     const isCrit = toHitRoll === 20;
     const isFumble = toHitRoll === 1;
@@ -19382,8 +19412,8 @@ function resolveTargetedAttack(targetToken) {
     pendingSkipTokenMoveOnNextMouseUp = true;
     if (canvas) canvas.style.cursor = '';
     const modStr = (p.toHitMod >= 0 ? '+' : '') + p.toHitMod;
-    const attackLead = '⚔️ ' + p.characterName + ' attacks ' + targetName + ' with ' + p.weaponName + ': ';
-    const hitTotals = toHitRoll + modStr + ' = ' + toHitTotal;
+    const attackLead = '⚔️ ' + p.characterName + ' attacks ' + targetName + ' with ' + p.weaponName + d20.tag + ': ';
+    const hitTotals = d20.detail + ' ' + modStr + ' = ' + toHitTotal;
     const acFrag = ' vs AC ' + targetAC;
     if (hit) {
         const damageResult = rollDamageForAttack(p.damageNotation, isCrit);
@@ -19407,7 +19437,7 @@ function resolveTargetedAttack(targetToken) {
     renderCanvas();
 }
 
-function requestAttackTarget(weaponName, toHitMod, damageNotation, damageType, characterName, rangeInput) {
+function requestAttackTarget(weaponName, toHitMod, damageNotation, damageType, characterName, rangeInput, rollMode) {
     pendingSkipTokenMoveOnNextMouseUp = false;
     var range = null;
     if (rangeInput != null) {
@@ -19421,9 +19451,11 @@ function requestAttackTarget(weaponName, toHitMod, damageNotation, damageType, c
         damageNotation: damageNotation,
         damageType: damageType,
         characterName: characterName,
-        range: range
+        range: range,
+        rollMode: normalizeRollMode(rollMode)
     };
-    addLogEntry('Click a token on the grid to choose your target (press Escape to cancel).', 'info');
+    const modeTag = pendingTargetAttack.rollMode === 'normal' ? '' : ' (' + pendingTargetAttack.rollMode + ')';
+    addLogEntry('Click a token on the grid to choose your target' + modeTag + ' (press Escape to cancel).', 'info');
     if (canvas) canvas.style.cursor = 'crosshair';
     renderCanvas();
 }
@@ -20359,16 +20391,19 @@ window.addEventListener('message', (event) => {
         
         switch (rollType) {
             case 'abilityCheck':
-                rollAbilityCheck(params.ability, params.modifier, params.characterName);
+                rollAbilityCheck(params.ability, params.modifier, params.characterName, params.mode || params.advantage);
                 break;
             case 'savingThrow':
-                rollSavingThrow(params.ability, params.modifier, params.characterName);
+                rollSavingThrow(params.ability, params.modifier, params.characterName, params.mode || params.advantage);
                 break;
             case 'skill':
-                rollSkill(params.skillName, params.modifier, params.characterName);
+                rollSkill(params.skillName, params.modifier, params.characterName, params.mode || params.advantage);
                 break;
             case 'attack':
-                requestAttackTarget(params.weaponName, params.toHitMod, params.damageNotation, params.damageType, params.characterName, params.range != null ? params.range : params.rangeFeet);
+                requestAttackTarget(params.weaponName, params.toHitMod, params.damageNotation, params.damageType, params.characterName, params.range != null ? params.range : params.rangeFeet, params.mode || params.advantage);
+                break;
+            case 'powerTarget':
+                requestPowerTarget(params.powerType || 'tech', params.powerName || '', params.characterName || '');
                 break;
             case 'actionFromSheet':
                 if (typeof params.index === 'number') rollActionFromSheet(params.index);
@@ -20382,9 +20417,199 @@ window.addEventListener('message', (event) => {
             case 'flatDice':
                 if (params.sides != null && params.characterName != null) rollFlatDice(params.sides, params.characterName);
                 break;
+            case 'rest':
+                restCharacterFromSheet(params.characterId, !!params.long);
+                break;
+            case 'resourceDelta':
+                resourceDeltaFromSheet(params.characterId, params.pool, params.delta);
+                break;
+            case 'inspirationToggle':
+                if (params.characterId != null) toggleInspiration(String(params.characterId));
+                break;
+            case 'setHP':
+                if (params.characterId != null) {
+                    persistTokenCharacterHP(params.characterId, params.value);
+                    const hpChar = characters.find(c => String(c.id) === String(params.characterId));
+                    if (hpChar) {
+                        const parsedHp = parseCharacterDataWrapper(hpChar);
+                        if (currentViewingCharacter && String(currentViewingCharacter.id) === String(hpChar.id)) {
+                            currentViewingCharacterData = parsedHp.data;
+                            if (typeof renderCharacterSheetContent === 'function') renderCharacterSheetContent();
+                        } else {
+                            updateStandaloneCharacterSheet(hpChar, parsedHp.data, null);
+                        }
+                    }
+                }
+                break;
+            case 'inventoryCredits':
+                setSheetInventoryCredits(params.characterId, params.value);
+                break;
+            case 'inventoryAdd':
+                addSheetInventoryItem(params.characterId, params.name);
+                break;
+            case 'inventoryRemove':
+                removeSheetInventoryItem(params.characterId, params.index);
+                break;
+            case 'equipToggle':
+                if (params.characterId != null && typeof params.index === 'number') {
+                    toggleEquipmentEquipped(params.characterId, params.index);
+                }
+                break;
+            case 'patchSheetFields':
+                patchSheetCharacterFields(params.characterId, params.fields || {});
+                break;
         }
     }
 });
+
+function buildStandaloneSheetComputed(char, charData) {
+    let combat = { ac: char && char.armor_class, attacks: [] };
+    try {
+        if (charData) combat = recomputeEquipmentBonuses(charData, char) || combat;
+    } catch (e) {
+        console.warn('buildStandaloneSheetComputed combat failed:', e);
+    }
+    let techPts = { current: 0, max: 0 };
+    let forcePts = { current: 0, max: 0 };
+    try {
+        techPts = getTechPointsFromCharData(charData, char) || techPts;
+    } catch (e) {}
+    try {
+        forcePts = getForcePointsFromCharData(charData, char) || forcePts;
+    } catch (e) {}
+    return {
+        ac: combat.ac != null ? combat.ac : (char && char.armor_class),
+        attacks: Array.isArray(combat.attacks) ? combat.attacks : [],
+        techPts: techPts,
+        forcePts: forcePts
+    };
+}
+
+function restCharacterFromSheet(characterId, longRest) {
+    const id = characterId || myCharacterId;
+    if (!id) {
+        alert('Select a character before resting.');
+        return;
+    }
+    if (window.TableTools && typeof TableTools.command === 'function') {
+        TableTools.report(TableTools.command({ kind: 'rest', character_id: id, long: !!longRest }));
+        return;
+    }
+    if (window.PowerTools && String(id) === String(myCharacterId)) {
+        PowerTools.rest(!!longRest);
+    }
+}
+
+function resourceDeltaFromSheet(characterId, pool, delta) {
+    const id = characterId || myCharacterId;
+    if (!id || !pool) return;
+    const d = Number(delta) || 0;
+    if (!d) return;
+    if (window.TableTools && typeof TableTools.command === 'function') {
+        TableTools.report(TableTools.command({ kind: 'resource', character_id: id, pool: pool, delta: d }));
+        return;
+    }
+    if (window.PowerTools && String(id) === String(myCharacterId)) {
+        PowerTools.resource(pool, d);
+    }
+}
+
+function setSheetInventoryCredits(characterId, value) {
+    const char = characters.find(c => String(c.id) === String(characterId));
+    if (!char || !canEditCharacterEquipment(char)) {
+        alert('You can only edit inventory for your selected character (or as DM).');
+        return;
+    }
+    const parsed = parseCharacterDataWrapper(char);
+    if (!parsed.data) return;
+    const next = Math.max(0, Math.floor(Number(value) || 0));
+    if (readCharacterCredits(parsed.data) === next && parsed.data.credits != null) return;
+    parsed.data.credits = next;
+    commitOwnInventoryChange(char, parsed.full, parsed.data, char.name + ' credits: ' + next);
+}
+
+function addSheetInventoryItem(characterId, rawName) {
+    const name = canonicalCatalogItemName(rawName);
+    if (!name) return;
+    const char = characters.find(c => String(c.id) === String(characterId));
+    if (!char || !canEditCharacterEquipment(char)) {
+        alert('You can only edit inventory for your selected character (or as DM).');
+        return;
+    }
+    const parsed = parseCharacterDataWrapper(char);
+    if (!parsed.data) return;
+    const list = ownEquipmentArray(parsed.data);
+    const key = name.toLowerCase();
+    let existing = null;
+    for (let i = 0; i < list.length; i++) {
+        const row = list[i];
+        const rowName = typeof row === 'string' ? row : (row && (row.name || row.Name));
+        if (rowName && String(rowName).toLowerCase() === key) {
+            existing = row;
+            break;
+        }
+    }
+    if (existing && typeof existing === 'object') {
+        const qty = parseInt(existing.quantity != null ? existing.quantity : existing.qty, 10);
+        existing.quantity = (isNaN(qty) || qty < 1 ? 1 : qty) + 1;
+    } else if (typeof existing === 'string') {
+        const at = list.indexOf(existing);
+        list[at] = { name: name, quantity: 2, equipped: false, notes: '' };
+    } else {
+        list.push({ name: name, quantity: 1, equipped: false, notes: '' });
+    }
+    commitOwnInventoryChange(char, parsed.full, parsed.data, char.name + ' added ' + name);
+}
+
+function removeSheetInventoryItem(characterId, index) {
+    const char = characters.find(c => String(c.id) === String(characterId));
+    if (!char || !canEditCharacterEquipment(char)) {
+        alert('You can only edit inventory for your selected character (or as DM).');
+        return;
+    }
+    const parsed = parseCharacterDataWrapper(char);
+    if (!parsed.data) return;
+    const list = ownEquipmentArray(parsed.data);
+    const idx = Number(index);
+    if (idx < 0 || idx >= list.length) return;
+    const row = list[idx];
+    const name = typeof row === 'string' ? row : (row && (row.name || row.Name)) || 'item';
+    const qty = typeof row === 'object' && row ? (row.quantity || row.qty || 1) : 1;
+    const label = name + (qty > 1 ? ' ×' + qty : '');
+    if (!confirm('Remove ' + label + ' from inventory?')) return;
+    list.splice(idx, 1);
+    commitOwnInventoryChange(char, parsed.full, parsed.data, char.name + ' removed ' + label);
+}
+
+function patchSheetCharacterFields(characterId, fields) {
+    const char = characters.find(c => String(c.id) === String(characterId));
+    if (!char || !canEditCharacterEquipment(char)) {
+        alert('You can only edit this sheet for your selected character (or as DM).');
+        return;
+    }
+    const parsed = parseCharacterDataWrapper(char);
+    if (!parsed.data || !fields || typeof fields !== 'object') return;
+    Object.keys(fields).forEach((key) => {
+        parsed.data[key] = fields[key];
+    });
+    if (parsed.full && parsed.full.character) parsed.full.character = parsed.data;
+    char.character_data = serializeCharacterDataWrapper(char, parsed.full, parsed.data);
+    sendMessage({ type: 'UpdateCharacter', character: buildCharacterUpdatePayload(char) });
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(char.id)) {
+        currentViewingCharacterData = parsed.data;
+        currentViewingCharacterFullData = parsed.full;
+        if (typeof renderCharacterSheetContent === 'function') renderCharacterSheetContent();
+    } else {
+        const prevFull = currentViewingCharacterFullData;
+        currentViewingCharacterFullData = parsed.full;
+        updateStandaloneCharacterSheet(char, parsed.data, null);
+        currentViewingCharacterFullData = prevFull;
+    }
+    if (String(myCharacterId) === String(char.id)) {
+        lastPlayerBarCharData = parsed.data;
+        if (typeof populatePlayerActionBar === 'function') populatePlayerActionBar();
+    }
+}
 
 // Open character sheet in a new window for dual monitor setup
 function openCharacterSheetInNewWindow() {
@@ -20393,7 +20618,7 @@ function openCharacterSheetInNewWindow() {
         return;
     }
     
-    // Render the HTML first
+    // Render the HTML first (kept for fallback / older popup caches)
     const char = currentViewingCharacter;
     const charData = currentViewingCharacterData;
     let html;
@@ -20414,13 +20639,15 @@ function openCharacterSheetInNewWindow() {
         characterData: charData,
         fullData: currentViewingCharacterFullData,
         html: html,
+        computed: buildStandaloneSheetComputed(char, charData),
         timestamp: Date.now()
     };
     
     sessionStorage.setItem('characterSheetData', JSON.stringify(characterData));
     
     // Open new window with character sheet page
-    const newWindow = window.open('/static/character-sheet.html', 'CharacterSheet', 'width=1200,height=800,resizable=yes,scrollbars=yes');
+    const sheetUrl = '/static/character-sheet.html?v=' + encodeURIComponent(typeof APP_UI_VERSION !== 'undefined' ? APP_UI_VERSION : String(Date.now()));
+    const newWindow = window.open(sheetUrl, 'CharacterSheet', 'width=1400,height=900,resizable=yes,scrollbars=yes');
     
     if (!newWindow) {
         alert('⚠️ Pop-up blocked! Please allow pop-ups for this site to open the character sheet in a new window.');
@@ -20594,6 +20821,7 @@ function updateStandaloneCharacterSheet(char, charData, html) {
             characterData: charData,
             fullData: currentViewingCharacterFullData,
             html: html,
+            computed: buildStandaloneSheetComputed(char, charData),
             timestamp: Date.now()
         };
         sessionStorage.setItem('characterSheetData', JSON.stringify(characterData));
@@ -24819,7 +25047,7 @@ function autoConnect() {
 }
 
 function toggleInspiration(characterId) {
-    const char = characters.find(c => c.id === characterId);
+    const char = characters.find(c => String(c.id) === String(characterId));
     if (!char) {
         console.error('Character not found:', characterId);
         return;
@@ -24862,13 +25090,13 @@ function toggleInspiration(characterId) {
     char.character_data = JSON.stringify(fullData);
     
     // Update the global characters array
-    const index = characters.findIndex(c => c.id === characterId);
+    const index = characters.findIndex(c => String(c.id) === String(characterId));
     if (index !== -1) {
         characters[index] = char;
     }
     
     // Update current viewing character if it's the same
-    if (currentViewingCharacter && currentViewingCharacter.id === characterId) {
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(characterId)) {
         currentViewingCharacter = char;
         currentViewingCharacterFullData = fullData;
         currentViewingCharacterData = charData;
@@ -24887,7 +25115,7 @@ function toggleInspiration(characterId) {
     }
     
     // Update the button appearance
-    const buttonId = `inspirationToggle-${characterId.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const buttonId = `inspirationToggle-${String(characterId).replace(/[^a-zA-Z0-9]/g, '_')}`;
     const button = document.getElementById(buttonId);
     if (button) {
         button.textContent = newInspirationValue ? '✨ Has Inspiration' : '○ No Inspiration';
@@ -24897,8 +25125,10 @@ function toggleInspiration(characterId) {
     }
     
     // Refresh character sheet if it's currently open
-    if (currentViewingCharacter && currentViewingCharacter.id === characterId) {
+    if (currentViewingCharacter && String(currentViewingCharacter.id) === String(characterId)) {
         renderCharacterSheetContent();
+    } else {
+        updateStandaloneCharacterSheet(char, charData, null);
     }
 }
 
